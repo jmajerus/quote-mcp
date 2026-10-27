@@ -42,6 +42,8 @@ export interface ParsedNote {
   sourceUrl?: string;
   /** Terms from the legacy title attribute, split on commas. */
   titleTags: string[];
+  /** Keyword-in-context marks from the old site: the words in the quote that carry a concept. */
+  kwic: { phrase: string; concept: string }[];
   flags: Flag[];
   /** Why a quote is grade C. */
   problems: string[];
@@ -120,7 +122,7 @@ function joinBlocks(list: Block[]): string {
 }
 
 /** The outermost quote spans: the legacy notes sometimes nest one inside another. */
-function quoteSpans(root: HTMLElement): HTMLElement[] {
+export function quoteSpans(root: HTMLElement): HTMLElement[] {
   return root.querySelectorAll("span.quote").filter((el) => {
     for (let p = el.parentNode; p; p = p.parentNode) if (p.rawTagName?.toLowerCase() === "span" && p.classList?.contains("quote")) return false;
     return true;
@@ -160,7 +162,10 @@ export function parseNote(html: string, tags: string[] = []): ParsedNote {
   const quoteBlock = root.querySelector("blockquote");
   if (!form) form = spans.length ? "span" : quoteBlock ? "blockquote" : undefined;
   const titleTags = uniqueTerms(spans.flatMap((s) => splitTerms(s.getAttribute("title") ?? "")));
-  const result: ParsedNote = { kind: "quote", titleTags, flags: [], problems: [] };
+  const kwic = root.querySelectorAll("span.kwic")
+    .map((s) => ({ phrase: tidy(inline(s)).replace(/\n/g, " "), concept: (s.getAttribute("title") ?? "").trim() }))
+    .filter((k) => k.phrase && k.concept);
+  const result: ParsedNote = { kind: "quote", titleTags, kwic, flags: [], problems: [] };
 
   const all = blocks(root);
   const full = joinBlocks(all);
@@ -223,6 +228,18 @@ export function parseNote(html: string, tags: string[] = []): ParsedNote {
   if (spans.length > 1) result.problems.push("more than one quote span: several quotes?");
   result.grade = gradeOf(result);
   return result;
+}
+
+/**
+ * Splits a note that holds several quote spans, as the old site's notes do, into one piece of HTML per
+ * quote, plus whatever text sits outside every span (a cross-reference, a remark).
+ */
+export function splitQuotes(html: string): { quotes: { html: string; concepts: string[] }[]; outside: string } {
+  const root = parse(html);
+  const spans = quoteSpans(root);
+  const quotes = spans.map((s) => ({ html: s.toString(), concepts: uniqueTerms(splitTerms(s.getAttribute("title") ?? "")) }));
+  for (const s of spans) s.remove();
+  return { quotes, outside: joinBlocks(blocks(root)) };
 }
 
 /** A: clean, apart from a missing locator. B: extracted, with flags. C: needs a person to split it. */
