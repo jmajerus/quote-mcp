@@ -1,0 +1,25 @@
+{
+  "name": "quote-mcp",
+  "version": "0.0.1",
+  "description": "A quote store: quotations from paper and digital books as structured records you can search, tag, repair, and cite",
+  "scripts": {
+    "survey": "tsx --env-file-if-exists=.env src/survey.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "node-html-parser": "^9.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}
