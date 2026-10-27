@@ -321,8 +321,12 @@ highlighting quotes from the anchors.
    the Zotero mirror whose re-sync is the watch, `export`, `backup`, and the
    full-text index. First run: 827 quotes (812 transcribed, 15 unparsed),
    282 merged from a second source, 221 concepts, 782 relations; works 283
-   in Zotero, 33 ambiguous (several editions), 183 unmatched. Still to do:
-   the service, deployment with its timers,
+   in Zotero, 33 ambiguous (several editions), 183 unmatched. The service is
+   built too (2026-10-27), read-only: MCP over HTTP at `/mcp` (stateless)
+   and stdio, with `search_quotes`, `get_quote`, `cite_quote`,
+   `list_concepts`, `get_concept`, and `quote_worklist`; admin pages at
+   `/admin` (overview, quote search, a quote with its citation, the concept
+   scheme, the worklists). Still to do: deployment with its timers,
    `search_quotes`, `get_quote`, `cite_quote`, `export`, and the worklists
    as pages. Every grade A and B quote is imported. Works without a Zotero
    item are listed for filing; filing them is the first Zotero write, so it

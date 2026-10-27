@@ -6,6 +6,7 @@
     "survey": "tsx --env-file-if-exists=.env src/survey.ts",
     "quotes": "tsx --env-file-if-exists=.env src/cli.ts",
     "import": "tsx --env-file-if-exists=.env src/cli.ts import",
+    "serve": "tsx --env-file-if-exists=.env src/cli.ts serve",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
@@ -16,9 +17,11 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "better-sqlite3": "^13.0.3",
     "mysql2": "^3.24.6",
-    "node-html-parser": "^9.0.5"
+    "node-html-parser": "^9.0.5",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",

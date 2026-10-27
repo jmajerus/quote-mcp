@@ -1,6 +1,8 @@
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { openDb } from "./db.js";
+import { openReadOnly } from "./queries.js";
+import { serveHttp, serveStdio } from "./server.js";
 import { drupalUrl, loadDrupal } from "./drupal.js";
 import { exportAll } from "./export.js";
 import { runImport } from "./import.js";
@@ -16,6 +18,8 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *   quote-mcp export [--out file]      Everything as JSON (stdout by default).
  *   quote-mcp backup [--dir data/backups] [--keep 14]
  *   quote-mcp stats
+ *   quote-mcp serve                     MCP over HTTP at /mcp and the admin pages (QUOTE_HOST, QUOTE_PORT).
+ *   quote-mcp stdio                     MCP over stdio, for local clients and tests.
  */
 
 const argv = process.argv.slice(3);
@@ -82,7 +86,13 @@ function statsCommand() {
   }, null, 2));
 }
 
-const commands: Record<string, () => unknown> = { import: importCommand, export: exportCommand, backup: backupCommand, stats: statsCommand };
+async function serveCommand() {
+  await serveHttp(openReadOnly(), { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010) });
+}
+
+const commands: Record<string, () => unknown> = {
+  import: importCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, serve: serveCommand, stdio: () => serveStdio(openReadOnly()),
+};
 const command = commands[process.argv[2] ?? ""];
 if (!command) {
   say(`Usage: quote-mcp ${Object.keys(commands).join(" | ")}\n`);
