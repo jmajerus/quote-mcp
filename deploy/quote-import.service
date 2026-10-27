@@ -1,0 +1,17 @@
+[Unit]
+Description=quote-mcp: sync the Zotero mirror and import new or changed quote notes
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=quote
+Group=quote
+EnvironmentFile=/etc/quote-mcp/env
+WorkingDirectory=/opt/quote-mcp/current
+# The old site is a one-time source; the first deploy imports it (tools/deploy.mjs).
+ExecStart=/usr/bin/node /opt/quote-mcp/current/dist/cli.js import --no-drupal
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+ReadWritePaths=/var/lib/quote-mcp

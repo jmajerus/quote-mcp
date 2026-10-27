@@ -1,0 +1,14 @@
+[Unit]
+Description=quote-mcp: back up the quote store
+
+[Service]
+Type=oneshot
+User=quote
+Group=quote
+EnvironmentFile=/etc/quote-mcp/env
+WorkingDirectory=/opt/quote-mcp/current
+ExecStart=/usr/bin/node /opt/quote-mcp/current/dist/cli.js backup --dir /var/lib/quote-mcp/backups --keep 14
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+ReadWritePaths=/var/lib/quote-mcp
