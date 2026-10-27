@@ -73,7 +73,8 @@ export function suspectTokens(text: string, dict: Set<string>): Suspect[] {
     }
     if (/[’']$/.test(token) && !/s[’']$/.test(token)) {
       // The closing mark of a single-quoted phrase ('life' and 'work') is not stray.
-      const before = text.slice(Math.max(0, (matches[i].index ?? 0) - 200), matches[i].index);
+      const at = matches[i].index ?? 0;
+      const before = text.slice(Math.max(0, at - 200), at + 1);
       if (!/(?:^|[\s(“"—-])['‘][A-Za-z]/.test(before)) out.push({ token, reason: "stray_apostrophe" });
       continue;
     }
