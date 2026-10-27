@@ -4,6 +4,11 @@ export function normalizedTitle(title: string | null | undefined): string {
     .replace(/[^a-z0-9]+/g, " ").replace(/^(the|a|an) /, "").trim();
 }
 
+/** A whole title, subtitle included, compared loosely: for telling editions apart once short titles collide. */
+export function fullTitle(title: string | null | undefined): string {
+  return String(title ?? "").toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").replace(/^(the|a|an) /, "").trim();
+}
+
 /** Quote text compared loosely, for finding one quote in two sources: its first 120 letters. */
 export function quoteKey(text: string | null | undefined): string {
   return String(text ?? "").toLowerCase().replace(/[^a-z]+/g, "").slice(0, 120);

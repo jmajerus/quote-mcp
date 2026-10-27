@@ -2,7 +2,7 @@ import { type DB, now } from "./db.js";
 import type { DrupalSite, DrupalWork } from "./drupal.js";
 import { type Suspect, dropCommonUnknowns, suspectTokens } from "./ocr.js";
 import { type ParsedNote, parseNote, splitQuotes } from "./parse.js";
-import { normalizedTitle, quoteKey, slugify, yearOf } from "./text.js";
+import { fullTitle, normalizedTitle, quoteKey, slugify, yearOf } from "./text.js";
 import type { ApiItem } from "./zotero.js";
 
 /**
@@ -104,11 +104,13 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
       const k = normalizedTitle(item.data.title);
       if (k) primaryIndex.set(k, [...(primaryIndex.get(k) ?? []), item]);
     }
-    /** Primary-library items with this title, narrowed by year when the title repeats. */
+    /** Primary-library items with this title, narrowed when the title repeats: by year, then by the full title, subtitle included. */
     const candidates = (title: string, year: string | null) => {
-      const hits = primaryIndex.get(normalizedTitle(title)) ?? [];
+      let hits = primaryIndex.get(normalizedTitle(title)) ?? [];
       const sameYear = hits.filter((h) => year && yearOf(h.data.date) === year);
-      return hits.length > 1 && sameYear.length ? sameYear : hits;
+      if (hits.length > 1 && sameYear.length) hits = sameYear;
+      const sameTitle = hits.filter((h) => fullTitle(h.data.title) === fullTitle(title));
+      return hits.length > 1 && sameTitle.length ? sameTitle : hits;
     };
 
     const workByOrigin = db.prepare("SELECT work_id FROM work_origins WHERE kind = ? AND ref = ?");

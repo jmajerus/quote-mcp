@@ -135,6 +135,21 @@ describe("import", () => {
     expect(db.prepare("SELECT COUNT(*) FROM works WHERE id = ?").pluck().get(old)).toBe(0);
   });
 
+  it("tells editions apart by the full title when the short title repeats", () => {
+    addItem(db, PRIMARY, "IMAGES86", book("Images of organization", "1986", "Morgan"));
+    addItem(db, PRIMARY, "IMAGES98", book("Images of organization: the executive edition", "1998", "Morgan"));
+    const s = site();
+    s.works.push(
+      { nid: 20, title: "Images of Organization: The Executive Edition", type: "Book", year: null, isbn: null, url: null, citekey: null, authors: [], keywords: [],
+        notes: `<span class="quote" title="power">"The groupthink phenomenon has been reproduced in thousands of situations." (p. 186)</span>` },
+      { nid: 21, title: "Images of Organization", type: "Book", year: null, isbn: null, url: null, citekey: null, authors: [], keywords: [],
+        notes: `<span class="quote" title="power">"We should be alert to the bureaucratic form of organization." (p. 209)</span>` },
+    );
+    runImport(db, opts({ drupal: s }));
+    expect(db.prepare("SELECT zotero_key FROM works WHERE id = ?").pluck().get(quoteLike("groupthink").work_id)).toBe("IMAGES98");
+    expect(db.prepare("SELECT zotero_key FROM works WHERE id = ?").pluck().get(quoteLike("bureaucratic").work_id)).toBe("IMAGES86");
+  });
+
   it("imports a quote it can't split as unparsed, out of the way", () => {
     addItem(db, PRIMARY, "NOTE0004", note("ATTILA01", `<p>"First quote." (p. 3)</p><p>"Second quote." (p. 9)</p>`));
     runImport(db, opts());
