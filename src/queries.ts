@@ -140,8 +140,11 @@ export function searchQuotes(db: DB, args: SearchArgs) {
   if (args.query?.trim()) {
     from = "quotes_fts f JOIN quotes q ON q.id = f.rowid";
     where.push("quotes_fts MATCH @fts");
-    params.fts = ftsQuery(args.query);
-    if (!params.fts) throw new ToolError("The query has no words to search for.");
+    const terms = ftsQuery(args.query);
+    if (!terms) throw new ToolError("The query has no words to search for.");
+    // Words are looked for in what the quote says (and its comment), not in its tags: the concept and
+    // tag filters cover those, and a phrase search must tell a source that uses a term from one tagged with it.
+    params.fts = `{text comment} : (${terms})`;
     order = "bm25(quotes_fts)";
     snippet = "snippet(quotes_fts, 0, '«', '»', '…', 24)";
   }
@@ -231,7 +234,18 @@ export function citeQuote(db: DB, id: number) {
     csl = zoteroToCsl(row.zotero_key as string, z.data);
     citekey = z.citekey;
     if (!citekey) warnings.push("The Zotero item has no Better BibTeX citekey yet; the CSL id is its item key.");
-  } else if (row) {
+  }
+  // Several editions in Zotero: offer each, so a citation can name the one the page belongs to.
+  const editions = row && !z && row.match === "ambiguous"
+    ? json<string[]>(row.candidates as string, []).map((key) => {
+      const c = zoteroData(db, firstLibrary(db), key);
+      if (!c) return null;
+      const year = (c.data.date ?? "").match(/\d{4}/)?.[0] ?? null;
+      return { zotero_key: key, year, title: c.data.title ?? null, citekey: c.citekey, csl: zoteroToCsl(key, c.data),
+        pandoc: c.citekey ? `[@${c.citekey}${q.locator ? `, ${q.locator}` : ""}]` : null };
+    }).filter((e) => e !== null)
+    : null;
+  if (row && !z) {
     const authors = json<string[]>(row.authors as string, []);
     csl = {
       id: `work-${row.id}`, type: row.item_type === "Book" || row.item_type === "book" ? "book" : "document", title: row.title,
@@ -239,9 +253,9 @@ export function citeQuote(db: DB, id: number) {
       ...(row.year ? { issued: { "date-parts": [[Number(row.year)]] } } : {}), ...(row.isbn ? { ISBN: row.isbn } : {}),
     };
     warnings.push(row.match === "ambiguous"
-      ? "Several Zotero items could be this work (different editions?); this citation uses the old site's record until a person picks one."
+      ? "Several Zotero items could be this work (different editions); `editions` has each one's citekey and CSL. Cite the edition the page number belongs to; csl here is the old site's record."
       : "This work isn't in Zotero yet; this citation uses the old site's record until it's filed.");
-  } else {
+  } else if (!row) {
     warnings.push(q.attribution ? `No work to cite; the quote is attributed to ${q.attribution}.` : "No work to cite.");
   }
   if (!q.locator) warnings.push("The quote has no page or location.");
@@ -251,7 +265,7 @@ export function citeQuote(db: DB, id: number) {
   const locator = q.locator && !kindle ? { label: "page", locator: q.locator.replace(/^pp?\. /, "") } : null;
   const pandoc = citekey ? `[@${citekey}${locator ? `, ${q.locator}` : kindle ? `, ${q.locator}` : ""}]` : null;
   return {
-    quote: q.text, locator, locator_text: q.locator, chapter_author: q.chapter_author, csl, citekey, pandoc,
+    quote: q.text, locator, locator_text: q.locator, chapter_author: q.chapter_author, csl, citekey, pandoc, ...(editions ? { editions } : {}),
     ...(q.chapter_author ? { note: `The passage is by ${q.chapter_author}, in an edited volume; cite the chapter if your style needs it.` } : {}),
     warnings,
   };

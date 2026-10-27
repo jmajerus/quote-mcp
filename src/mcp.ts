@@ -9,7 +9,9 @@ export const VERSION = "0.1.0";
 const INSTRUCTIONS = `Search and cite a store of quotations from books, most of them paper books that exist only on the shelf, collected over years and tagged with concepts.
 Concepts belong to named schemes; "human-work" (the human side of work) holds themes such as mobbing, false self, or psychic prison, with broader, narrower, related, and opposite concepts. Search by concept includes narrower concepts unless narrower=false.
 Typical flow: search_quotes (words, a concept, an author, or a work) → get_quote for the full record → cite_quote for a CSL JSON item, a locator, and a Pandoc citation.
-A quote's status is "transcribed" (typed or OCR'd from the book, not checked against a text) or "unparsed" (not yet split from its note; left out of search by default). Flags such as ocr_suspect or no_locator say what to check before quoting.`;
+Words in a search are looked for in the quote's text and comment only, so a phrase search finds sources that use the phrase; to find quotes tagged with a concept, use concept (or tag).
+A quote's status is "transcribed" (typed or OCR'd from the book, not checked against a text) or "unparsed" (not yet split from its note; left out of search by default). Flags such as ocr_suspect or no_locator say what to check before quoting. When a work has several editions in Zotero, cite_quote lists them under editions, each with its citekey; cite the one the page number belongs to.
+This server is read-only for now. Quotes saved from Calibre books with corpus-mcp's save_quote (checked against the book's text) stay in corpus-mcp until they are migrated here; use corpus-mcp for those and to save new quotes from Calibre books.`;
 
 function json(value: unknown): CallToolResult {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
@@ -33,7 +35,7 @@ export function createServer(db: DB): McpServer {
 
   server.registerTool("search_quotes", {
     title: "Search quotes",
-    description: "Search the quote store. Combine any of: words (full text over quote text, comments, and tags; words are ANDed, \"quoted phrases\" kept together, a trailing * matches a prefix), a concept, a tag, an author, a work. Results are ranked when there are words, with matches in «» in the snippet. Each quote comes with its work, locator, tags, and flags.",
+    description: "Search the quote store. Combine any of: words (full text over the quote's text and comment, not its tags; words are ANDed, \"quoted phrases\" kept together, a trailing * matches a prefix), a concept, a tag, an author, a work. Results are ranked when there are words, with matches in «» in the snippet. Each quote comes with its work, locator, tags, and flags.",
     inputSchema: {
       query: z.string().optional().describe("Words or \"quoted phrases\" to find"),
       concept: z.string().optional().describe('A concept by name or slug ("job loss", "psychic-prison"); see list_concepts'),

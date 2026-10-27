@@ -73,6 +73,23 @@ describe("queries", () => {
     expect(citeQuote(db, quoteId("rarely announces")).pandoc).toBe("[@davenport1999mobbing, Kindle loc. 12–14]");
   });
 
+  it("looks for words in what a quote says, not in its tags", () => {
+    expect(searchQuotes(db, { query: "mobbing" }).quotes.map((q) => q.text)).toEqual([expect.stringMatching(/^Mobbing is/)]);
+    expect(searchQuotes(db, { query: "dignity" }).quotes.map((q) => q.text)).toEqual(["Everyone deserves dignity."]);
+    expect(searchQuotes(db, { query: "abuse" }).total).toBe(1);
+  });
+
+  it("offers each edition when several Zotero items could be the work", () => {
+    db.prepare("INSERT INTO zotero_items (library, key, version, item_type, parent_key, deleted, data) VALUES (?, ?, 1, 'book', NULL, 0, ?)").run(PRIMARY, "NOBODY01", JSON.stringify({ itemType: "book", title: "A book nobody filed", date: "2001", extra: "Citation Key: doe2001book" }));
+    db.prepare("INSERT INTO zotero_items (library, key, version, item_type, parent_key, deleted, data) VALUES (?, ?, 1, 'book', NULL, 0, ?)").run(PRIMARY, "NOBODY02", JSON.stringify({ itemType: "book", title: "A Book Nobody Filed", date: "2001", extra: "Citation Key: doe2001booka" }));
+    db.prepare("UPDATE works SET match = 'ambiguous', candidates = ? WHERE title = 'A Book Nobody Filed'").run(JSON.stringify(["NOBODY01", "NOBODY02"]));
+    const c = citeQuote(db, quoteId("deserves dignity"));
+    expect(c.editions?.map((e) => [e.zotero_key, e.citekey, e.pandoc])).toEqual([["NOBODY01", "doe2001book", "[@doe2001book]"], ["NOBODY02", "doe2001booka", "[@doe2001booka]"]]);
+    expect(c.warnings.join(" ")).toMatch(/editions/);
+    db.prepare("UPDATE works SET match = 'unmatched', candidates = NULL WHERE title = 'A Book Nobody Filed'").run();
+    db.prepare("DELETE FROM zotero_items WHERE key IN ('NOBODY01', 'NOBODY02')").run();
+  });
+
   it("cites a work not in Zotero from the old site's record, and says so", () => {
     const c = citeQuote(db, quoteId("deserves dignity"));
     expect(c.csl).toMatchObject({ title: "A Book Nobody Filed", author: [{ family: "Doe", given: "Jane" }], ISBN: "9780000000000" });
