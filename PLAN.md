@@ -316,24 +316,20 @@ highlighting quotes from the anchors.
    `--source drupal` for the old site: counts by form, grade, and flag, with
    examples, a tag inventory, the concept vocabulary, work matching, and the
    overlap between sources. Grade C is 27 quotes across all sources.
-1. **Import and search.** The importer is built (2026-10-27): the store, the
-   concept scheme, the import (old site, then Zotero, merging duplicates),
-   the Zotero mirror whose re-sync is the watch, `export`, `backup`, and the
-   full-text index. First run: 827 quotes (812 transcribed, 15 unparsed),
-   282 merged from a second source, 221 concepts, 782 relations; works 283
-   in Zotero, 33 ambiguous (several editions), 183 unmatched. The service is
-   built too (2026-10-27), read-only: MCP over HTTP at `/mcp` (stateless)
-   and stdio, with `search_quotes`, `get_quote`, `cite_quote`,
+1. **Import and search** (done 2026-10-27). The store, the concept scheme,
+   the import (old site, then Zotero, merging duplicates), and the Zotero
+   mirror, whose re-sync every 30 minutes is the watch. First run: 827
+   quotes (812 transcribed, 15 unparsed), 282 merged from a second source,
+   221 concepts, 782 relations; works 283 in Zotero, 33 ambiguous (several
+   editions), 183 unmatched. A read-only service: MCP over HTTP at `/mcp`
+   (stateless) and stdio, with `search_quotes`, `get_quote`, `cite_quote`,
    `list_concepts`, `get_concept`, and `quote_worklist`; admin pages at
    `/admin` (overview, quote search, a quote with its citation, the concept
-   scheme, the worklists). Deployed 2026-10-27 to quote-mcp.localdomain (Debian 13
-   LXC, port 8000; `npm run deploy`), with the Zotero import every 30 minutes
-   and a nightly backup; public at https://quote-mcp.majerus.us behind
-   Cloudflare Access (Managed OAuth). Still to do:
-   `search_quotes`, `get_quote`, `cite_quote`, `export`, and the worklists
-   as pages. Every grade A and B quote is imported. Works without a Zotero
-   item are listed for filing; filing them is the first Zotero write, so it
-   waits for phase 3 unless you'd rather file them by hand.
+   scheme, the worklists); `export` and nightly backups. Deployed to
+   quote-mcp.localdomain (Debian 13 LXC, port 8000; `npm run deploy`), public
+   at https://quote-mcp.majerus.us behind Cloudflare Access (Managed OAuth).
+   Works without a Zotero item are listed for filing; filing them is the
+   first Zotero write, so it waits for phase 3 unless they're filed by hand.
 2. **Repair.** Editing and history on the admin pages, proposals,
    tag hygiene, the corpus-mcp verify endpoint, the OCR detector's agent
    pass, and shelf sessions.
