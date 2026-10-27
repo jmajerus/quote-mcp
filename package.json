@@ -4,6 +4,8 @@
   "description": "A quote store: quotations from paper and digital books as structured records you can search, tag, repair, and cite",
   "scripts": {
     "survey": "tsx --env-file-if-exists=.env src/survey.ts",
+    "quotes": "tsx --env-file-if-exists=.env src/cli.ts",
+    "import": "tsx --env-file-if-exists=.env src/cli.ts import",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
@@ -14,10 +16,12 @@
     "node": ">=22"
   },
   "dependencies": {
+    "better-sqlite3": "^13.0.3",
     "mysql2": "^3.24.6",
     "node-html-parser": "^9.0.5"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.6.5",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",

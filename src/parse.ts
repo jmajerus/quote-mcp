@@ -67,6 +67,7 @@ const CATALOG = [
   /\bOriginally published\b/i,
   /^(?:Translation of|Reprint|Bibliography:)/i,
 ];
+const RESEARCH_NOTE = /\[(?:VERIFY|VERIFIED|PLACEHOLDER)\b|^(?:Discussed|Quoted) in:/m;
 const BLOCK = new Set(["p", "div", "blockquote", "li", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "table", "tr"]);
 
 interface Block { list: boolean; text: string }
@@ -172,6 +173,8 @@ export function parseNote(html: string, tags: string[] = []): ParsedNote {
   if (!full) return { ...result, kind: "empty", form: undefined };
   if (!form && CATALOG.some((re) => re.test(full))) return { ...result, kind: "catalog" };
   if (!form && (full.match(/ -- /g)?.length ?? 0) >= 2) return { ...result, kind: "catalog" };
+  // Research notes left by agents and drafts: "[VERIFY: …]", "[VERIFIED]", "[PLACEHOLDER: …]".
+  if (!form && RESEARCH_NOTE.test(full)) return { ...result, kind: "other" };
 
   let text = full;
   let opened = OPEN.has(text[0]);

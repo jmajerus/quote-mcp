@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { type DrupalSite, drupalUrl, loadDrupal } from "./drupal.js";
 import { type Suspect, dropCommonUnknowns, loadDictionary, suspectTokens } from "./ocr.js";
 import { type ParsedNote, gradeOf, parseNote, splitQuotes } from "./parse.js";
+import { normalizedTitle, quoteKey } from "./text.js";
 import { type ApiItem, ZoteroClient, zoteroConfig } from "./zotero.js";
 
 /**
@@ -246,15 +247,6 @@ Spellings that may be one tag:
 ${variantGroups(tagCounts).map((g) => `- ${g.map((t) => `\`${t}\``).join(", ")}`).join("\n") || "_None._"}
 ${extra}`;
 }
-
-/** A title compared loosely: case, accents, punctuation, and a subtitle after ":" ignored (corpus-mcp's rule). */
-function normalizedTitle(title: string | null | undefined): string {
-  return String(title ?? "").split(/[:.?!]\s/)[0].toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "")
-    .replace(/[^a-z0-9]+/g, " ").replace(/^(the|a|an) /, "").trim();
-}
-
-/** Quote text compared loosely, for finding one quote in two sources. */
-const quoteKey = (text: string | undefined) => (text ?? "").toLowerCase().replace(/[^a-z]+/g, "").slice(0, 120);
 
 function drupalExtra(site: DrupalSite, rows: Row[], zotero: Map<string, ApiItem[]>, compared: Row[]): string {
   const quotes = rows.filter((r) => r.parsed.kind === "quote");

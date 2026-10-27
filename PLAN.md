@@ -21,7 +21,7 @@ their home from then on.
 | Source of truth | Quote MCP's database, for every quote. Zotero stays the authority for *books*: item metadata, citekeys, and citations. |
 | Why not Zotero notes | Zotero has no quote type. Only a note's tags are structured; the page, chapter author, status, and the quote's own boundaries are conventions in HTML, which nothing validates and which Zotero 7's note editor can rewrite on any edit. Zotero's structured kind, the annotation, needs an attached file, which paper books don't have. |
 | Import | One pass from the old site's database dump (the main source), then the Zotero notes, which add about 15 quotes the site doesn't have; a quote found in both is imported once with both origins. A watch then picks up new quote notes typed into Zotero. The import never writes to the dump or to Zotero. |
-| Concepts | The old site's vocabulary is imported as Quote MCP's concept scheme: 221 concepts with definitions, alternative labels, WordNet links, and 782 broader, narrower, related, and inverse relations. A quote's concepts are imported exactly as they appear (the span's `title`, the note's Zotero tags). Nothing is removed or renamed without a person approving it. |
+| Concepts | The old site's vocabulary is imported as a named concept scheme, `human-work` ("the human side of work"; the name is tentative and can change, since concepts are keyed by internal ids). It sits beside corpus-mcp's subject vocabulary, not inside it: subjects say what a book is about, concepts name themes in a passage. When the master taxonomy server exists, it holds both schemes and the links between them. The scheme has 221 concepts with definitions, alternative labels, WordNet links, and 782 broader, narrower, related, and inverse relations. A quote's concepts are imported exactly as they appear (the span's `title`, the note's Zotero tags). Nothing is removed or renamed without a person approving it. |
 | Works | A quote cites a Zotero item. About 300 of the 495 old-site works with quotes match a Zotero item by title; the rest are filed into Zotero's staging collection from their Biblio record before or during the import, so every quote ends up citable. |
 | Quoted text is protected | People edit quotes directly. Agents add quotes and change tags and comments, but changes to an existing quote's text or locator are proposals that a person approves. |
 | Zotero copies | Optional and later: Quote MCP can write a read-only copy of each book's quotes into Zotero as child notes. A copy is never read back as data; an edit made to one becomes a proposal. |
@@ -316,8 +316,13 @@ highlighting quotes from the anchors.
    `--source drupal` for the old site: counts by form, grade, and flag, with
    examples, a tag inventory, the concept vocabulary, work matching, and the
    overlap between sources. Grade C is 27 quotes across all sources.
-1. **Import and search.** The store and its backups, the concept scheme,
-   the import (old site, then Zotero) and the watch, full-text search,
+1. **Import and search.** The importer is built (2026-10-27): the store, the
+   concept scheme, the import (old site, then Zotero, merging duplicates),
+   the Zotero mirror whose re-sync is the watch, `export`, `backup`, and the
+   full-text index. First run: 827 quotes (812 transcribed, 15 unparsed),
+   282 merged from a second source, 221 concepts, 782 relations; works 283
+   in Zotero, 33 ambiguous (several editions), 183 unmatched. Still to do:
+   the service, deployment with its timers,
    `search_quotes`, `get_quote`, `cite_quote`, `export`, and the worklists
    as pages. Every grade A and B quote is imported. Works without a Zotero
    item are listed for filing; filing them is the first Zotero write, so it

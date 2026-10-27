@@ -17,6 +17,7 @@ export interface ApiItem {
   version: number;
   data: {
     itemType: string; title?: string; date?: string; note?: string; parentItem?: string; extra?: string; citationKey?: string;
+    ISBN?: string; url?: string; deleted?: number | boolean;
     tags?: { tag: string; type?: number }[];
     creators?: { creatorType: string; lastName?: string; firstName?: string; name?: string }[];
   };
@@ -83,6 +84,26 @@ export class ZoteroClient {
       progress?.(items.length, total);
       if (!page.length || items.length >= total) return items;
     }
+  }
+
+  /**
+   * Everything changed since a library version (trashed items included, flagged deleted), the keys
+   * deleted since, and the library's version now.
+   */
+  async changesSince(since: number, progress?: (done: number, total: number) => void): Promise<{ items: ApiItem[]; deleted: string[]; version: number }> {
+    const items: ApiItem[] = [];
+    let version = since;
+    for (let start = 0; ; start += 100) {
+      const { body, headers } = await this.get("items", { format: "json", includeTrashed: 1, since, limit: 100, start });
+      const page = body as ApiItem[];
+      items.push(...page);
+      version = Math.max(version, Number(headers.get("last-modified-version") ?? 0));
+      const total = Number(headers.get("total-results") ?? items.length);
+      progress?.(items.length, total);
+      if (!page.length || items.length >= total) break;
+    }
+    const { body } = await this.get("deleted", { since });
+    return { items, deleted: (body as { items?: string[] }).items ?? [], version };
   }
 
   /** Items by key, 50 to a request (the API's limit). */
