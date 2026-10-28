@@ -109,6 +109,8 @@ set -a; . /etc/quote-mcp/env; set +a
 if [ ! -f "$QUOTE_DB" ]; then
   echo "No store yet: running the first import, the old site included."
   ${asQuote("import")}
+else
+  ${asQuote("migrate")}
 fi
 systemctl enable --quiet quote-mcp.service quote-import.timer quote-backup.timer
 systemctl start quote-import.timer quote-backup.timer

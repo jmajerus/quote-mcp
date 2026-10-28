@@ -1,7 +1,8 @@
 import { type DB, now } from "./db.js";
 import type { DrupalSite, DrupalWork } from "./drupal.js";
 import { type Suspect, dropCommonUnknowns, suspectTokens } from "./ocr.js";
-import { type ParsedNote, parseNote, splitQuotes } from "./parse.js";
+import { readMargin } from "./margin.js";
+import { type ParsedNote, noteText, parseNote, readLocator, splitQuotes } from "./parse.js";
 import { fullTitle, normalizedTitle, quoteKey, slugify, yearOf } from "./text.js";
 import type { ApiItem } from "./zotero.js";
 
@@ -10,7 +11,8 @@ import type { ApiItem } from "./zotero.js";
  * into the store. Safe to run again: every quote is keyed by its origin, a quote already imported is
  * re-parsed only if its source changed, and a quote a person has edited is never overwritten (the
  * changed source goes into its history instead). A quote whose text arrives from a second source is
- * merged: it gains the origin and the tags, not a duplicate.
+ * merged: it gains the origin and the tags, not a duplicate. A Zotero note tagged `margin` is a note,
+ * not a quote: your own words, read for concept tags and kept as the record's comment.
  */
 
 export const SCHEME = {
@@ -18,6 +20,9 @@ export const SCHEME = {
   label: "The human side of work",
   description: "Concepts from the Work Creatively site (workcreatively.org): themes in passages about people at work.",
 };
+
+/** The Zotero tag that makes a note a margin note. It opts a note in: agents' research notes stay out. */
+export const MARGIN_TAG = "margin";
 
 export interface ImportOptions {
   drupal?: DrupalSite;
@@ -41,6 +46,7 @@ export interface ImportStats {
 
 interface Incoming {
   kind: "drupal" | "drupal-quote" | "zotero-note";
+  record?: "quote" | "note";
   ref: string;
   version: string | null;
   raw: string;
@@ -88,9 +94,10 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
         if (from && to && RELATION[r.type]) stats.concepts.relations += addRelation.run(from.id, to.id, RELATION[r.type]).changes;
       }
     }
-    // Tags resolve to concepts by label first, then by alternative label, ignoring case.
+    // Tags resolve to concepts by label first, then by alternative label, then by slug, ignoring case.
     const concepts = new Map<string, number>();
-    const rows = db.prepare("SELECT id, label, alt_labels FROM concepts WHERE status != 'retired'").all() as { id: number; label: string; alt_labels: string }[];
+    const rows = db.prepare("SELECT id, slug, label, alt_labels FROM concepts WHERE status != 'retired'").all() as { id: number; slug: string; label: string; alt_labels: string }[];
+    for (const c of rows) concepts.set(c.slug, c.id);
     for (const c of rows) for (const alt of JSON.parse(c.alt_labels) as string[]) concepts.set(alt.toLowerCase(), c.id);
     for (const c of rows) concepts.set(c.label.toLowerCase(), c.id);
     const conceptOf = (tag: string) => concepts.get(tag.toLowerCase()) ?? null;
@@ -184,19 +191,19 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
     const addKwic = db.prepare("INSERT OR IGNORE INTO quote_kwic (quote_id, phrase, tag, concept_id) VALUES (?, ?, ?, ?)");
     const addHistory = db.prepare("INSERT INTO history (quote_id, at, kind, before, after, actor, reason) VALUES (?, ?, ?, ?, ?, ?, ?)");
     const insertQuote = db.prepare(`
-      INSERT INTO quotes (work_id, text, text_key, locator_kind, locator, chapter_author, comment, attribution, source_url, status, grade, flags,
+      INSERT INTO quotes (kind, work_id, text, text_key, locator_kind, locator, chapter_author, comment, attribution, source_url, status, grade, flags,
         created_at, created_by, updated_at, updated_by)
-      VALUES (@work_id, @text, @text_key, @locator_kind, @locator, @chapter_author, @comment, @attribution, @source_url, @status, @grade, @flags,
+      VALUES (@kind, @work_id, @text, @text_key, @locator_kind, @locator, @chapter_author, @comment, @attribution, @source_url, @status, @grade, @flags,
         @stamp, @actor, @stamp, @actor) RETURNING id`);
     const updateQuote = db.prepare(`
-      UPDATE quotes SET work_id = @work_id, text = @text, text_key = @text_key, locator_kind = @locator_kind, locator = @locator,
+      UPDATE quotes SET kind = @kind, work_id = @work_id, text = @text, text_key = @text_key, locator_kind = @locator_kind, locator = @locator,
         chapter_author = @chapter_author, comment = @comment, attribution = @attribution, source_url = @source_url, status = @status,
         grade = @grade, flags = @flags, updated_at = @stamp, updated_by = @actor WHERE id = @id`);
 
     const fieldsOf = (q: Incoming) => {
       const p = q.parsed;
       return {
-        work_id: q.workId, text: p.text ?? "", text_key: quoteKey(p.text), locator_kind: p.locator?.kind ?? "none", locator: p.locator?.value ?? null,
+        kind: q.record ?? "quote", work_id: q.workId, text: p.text ?? "", text_key: quoteKey(p.text), locator_kind: p.locator?.kind ?? "none", locator: p.locator?.value ?? null,
         chapter_author: p.chapterAuthor ?? null, comment: p.commentary ?? null, attribution: q.attribution ?? null, source_url: p.sourceUrl ?? null,
         status: p.grade === "C" ? "unparsed" : "transcribed", grade: p.grade ?? null, flags: JSON.stringify(p.flags), stamp, actor,
       };
@@ -280,13 +287,35 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
       }
     }
 
-    // Zotero quote notes, library by library.
+    /** A margin note's fields: a trailing locator, concept tags read from its words, and the rest as its comment. */
+    const marginNote = (html: string, noteTags: string[]): Pick<Incoming, "parsed" | "tags"> | null => {
+      const { body, locator, chapterAuthor } = readLocator(noteText(html));
+      const reading = readMargin(body, conceptOf);
+      const tags = [...noteTags.map((tag) => ({ tag, origin: "note" })), ...reading.tags.map((t) => ({ tag: t.tag, origin: "text" }))];
+      if (!reading.prose && !tags.length && !locator) return null;
+      return {
+        parsed: { kind: "other", text: "", locator, chapterAuthor, commentary: reading.prose ?? undefined, titleTags: [], kwic: [], flags: [], problems: [] },
+        tags,
+      };
+    };
+
+    // Zotero notes, library by library: quote notes and margin notes.
     for (const library of opts.sources) {
       const notes = db.prepare("SELECT key, version, parent_key, data FROM zotero_items WHERE library = ? AND item_type = 'note' AND deleted = 0 ORDER BY key")
         .all(library) as { key: string; version: number; parent_key: string | null; data: string }[];
       for (const n of notes) {
         const data = JSON.parse(n.data) as ApiItem["data"];
         const noteTags = (data.tags ?? []).map((t) => t.tag);
+        if (noteTags.some((t) => t.toLowerCase() === MARGIN_TAG)) {
+          const margin = marginNote(data.note ?? "", noteTags.filter((t) => t.toLowerCase() !== MARGIN_TAG));
+          if (!margin) {
+            skip("zotero margin note: empty");
+            continue;
+          }
+          upsert({ kind: "zotero-note", record: "note", ref: `${library}:${n.key}`, version: String(n.version), raw: data.note ?? "", ...margin,
+            workId: noteWork(library, n.parent_key) });
+          continue;
+        }
         const parsed = parseNote(data.note ?? "", noteTags);
         if (parsed.kind !== "quote") {
           skip(`zotero note: ${parsed.kind}`);
@@ -312,7 +341,7 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
     }
 
     // --- OCR check over every quote nobody has edited -------------------------------------------
-    const all = db.prepare("SELECT id, text, status, flags, edited FROM quotes").all() as { id: number; text: string; status: string; flags: string; edited: number }[];
+    const all = db.prepare("SELECT id, text, status, flags, edited FROM quotes WHERE kind = 'quote'").all() as { id: number; text: string; status: string; flags: string; edited: number }[];
     const suspects = new Map<string, Suspect[]>();
     if (opts.dictionary) for (const q of all) suspects.set(String(q.id), suspectTokens(q.text, opts.dictionary));
     const kept = dropCommonUnknowns(suspects);

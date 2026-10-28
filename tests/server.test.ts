@@ -37,6 +37,9 @@ beforeAll(async () => {
     itemType: "book", title: "Mobbing: emotional abuse in the American workplace", date: "1999", publisher: "Civil Society Pub.", place: "Ames, Iowa", ISBN: "9780966480397",
     extra: "Citation Key: davenport1999mobbing", creators: [{ creatorType: "author", lastName: "Davenport", firstName: "Noa" }],
   }));
+  db.prepare("INSERT INTO zotero_items (library, key, version, item_type, parent_key, deleted, data) VALUES (?, ?, 1, 'note', ?, 0, ?)").run(PRIMARY, "MARGIN01", "MOBB0001", JSON.stringify({
+    itemType: "note", parentItem: "MOBB0001", note: "<p>Compare Leymann's forty-five behaviours, which she leaves out. (p. 41)</p>", tags: [{ tag: "margin" }],
+  }));
   runImport(db, { drupal, primary: PRIMARY, sources: [PRIMARY] });
   server = await serveHttp(db, { host: "127.0.0.1", port: 0 });
   const a = server.address();
@@ -46,6 +49,7 @@ beforeAll(async () => {
 afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
 const quoteId = (fragment: string) => db.prepare("SELECT id FROM quotes WHERE text LIKE ?").pluck().get(`%${fragment}%`) as number;
+const noteId = () => db.prepare("SELECT id FROM quotes WHERE kind = 'note'").pluck().get() as number;
 
 describe("queries", () => {
   it("turns words and phrases into a safe FTS query", () => {
@@ -77,6 +81,21 @@ describe("queries", () => {
     expect(searchQuotes(db, { query: "mobbing" }).quotes.map((q) => q.text)).toEqual([expect.stringMatching(/^Mobbing is/)]);
     expect(searchQuotes(db, { query: "dignity" }).quotes.map((q) => q.text)).toEqual(["Everyone deserves dignity."]);
     expect(searchQuotes(db, { query: "abuse" }).total).toBe(1);
+  });
+
+  it("finds notes beside quotes, by their words, unless a kind is asked for", () => {
+    const hit = searchQuotes(db, { query: "Leymann" });
+    expect(hit.quotes).toEqual([expect.objectContaining({ kind: "note", text: "", note: expect.stringMatching(/^Compare Leymann/), locator: "p. 41", grade: null })]);
+    expect(hit.quotes[0].snippet).toBe("Compare «Leymann»'s forty-five behaviours, which she leaves out.");
+    expect(searchQuotes(db, { query: "Leymann", kind: "quote" }).total).toBe(0);
+    expect(searchQuotes(db, { work: "davenport1999mobbing", kind: "note" }).total).toBe(1);
+    expect(searchQuotes(db, { work: "davenport1999mobbing" }).total).toBe(3);
+  });
+
+  it("cites a note as its work and place, with no quotation", () => {
+    const c = citeQuote(db, noteId());
+    expect(c).toMatchObject({ kind: "note", quote: null, note: expect.stringMatching(/^Compare/), pandoc: "[@davenport1999mobbing, p. 41]" });
+    expect(c.warnings.join(" ")).toMatch(/not a quote/);
   });
 
   it("offers each edition when several Zotero items could be the work", () => {
@@ -130,6 +149,16 @@ describe("admin pages", () => {
     const html = await (await fetch(`${base}/admin/quotes/${quoteId("emotional assault")}`)).text();
     expect(html).toContain("[@davenport1999mobbing, p. 40]");
     expect(html).toContain("zotero://select/library/items/MOBB0001");
+  });
+
+  it("shows a note as your own words", async () => {
+    const html = await (await fetch(`${base}/admin/quotes/${noteId()}`)).text();
+    expect(html).toContain("<h1>Note ");
+    expect(html).toContain("Compare Leymann&#39;s forty-five behaviours");
+    expect(html).not.toContain("<blockquote>");
+    const list = await (await fetch(`${base}/admin/quotes?kind=note`)).text();
+    expect(list).toContain('<span class="kind">note</span>');
+    expect(list).toContain("1–1 of 1");
   });
 
   it("escapes what it shows", async () => {

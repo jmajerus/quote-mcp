@@ -5,7 +5,8 @@ import type { ApiItem } from "./zotero.js";
 
 /**
  * Read-only queries over the quote store, shared by the MCP tools and the admin pages. Unparsed quotes
- * (grade C, waiting for a person to split them) are left out of search unless asked for.
+ * (grade C, waiting for a person to split them) are left out of search unless asked for. Notes (your own
+ * words, with no quoted text) are found beside quotes unless a kind is asked for.
  */
 
 export class ToolError extends Error {}
@@ -127,6 +128,7 @@ export interface SearchArgs {
   work?: string;
   flag?: string;
   status?: "transcribed" | "verified" | "unparsed" | "any";
+  kind?: "quote" | "note" | "any";
   limit?: number;
   offset?: number;
 }
@@ -146,7 +148,8 @@ export function searchQuotes(db: DB, args: SearchArgs) {
     // tag filters cover those, and a phrase search must tell a source that uses a term from one tagged with it.
     params.fts = `{text comment} : (${terms})`;
     order = "bm25(quotes_fts)";
-    snippet = "snippet(quotes_fts, 0, '«', '»', '…', 24)";
+    // A note's words are its comment; a quote's snippet comes from what it quotes.
+    snippet = "CASE q.kind WHEN 'note' THEN snippet(quotes_fts, 1, '«', '»', '…', 24) ELSE snippet(quotes_fts, 0, '«', '»', '…', 24) END";
   }
   if (args.concept) {
     const c = findConcept(db, args.concept);
@@ -172,6 +175,10 @@ export function searchQuotes(db: DB, args: SearchArgs) {
     where.push("EXISTS (SELECT 1 FROM json_each(q.flags) WHERE value = @flag)");
     params.flag = args.flag;
   }
+  if (args.kind && args.kind !== "any") {
+    where.push("q.kind = @kind");
+    params.kind = args.kind;
+  }
   if (args.status && args.status !== "any") {
     where.push("q.status = @status");
     params.status = args.status;
@@ -191,9 +198,12 @@ function tagsOf(db: DB, quoteId: number) {
 }
 
 function present(db: DB, q: Record<string, unknown>, snippet: string | null = null) {
+  const note = q.kind === "note";
   return {
     id: q.id as number,
+    kind: q.kind as "quote" | "note",
     text: q.text as string,
+    ...(note ? { note: (q.comment as string) ?? null } : {}),
     ...(snippet ? { snippet } : {}),
     locator: locatorText(q.locator_kind as string, q.locator as string | null),
     chapter_author: (q.chapter_author as string) ?? null,
@@ -201,14 +211,14 @@ function present(db: DB, q: Record<string, unknown>, snippet: string | null = nu
     work: workSummary(db, q.work_id as number | null),
     tags: tagsOf(db, q.id as number),
     status: q.status as string,
-    grade: q.grade as string,
+    grade: (q.grade as string) ?? null,
     flags: json<string[]>(q.flags as string, []),
   };
 }
 
 export function getQuote(db: DB, id: number) {
   const q = db.prepare("SELECT * FROM quotes WHERE id = ?").get(id) as Record<string, unknown> | undefined;
-  if (!q) throw new ToolError(`No quote ${id}.`);
+  if (!q) throw new ToolError(`No quote or note ${id}.`);
   return {
     ...present(db, q),
     comment: (q.comment as string) ?? null,
@@ -258,14 +268,15 @@ export function citeQuote(db: DB, id: number) {
   } else if (!row) {
     warnings.push(q.attribution ? `No work to cite; the quote is attributed to ${q.attribution}.` : "No work to cite.");
   }
-  if (!q.locator) warnings.push("The quote has no page or location.");
+  if (q.kind === "note") warnings.push("This is a note (your own words), not a quote: there's no quoted text to cite, only the work and the place.");
+  else if (!q.locator) warnings.push("The quote has no page or location.");
   if (q.status === "unparsed") warnings.push("This quote hasn't been split from its note yet; check its text before using it.");
   if (q.flags.includes("ocr_suspect")) warnings.push("Some words may be OCR errors; check them against the book (see suspect_words in get_quote).");
   const kindle = q.locator?.startsWith("Kindle");
   const locator = q.locator && !kindle ? { label: "page", locator: q.locator.replace(/^pp?\. /, "") } : null;
   const pandoc = citekey ? `[@${citekey}${locator ? `, ${q.locator}` : kindle ? `, ${q.locator}` : ""}]` : null;
   return {
-    quote: q.text, locator, locator_text: q.locator, chapter_author: q.chapter_author, csl, citekey, pandoc, ...(editions ? { editions } : {}),
+    kind: q.kind, quote: q.kind === "note" ? null : q.text, ...(q.kind === "note" ? { note: q.note } : {}), locator, locator_text: q.locator, chapter_author: q.chapter_author, csl, citekey, pandoc, ...(editions ? { editions } : {}),
     ...(q.chapter_author ? { note: `The passage is by ${q.chapter_author}, in an edited volume; cite the chapter if your style needs it.` } : {}),
     warnings,
   };
@@ -316,7 +327,8 @@ export function overview(db: DB) {
     else queues[q] = one(`SELECT COUNT(*) FROM quotes q WHERE EXISTS (SELECT 1 FROM json_each(q.flags) WHERE value = '${q}')`);
   }
   return {
-    quotes: one("SELECT COUNT(*) FROM quotes WHERE status != 'unparsed'"),
+    quotes: one("SELECT COUNT(*) FROM quotes WHERE status != 'unparsed' AND kind = 'quote'"),
+    notes: one("SELECT COUNT(*) FROM quotes WHERE kind = 'note'"),
     works: one("SELECT COUNT(DISTINCT work_id) FROM quotes WHERE work_id IS NOT NULL"),
     concepts: one("SELECT COUNT(*) FROM concepts WHERE status != 'retired'"),
     schemes: db.prepare("SELECT slug, label FROM schemes ORDER BY slug").all(),

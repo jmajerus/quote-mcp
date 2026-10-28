@@ -4,7 +4,7 @@ import {
 } from "./queries.js";
 
 /**
- * The admin pages, rendered on the server: an overview, quote search, a quote's page, the concept
+ * The admin pages, rendered on the server: an overview, search over quotes and notes, a record's page, the concept
  * scheme, and the worklists. Read-only in phase 1; editing arrives with phase 2 behind Cloudflare Access.
  */
 
@@ -51,6 +51,8 @@ button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid
 .meta { color: var(--muted); font-size: 0.87rem; }
 blockquote { margin: 0 0 10px; padding: 12px 16px; background: var(--quote); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; white-space: pre-wrap; }
 .chip { display: inline-block; background: var(--chip); color: var(--chip-text); border-radius: 999px; padding: 1px 9px; font-size: 0.82rem; margin: 2px 4px 2px 0; text-decoration: none; }
+.kind { display: inline-block; border: 1px solid var(--border); color: var(--muted); border-radius: 4px; padding: 0 6px; font-size: 0.78rem; margin-right: 4px; }
+.words { margin: 0 0 10px; padding: 12px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; white-space: pre-wrap; }
 .chip.plain { background: transparent; border: 1px dashed var(--border); color: var(--muted); }
 .flag { display: inline-block; background: var(--warn-bg); color: var(--warn); border-radius: 4px; padding: 0 6px; font-size: 0.78rem; margin-right: 4px; }
 table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
@@ -103,8 +105,9 @@ function tagChips(tags: { tag: string; concept: string | null }[]): string {
 type Listed = ReturnType<typeof searchQuotes>["quotes"][number];
 
 function quoteCard(q: Listed): string {
-  const text = q.snippet ? esc(q.snippet).replace(/«/g, "<mark>").replace(/»/g, "</mark>") : esc(q.text.length > 420 ? `${q.text.slice(0, 420)}…` : q.text);
-  return `<div class="result"><p class="text"><a href="/admin/quotes/${q.id}">#${q.id}</a> ${text}</p>
+  const words = q.kind === "note" ? q.note ?? "" : q.text;
+  const text = q.snippet ? esc(q.snippet).replace(/«/g, "<mark>").replace(/»/g, "</mark>") : esc(words.length > 420 ? `${words.slice(0, 420)}…` : words);
+  return `<div class="result"><p class="text"><a href="/admin/quotes/${q.id}">#${q.id}</a> ${q.kind === "note" ? '<span class="kind">note</span>' : ""}${text}</p>
 <div class="meta">${workLine(q.work, q.attribution)}${q.locator ? ` · ${esc(q.locator)}` : ""}${q.chapter_author ? ` · by ${esc(q.chapter_author)}` : ""}</div>
 <div>${tagChips(q.tags)}${q.flags.map((f) => `<span class="flag">${esc(f)}</span>`).join("")}</div></div>`;
 }
@@ -124,7 +127,7 @@ const QUEUE_LABEL: Record<Queue, string> = {
 
 function overviewPage(db: DB): string {
   const o = overview(db);
-  const cards = [["Quotes", o.quotes, "/admin/quotes"], ["Works", o.works, "/admin/quotes"], ["Concepts", o.concepts, "/admin/concepts"]]
+  const cards = [["Quotes", o.quotes, "/admin/quotes?kind=quote"], ["Notes", o.notes, "/admin/quotes?kind=note"], ["Works", o.works, "/admin/quotes"], ["Concepts", o.concepts, "/admin/concepts"]]
     .map(([k, n, href]) => `<a class="card" href="${href}" style="text-decoration:none;color:inherit"><div class="n">${n}</div><div class="k">${k}</div></a>`).join("");
   return page("Overview", "overview", `<h1>Quotes</h1><p class="sub">Last import ${esc(String(o.last_import ?? "never").slice(0, 16).replace("T", " "))} UTC · schemes: ${o.schemes.map((s) => esc((s as { label: string }).label)).join(", ")}</p>
 <div class="grid">${cards}</div>${worklistTable(o.queues)}`);
@@ -138,13 +141,13 @@ ${QUEUES.map((q) => `<tr><td><a href="/admin/worklists/${q}">${QUEUE_LABEL[q]}</
 function quotesPage(db: DB, p: URLSearchParams): string {
   const params = {
     q: p.get("q") ?? "", concept: p.get("concept") ?? "", tag: p.get("tag") ?? "", author: p.get("author") ?? "", work: p.get("work") ?? "",
-    status: p.get("status") ?? "", offset: Number(p.get("offset") ?? 0),
+    status: p.get("status") ?? "", kind: p.get("kind") ?? "", offset: Number(p.get("offset") ?? 0),
   };
   let body: string;
   try {
     const r = searchQuotes(db, {
       query: params.q || undefined, concept: params.concept || undefined, tag: params.tag || undefined, author: params.author || undefined,
-      work: params.work || undefined, status: (params.status || undefined) as never, offset: params.offset, limit: 25,
+      work: params.work || undefined, status: (params.status || undefined) as never, kind: (params.kind || undefined) as never, offset: params.offset, limit: 25,
     });
     body = r.quotes.map(quoteCard).join("") + pager("/admin/quotes", { ...params, offset: undefined }, r.total, r.offset, r.limit);
   } catch (error) {
@@ -155,6 +158,7 @@ function quotesPage(db: DB, p: URLSearchParams): string {
   return page("Quotes", "quotes", `<h1>Quotes</h1>
 <form class="filters" method="get">${input("q", "Words or \"a phrase\"")}${input("concept", "Concept")}${input("author", "Author")}${input("work", "Work")}
 <select name="status" aria-label="Status"><option value="">Ready to use</option>${["transcribed", "unparsed", "any"].map((s) => `<option${params.status === s ? " selected" : ""}>${s}</option>`).join("")}</select>
+<select name="kind" aria-label="Kind"><option value="">Quotes and notes</option>${[["quote", "Quotes"], ["note", "Notes"]].map(([v, label]) => `<option value="${v}"${params.kind === v ? " selected" : ""}>${label}</option>`).join("")}</select>
 ${params.tag ? `<input type="hidden" name="tag" value="${esc(params.tag)}">` : ""}<button>Search</button></form>
 ${params.tag ? `<p class="note">Tag: ${esc(params.tag)} · <a href="/admin/quotes">clear</a></p>` : ""}${body}`);
 }
@@ -163,13 +167,15 @@ function quotePage(db: DB, id: number): string {
   const q = getQuote(db, id);
   const c = citeQuote(db, id);
   const rows = (pairs: [string, string][]) => pairs.filter(([, v]) => v).map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join("");
-  return page(`Quote ${id}`, "quotes", `<h1>Quote ${id}</h1><p class="sub">${esc(q.status)} · grade ${esc(q.grade)}${q.edited ? " · edited" : ""}</p>
-<blockquote>${esc(q.text)}</blockquote>
+  const note = q.kind === "note";
+  const name = `${note ? "Note" : "Quote"} ${id}`;
+  return page(name, "quotes", `<h1>${name}</h1><p class="sub">${note ? "your own words, no quoted text" : `${esc(q.status)} · grade ${esc(q.grade)}`}${q.edited ? " · edited" : ""}</p>
+${note ? (q.note ? `<div class="words">${esc(q.note)}</div>` : '<p class="note">Tags only.</p>') : `<blockquote>${esc(q.text)}</blockquote>`}
 <div class="meta">${workLine(q.work, q.attribution)}${q.locator ? ` · ${esc(q.locator)}` : ""}</div>
 <p>${tagChips(q.tags)}${q.flags.map((f) => `<span class="flag">${esc(f)}</span>`).join("")}</p>
 <h2>Details</h2><div class="scroll"><table>${rows([
     ["Chapter author", esc(q.chapter_author)],
-    ["Comment", esc(q.comment)],
+    ["Comment", note ? "" : esc(q.comment)],
     ["Source URL", q.source_url ? `<a href="${esc(q.source_url)}">${esc(q.source_url)}</a>` : ""],
     ["Key words", (q.kwic as { phrase: string; tag: string }[]).map((k) => `“${esc(k.phrase)}” → ${esc(k.tag)}`).join("<br>")],
     ["Suspect words", (q.suspect_words as { token: string; reason: string; suggestion?: string }[]).map((s) => `${esc(s.token)}${s.suggestion ? ` → ${esc(s.suggestion)}` : ` (${esc(s.reason)})`}`).join(", ")],

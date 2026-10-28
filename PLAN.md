@@ -2,7 +2,7 @@
 
 Proposed 2026-10-27; revised the same day so Quote MCP owns the quotes, and
 again after the surveys found the old Drupal site, and to add margin notes.
-Phases 0 and 1 are done.
+Phases 0 and 1 are done; phase 3's first part (notes) is built.
 
 Quote MCP is the store for quotations: structured records you can search,
 tag, repair, and cite. Most of its quotes come from paper books that will
@@ -25,7 +25,7 @@ their home from then on.
 | Works | A quote cites a Zotero item. About 300 of the 495 old-site works with quotes match a Zotero item by title; the rest are filed into Zotero's staging collection from their Biblio record before or during the import, so every quote ends up citable. |
 | Quoted text is protected | People edit quotes directly. Agents add quotes and change tags and comments, but changes to an existing quote's text or locator are proposals that a person approves. |
 | Zotero copies | Optional and later: Quote MCP can write a read-only copy of each book's quotes into Zotero as child notes. A copy is never read back as data; an edit made to one becomes a proposal. |
-| Notes | A margin note (your own words at a page, or about a whole book, with no quoted passage) is a second kind of record in the same store, not a separate Notes MCP: it needs the same works, locators, concepts, tags, and search. A short note that only names concepts, as on Kindle highlights, is read as tags, not discarded. |
+| Notes | A margin note (your own words at a page, or about a whole book, with no quoted passage) is a second kind of record in the same store, not a separate Notes MCP: it needs the same works, locators, concepts, tags, and search. A short note that only names concepts, as on Kindle highlights, is read as tags, not discarded. A Zotero note becomes a note record only when it's tagged `margin`: Zotero's other non-quote notes are agents' research notes and catalog data, not yours. |
 | Corpus quotes | Quote MCP owns their content and tags too. corpus-mcp keeps what only it can do: checking text against a Calibre book and re-anchoring after scans. |
 | Storage | SQLite (`quotes.db`), primary data from day one: a nightly online backup kept 14 days (corpus-mcp's pattern), Proxmox backups of the LXC, and a full JSON export. |
 | Runtime | A systemd service on its own LXC (quote-mcp.localdomain, port 8000), with its own Access application and claude.ai connector. |
@@ -285,25 +285,40 @@ says there's no quote to cite.
 whatever the source:
 
 1. Split it on commas, semicolons, and line breaks. If every piece is a
-   concept's label or alternative label, it's tags.
-2. If every piece is short (up to four words, no sentence punctuation), it's
-   still tags; pieces that aren't concepts go to the unresolved-tags
-   worklist as candidate concepts.
+   concept's label, alternative label, or slug, it's tags.
+2. If every piece is short (up to four words, no sentence punctuation and no
+   dash), it's still tags; pieces that aren't concepts go to the
+   unresolved-tags worklist as candidate concepts.
 3. Otherwise it's prose, kept as the comment. Leading pieces that are
-   concepts ("mobbing, false self — compare Goffman") become tags, and the
-   rest stays prose.
-4. A piece written as `.mobbing` or `.false-self` is always a tag. This is
-   an optional convention for new notes, quick to type on a small screen;
-   old notes rely on rules 1 to 3.
+   concepts ("mobbing, false self — compare Goffman", where a dash also ends
+   a piece) become tags, and the rest stays prose. The dash is what keeps
+   this example out of rule 2, since every piece in it is short.
+4. A word written as `.mobbing` or `.false-self` is always a tag, wherever
+   it is. This is an optional convention for new notes, quick to type on a
+   small screen; old notes rely on rules 1 to 3.
+
+`src/margin.ts` is the classifier. Tags it reads have origin `text` in
+`quote_tags`.
 
 The raw text stays with the record's origin, so a wrong reading can be
 redone when the rules change.
 
 **Sources.**
 
-- **Now:** Zotero notes that aren't quotes, which the import currently sets
-  aside as "other" (research notes, "Discussed in:" lists, `[VERIFY]`
-  notes), and text outside quote spans that isn't a quote's commentary.
+- **Now:** a Zotero note tagged `margin` (any case), on a book or
+  standalone. Its words go through the classifier, a trailing locator such as
+  `(p. 51)` is read as for quotes, and its other Zotero tags are kept as
+  tags. The 30-minute watch picks new ones up, so typing a margin note into
+  Zotero works the way typing a quote does. A note that's tagged `margin`
+  but empty is skipped.
+- **Not imported:** the 162 Zotero notes the import sets aside as "other".
+  A look on 2026-10-27 found about 90 agents' research notes (`[VERIFIED]`,
+  `[VERIFY: …]`, `[PLACEHOLDER: …]`), about 50 one-line summaries written
+  for annotated bibliographies (many repeated across items), about 15
+  catalog notes the catalog rule misses ("Description based upon print
+  version of record", contents lists), and Zotero's welcome note; none were
+  margin notes. The old site's text outside quote spans is four remarks on
+  a quote, already kept as that quote's comment, and a jacket blurb.
 - **When the Kindle books are retrieved** (in progress; what exists isn't
   known yet): Kindle highlights and their notes, from `My Clippings.txt`
   (a highlight and its note are separate entries with the same location)
@@ -389,10 +404,13 @@ highlighting quotes from the anchors.
 2. **Repair.** Editing and history on the admin pages, proposals,
    tag hygiene, the corpus-mcp verify endpoint, the OCR detector's agent
    pass, and shelf sessions.
-3. **Notes.** The `kind` field, the tag-or-note classifier, importing
-   Zotero's non-quote notes as notes, and the `kind` filter in search and
-   the admin pages. The ebook highlight import follows once the Kindle books
-   are retrieved and it's known which source holds the annotations.
+3. **Notes.** Built 2026-10-27: the `kind` field (schema 2, added by `quote-mcp
+   migrate`, which deploy runs before restarting the read-only server), the
+   tag-or-note classifier, Zotero notes tagged `margin` imported as notes,
+   the `kind` filter in `search_quotes` and the admin pages, and
+   `cite_quote` on a note. No notes exist yet. Still to come: the ebook
+   highlight import, once the Kindle books are retrieved and it's known
+   which source holds the annotations.
 4. **Capture.** The capture form, `add_quote` and `add_note`, filing new
    books into staging (the first Zotero writes), and Zotero annotations as
    a source.

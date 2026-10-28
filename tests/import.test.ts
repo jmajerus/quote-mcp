@@ -1,5 +1,7 @@
+import { rmSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
-import { type DB, openDb } from "../src/db.js";
+import Database from "better-sqlite3";
+import { type DB, SCHEMA_VERSION, openDb } from "../src/db.js";
 import type { DrupalSite } from "../src/drupal.js";
 import { exportAll } from "../src/export.js";
 import { type ImportOptions, runImport } from "../src/import.js";
@@ -156,10 +158,46 @@ describe("import", () => {
     expect(quoteLike("First quote")).toMatchObject({ status: "unparsed", grade: "C" });
   });
 
+  it("imports a Zotero note tagged margin as a note, reading concepts out of its words", () => {
+    addItem(db, PRIMARY, "MARGIN01", note("ATTILA01", `<p>power, job loss — he means layoffs as discipline (p. 51)</p>`, ["margin", "politics"]));
+    addItem(db, PRIMARY, "MARGIN02", note("ATTILA01", `<p>fear; .job-loss</p>`, ["Margin"]));
+    addItem(db, PRIMARY, "MARGIN03", note("ATTILA01", `<p></p>`, ["margin"]));
+    const s = runImport(db, opts());
+    const prose = db.prepare("SELECT * FROM quotes WHERE comment LIKE '%layoffs%'").get() as Record<string, unknown>;
+    expect(prose).toMatchObject({ kind: "note", text: "", comment: "he means layoffs as discipline", locator_kind: "page", locator: "51", grade: null, flags: "[]" });
+    expect(tagsOf(prose.id)).toEqual([
+      { tag: "job loss", origin: "text", slug: "job-loss" }, { tag: "politics", origin: "note", slug: null }, { tag: "power", origin: "text", slug: "power" },
+    ]);
+    const tagsOnly = db.prepare("SELECT q.* FROM quotes q JOIN quote_origins o ON o.quote_id = q.id WHERE o.ref = ?").get(`${PRIMARY}:MARGIN02`) as Record<string, unknown>;
+    expect(tagsOnly).toMatchObject({ kind: "note", comment: null, locator_kind: "none" });
+    expect(tagsOf(tagsOnly.id)).toEqual([{ tag: "fear", origin: "text", slug: "fear" }, { tag: "job loss", origin: "text", slug: "job-loss" }]);
+    expect(s.skipped).toMatchObject({ "zotero margin note: empty": 1, "zotero note: other": 1 });
+    expect(db.prepare("SELECT rowid FROM quotes_fts WHERE quotes_fts MATCH ?").pluck().all("layoffs")).toEqual([prose.id]);
+  });
+
   it("indexes quotes for full-text search", () => {
     runImport(db, opts());
     const hits = db.prepare("SELECT rowid FROM quotes_fts WHERE quotes_fts MATCH ?").pluck().all("enemies");
     expect(hits).toEqual([quoteLike("worst enemies").id]);
     expect(db.prepare("SELECT rowid FROM quotes_fts WHERE quotes_fts MATCH ?").pluck().all("tags:politics")).toEqual(hits);
+  });
+});
+
+describe("schema", () => {
+  it("adds kind to a store made before notes, keeping its quotes as quotes", () => {
+    const path = `${process.env.TMPDIR ?? "/tmp"}/quote-mcp-v1-${process.pid}.db`;
+    const v1 = new Database(path);
+    v1.exec(`CREATE TABLE quotes (id INTEGER PRIMARY KEY, work_id INTEGER, text TEXT NOT NULL, text_key TEXT NOT NULL,
+      locator_kind TEXT NOT NULL DEFAULT 'none', locator TEXT, chapter_author TEXT, comment TEXT, attribution TEXT, source_url TEXT,
+      status TEXT NOT NULL, grade TEXT, flags TEXT NOT NULL DEFAULT '[]', suspects TEXT NOT NULL DEFAULT '[]', edited INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL, created_by TEXT, updated_at TEXT NOT NULL, updated_by TEXT);
+      INSERT INTO quotes (text, text_key, status, created_at, updated_at) VALUES ('Old quote', 'oldquote', 'transcribed', 'then', 'then');
+      PRAGMA user_version = 1;`);
+    v1.close();
+    const migrated = openDb(path);
+    expect(migrated.pragma("user_version", { simple: true })).toBe(SCHEMA_VERSION);
+    expect(migrated.prepare("SELECT kind, text FROM quotes").get()).toEqual({ kind: "quote", text: "Old quote" });
+    migrated.close();
+    for (const suffix of ["", "-wal", "-shm"]) rmSync(`${path}${suffix}`, { force: true });
   });
 });

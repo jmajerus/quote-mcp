@@ -5,6 +5,8 @@ import Database from "better-sqlite3";
 /**
  * The quote store: primary data, never rebuilt (back it up). Quotes are the records people edit; their
  * origins (a span on the old site, a Zotero note) are provenance kept with the raw HTML they came from.
+ * A record's kind is "quote" (a passage) or "note" (your own words at a locator or about a whole work, kept
+ * as its comment, with no quoted text); both share works, locators, tags, and history.
  * Works are what quotes cite, linked to a Zotero item where there is one. Concepts belong to named
  * schemes and are keyed by internal ids, so a scheme or concept can be renamed without touching quotes.
  * zotero_items mirrors the Zotero libraries the import reads, so a re-run fetches only what changed.
@@ -12,7 +14,7 @@ import Database from "better-sqlite3";
 
 export type DB = Database.Database;
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -48,7 +50,8 @@ CREATE TABLE IF NOT EXISTS works (
 CREATE TABLE IF NOT EXISTS work_origins (kind TEXT NOT NULL, ref TEXT NOT NULL, work_id INTEGER NOT NULL REFERENCES works(id), PRIMARY KEY (kind, ref));
 
 CREATE TABLE IF NOT EXISTS quotes (
-  id INTEGER PRIMARY KEY, work_id INTEGER REFERENCES works(id), text TEXT NOT NULL, text_key TEXT NOT NULL,
+  id INTEGER PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'quote' CHECK (kind IN ('quote', 'note')),
+  work_id INTEGER REFERENCES works(id), text TEXT NOT NULL, text_key TEXT NOT NULL,
   locator_kind TEXT NOT NULL DEFAULT 'none' CHECK (locator_kind IN ('page', 'kindle', 'none')), locator TEXT, chapter_author TEXT,
   comment TEXT, attribution TEXT, source_url TEXT,
   status TEXT NOT NULL CHECK (status IN ('transcribed', 'verified', 'unparsed')), grade TEXT, flags TEXT NOT NULL DEFAULT '[]',
@@ -89,8 +92,16 @@ export function openDb(path = process.env.QUOTE_DB ?? "data/quotes.db"): DB {
   const version = Number(db.pragma("user_version", { simple: true }));
   if (version > SCHEMA_VERSION) throw new Error(`${path} has schema ${version}; this build knows ${SCHEMA_VERSION}.`);
   db.exec(SCHEMA);
+  migrate(db);
   db.pragma(`user_version = ${SCHEMA_VERSION}`);
   return db;
+}
+
+/** Brings a store made by an earlier schema up to date; a new store already has everything. */
+function migrate(db: DB): void {
+  const columns = (table: string) => new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name));
+  // 2: notes beside quotes.
+  if (!columns("quotes").has("kind")) db.exec("ALTER TABLE quotes ADD COLUMN kind TEXT NOT NULL DEFAULT 'quote' CHECK (kind IN ('quote', 'note'))");
 }
 
 export function getMeta(db: DB, key: string): string | undefined {

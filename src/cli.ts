@@ -15,6 +15,7 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *       Syncs the Zotero mirror (QUOTE_ZOTERO_LIBRARY plus QUOTE_ZOTERO_SOURCES), reads the old site
  *       (QUOTE_DRUPAL_URL, when set), and imports. Safe to run again; run it on a timer to pick up new
  *       quote notes typed into Zotero.
+ *   quote-mcp migrate                   Brings the store up to this build's schema (the server opens it read-only).
  *   quote-mcp export [--out file]      Everything as JSON (stdout by default).
  *   quote-mcp backup [--dir data/backups] [--keep 14]
  *   quote-mcp stats
@@ -46,11 +47,11 @@ async function importCommand() {
     say(`No word list (${(error as Error).message}); the OCR check is skipped.\n`);
   }
   const s = runImport(db, { drupal, primary: config.library, sources, dictionary });
-  const counts = db.prepare("SELECT status, COUNT(*) AS n FROM quotes GROUP BY status").all() as { status: string; n: number }[];
+  const counts = db.prepare("SELECT kind, status, COUNT(*) AS n FROM quotes GROUP BY kind, status ORDER BY kind DESC, status").all() as { kind: string; status: string; n: number }[];
   console.log([
     `Concepts: ${s.concepts.added} added, ${s.concepts.relations} relations added.`,
     `Quotes: ${s.quotes.added} added, ${s.quotes.merged} merged from a second source, ${s.quotes.updated} re-imported, ${s.quotes.unchanged} unchanged, ${s.quotes.keptEdited} edited and left alone.`,
-    `In the store: ${counts.map((c) => `${c.n} ${c.status}`).join(", ")}; ${s.ocrSuspects} with suspect words.`,
+    `In the store: ${counts.map((c) => (c.kind === "note" ? `${c.n} notes` : `${c.n} ${c.status}`)).join(", ")}; ${s.ocrSuspects} with suspect words.`,
     `Works with quotes: ${Object.entries(s.works).map(([k, n]) => `${n} ${k}`).join(", ")}.`,
     `Skipped: ${Object.entries(s.skipped).map(([k, n]) => `${n} ${k}`).join(", ") || "nothing"}.`,
     `Tags not in a concept scheme: ${s.unresolvedTags.length}${s.unresolvedTags.length ? ` (${s.unresolvedTags.slice(0, 25).map(([t, n]) => `${t} ${n}`).join(", ")}${s.unresolvedTags.length > 25 ? ", …" : ""})` : ""}.`,
@@ -79,7 +80,7 @@ function statsCommand() {
   const db = openDb();
   const one = (sql: string) => db.prepare(sql).all();
   console.log(JSON.stringify({
-    quotes: one("SELECT status, grade, COUNT(*) AS n FROM quotes GROUP BY status, grade"),
+    quotes: one("SELECT kind, status, grade, COUNT(*) AS n FROM quotes GROUP BY kind, status, grade"),
     origins: one("SELECT kind, COUNT(*) AS n FROM quote_origins GROUP BY kind"),
     works: one("SELECT match, COUNT(*) AS n FROM works GROUP BY match"),
     concepts: one("SELECT s.slug AS scheme, COUNT(c.id) AS n FROM schemes s LEFT JOIN concepts c ON c.scheme_id = s.id GROUP BY s.slug"),
@@ -90,8 +91,12 @@ async function serveCommand() {
   await serveHttp(openReadOnly(), { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010) });
 }
 
+function migrateCommand() {
+  console.log(`The store is at schema ${openDb().pragma("user_version", { simple: true })}.`);
+}
+
 const commands: Record<string, () => unknown> = {
-  import: importCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, serve: serveCommand, stdio: () => serveStdio(openReadOnly()),
+  import: importCommand, migrate: migrateCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, serve: serveCommand, stdio: () => serveStdio(openReadOnly()),
 };
 const command = commands[process.argv[2] ?? ""];
 if (!command) {

@@ -138,7 +138,7 @@ function uniqueTerms(terms: string[]): string[] {
   return [...seen.values()];
 }
 
-function readLocator(text: string): { body: string; locator?: Locator; chapterAuthor?: string } {
+export function readLocator(text: string): { body: string; locator?: Locator; chapterAuthor?: string } {
   const m = LOCATOR.exec(text);
   if (!m) return { body: text };
   const dash = (v: string) => v.replace(/\s*[-–—]\s*/, "–");
@@ -231,6 +231,11 @@ export function parseNote(html: string, tags: string[] = []): ParsedNote {
   if (spans.length > 1) result.problems.push("more than one quote span: several quotes?");
   result.grade = gradeOf(result);
   return result;
+}
+
+/** A note's words as plain text: paragraphs, list items, and emphasis kept as parseNote keeps them. */
+export function noteText(html: string): string {
+  return joinBlocks(blocks(parse(html)));
 }
 
 /**
