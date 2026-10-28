@@ -583,11 +583,24 @@ copied out as a snapshot, and a Worker serves it.
   (`/api/graph`, `/api/concepts/…`, `/api/sets/…`) from D1, read-only, and
   `site.json` and the key list. Public pages get `cache-control` for the
   edge, and each publish changes the generation, which the ETag carries.
-- **The maps.** quote-atlas's build needs the same origin as the API. The
-  simplest fit is for quote-atlas to deploy its own static Worker on a
-  `quotes.majerus.us/map/*` route, so its deploys stay its own; the
-  alternative is to bundle its build into this Worker's assets, so a map
-  change needs a deploy here. To be agreed with quote-atlas's session.
+- **The maps.** quote-atlas's build needs the same origin as the API. Both
+  sessions prefer that quote-atlas deploys its own assets-only Worker on a
+  `quotes.majerus.us/map/*` route, so its deploys stay its own (its user is
+  deciding; the alternative is bundling its build into this Worker's
+  assets). With that:
+  - The route doesn't match a bare `/map`, so this Worker redirects `/map`
+    to `/map/`, as the LAN server does.
+  - quote-atlas's `npm run deploy` keeps copying to `/opt/quote-mcp/map` for
+    the LAN and the Access hostname, and deploys its Worker too.
+  - `publish` reads the public copy of `maps.json`
+    (`https://quotes.majerus.us/map/maps.json`), so the front page lists only
+    maps the public site has; the LAN preview reads
+    `/opt/quote-mcp/map/maps.json`. Its fields are `name`, `title`,
+    `description`, `scheme`, `svg`, and `match`, and later an optional `set`;
+    a map's drawing is at `/map/<name>/<svg>`.
+  - The map needs `/api/graph`, `/api/concepts/<scheme>:<slug>` and its
+    `/quotes` (`limit`, `offset`, `narrower`), and `/api/sets/<slug>` for a
+    map with a set, in the shapes the public port gives today.
 - **What retires.** The public port's API cut and filtering per request
   (`servePublic` and the `pub` branch in `src/api.ts`). The public port
   itself stays as the option for people without Cloudflare, re-based on the
