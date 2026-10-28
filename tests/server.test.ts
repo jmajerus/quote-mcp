@@ -270,6 +270,9 @@ describe("the map at /map/", () => {
     expect(res.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
     expect(res.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
     expect(await (await fetch(`${base}/map/assets/`)).text()).toBe("<p>assets</p>");
+    const bare = await fetch(`${base}/map/assets?x=1`, { redirect: "manual" });
+    expect(bare.status).toBe(301);
+    expect(bare.headers.get("location")).toBe("/map/assets/?x=1");
     expect((await fetch(`${base}/map/missing.js`)).status).toBe(404);
   });
 
@@ -277,6 +280,22 @@ describe("the map at /map/", () => {
     const res = await raw(p);
     expect(res.status).toBe(404);
     expect(res.body).not.toContain("secret");
+  });
+
+  it("doesn't take a word in a file name for a build hash", async () => {
+    fs.writeFileSync(path.join(mapRoot, "map", "concept-positions.json"), "{}");
+    expect((await fetch(`${base}/map/concept-positions.json`)).headers.get("cache-control")).toBe("no-cache");
+  });
+
+  it("answers a revalidation of an unchanged file with 304", async () => {
+    const first = await fetch(`${base}/map/`);
+    const etag = first.headers.get("etag");
+    const modified = first.headers.get("last-modified");
+    expect(etag).toMatch(/^W\/"[0-9a-f]+-[0-9a-f]+"$/);
+    expect(modified).toBeTruthy();
+    expect((await fetch(`${base}/map/`, { headers: { "if-none-match": etag! } })).status).toBe(304);
+    expect((await fetch(`${base}/map/`, { headers: { "if-modified-since": modified! } })).status).toBe(304);
+    expect((await fetch(`${base}/map/`, { headers: { "if-none-match": 'W/"0-0"' } })).status).toBe(200);
   });
 
   it("refuses writes", async () => {

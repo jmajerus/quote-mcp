@@ -382,10 +382,17 @@ highlighting quotes from the anchors.
 
 ## The concept map
 
-A separate repo, `human-work-map`, rebuilds the old site's concept graph: a
-static SVG page where clicking a concept shows its quotes. It reads quote-mcp
-live, so new concept-tagged quotes show up without an export. Built
-2026-10-28; the map's own front end and deploy live in that repo.
+A separate repo, `quote-atlas` (first called `human-work-map`), rebuilds
+the old site's concept graph: a static SVG page where clicking a concept
+shows its quotes. It reads quote-mcp live, so new concept-tagged quotes show
+up without an export. Built 2026-10-28; the maps' front end and deploy live
+in that repo. It holds several maps: `/map/` is a menu titled "Quote
+atlas", read from `/map/maps.json`, each map is at `/map/<name>/` (the first is
+`/map/human-work/`), and a concept is at `/map/<name>/#/concept/<slug>`;
+old `/map/#/concept/<slug>` links redirect to the first map. Each map is
+tied to one concept scheme: it calls `/api/concepts/<scheme>:<slug>` and
+its `/quotes`, and filters `/api/graph` by each concept's `scheme`, so
+`scheme` stays on the graph's concepts.
 
 - **API.** A read-only JSON API at `/api` (`src/api.ts`), on the same
   queries as the MCP tools so the two can't disagree: `GET /api/graph`
@@ -403,8 +410,8 @@ live, so new concept-tagged quotes show up without an export. Built
 - **Hosting.** quote-mcp serves the map's build at `/map/` from
   `QUOTE_MAP_DIR` (`/opt/quote-mcp/map` on the LXC, outside `releases/` so a
   quote-mcp deploy never removes it), behind the same Access login, so the
-  map needs no CORS and no auth of its own. human-work-map's deploy copies
-  its build there; quote-mcp only serves what's in the folder. A path that
+  map needs no CORS and no auth of its own. quote-atlas's deploy copies
+  its whole build there, a folder per map; quote-mcp only serves what's in the folder. A path that
   resolves outside the folder is 404; `index.html` is revalidated on every
   load, and files with a build hash in their names are cached for a year.
   Without `QUOTE_MAP_DIR`, `/map/` is 404.

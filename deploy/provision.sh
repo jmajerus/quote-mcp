@@ -18,7 +18,7 @@ apt-get install -y -q curl build-essential python3 wamerican
 
 id quote >/dev/null 2>&1 || useradd --system --home-dir /var/lib/quote-mcp --shell /usr/sbin/nologin quote
 install -d -o quote -g quote -m 0750 /var/lib/quote-mcp /var/lib/quote-mcp/backups
-# /opt/quote-mcp/map holds the concept map's build (human-work-map's deploy writes it), outside
+# /opt/quote-mcp/map holds the concept maps' build (quote-atlas's deploy writes it), outside
 # releases/ so a quote-mcp deploy never removes it; world-readable so the quote user can serve it.
 install -d -m 0755 /opt/quote-mcp /opt/quote-mcp/releases /opt/quote-mcp/map /etc/quote-mcp
 if [ ! -f /etc/quote-mcp/env ]; then

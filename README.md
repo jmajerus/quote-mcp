@@ -33,7 +33,7 @@ All read-only for now; `search_quotes` finds quotes and notes (filter with `kind
 | `GET /api/graph` | Every concept (with its quote count and `source`) and every relation, as JSON. |
 | `GET /api/concepts/:slug` | One concept, as `get_concept` returns it; `scheme:slug` works too. |
 | `GET /api/concepts/:slug/quotes` | Its quotes and notes; `narrower=false`, `limit` (up to 100), `offset`. |
-| `GET /map/` | The concept map's built files from `QUOTE_MAP_DIR` (human-work-map). |
+| `GET /map/` | The concept maps' built files from `QUOTE_MAP_DIR` (quote-atlas): a menu, and each map at `/map/<name>/`. |
 | `GET /health` | Version, counts, and what the last deploy installed. |
 
 The API is read-only and a contract with the map: add fields, but keep the routes and existing fields stable.

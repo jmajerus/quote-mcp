@@ -3,9 +3,9 @@ import type { DB } from "./db.js";
 import { ToolError, conceptGraph, findConcept, getConcept, searchQuotes } from "./queries.js";
 
 /**
- * A read-only JSON API at /api, for the concept map (human-work-map, served at /map/ from the same
+ * A read-only JSON API at /api, for the concept maps (quote-atlas, served at /map/ from the same
  * origin, so it needs no CORS and no auth of its own). Built on the same queries as the MCP tools, so
- * the two can't disagree. Its routes and response fields are a contract with the map: add fields, but
+ * the two can't disagree. Its routes and response fields are a contract with the maps: add fields, but
  * don't rename or remove them.
  *
  *   GET /api/graph                    every concept (with its quote count and source) and every relation
