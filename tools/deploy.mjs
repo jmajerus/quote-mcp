@@ -14,8 +14,10 @@ const ASKPASS = path.join(root, "tools", "askpass.mjs");
 
 const USAGE = `Usage: npm run deploy -- [--provision | --env | --import-drupal] [--skip-tests]
 
-  (no flag)        build, test, install a new release, restart, health-check, roll back on failure;
-                   the first deploy also runs the first import, the old site included
+  (no flag)        build, test, install this checkout as a new release, restart, health-check, roll
+                   back on failure, and record the branch and commit in /var/lib/quote-mcp/deployed.json
+                   (the server's /health reports it); the first deploy also runs the first import,
+                   the old site included
   --provision      one-time setup of the LXC (Node 22, build tools, word list, quote user, directories)
   --env            copy QUOTE_ZOTERO_LIBRARY, QUOTE_ZOTERO_API_KEY, QUOTE_ZOTERO_SOURCES, and
                    QUOTE_DRUPAL_URL from .env into the server's /etc/quote-mcp/env (mode 0640)
@@ -130,6 +132,19 @@ if ! curl -sf -o /dev/null "http://127.0.0.1:$QUOTE_PORT/health"; then
 fi
 ls -1dt /opt/quote-mcp/releases/* | tail -n +4 | xargs -r rm -rf
 `);
+  await writeDeployed({ branch: git(["rev-parse", "--abbrev-ref", "HEAD"]), commit: git(["rev-parse", "HEAD"]), local: true, dirty: git(["status", "--porcelain"]) !== "" });
+}
+
+function git(args) {
+  return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+}
+
+const DEPLOYED = "/var/lib/quote-mcp/deployed.json";
+
+/** Records what the server now runs ({ branch, commit, local, dirty, at }), for /health and tools/quote-status.mjs. */
+async function writeDeployed(record) {
+  const encoded = Buffer.from(JSON.stringify({ ...record, at: new Date().toISOString() })).toString("base64");
+  await runAsRoot(`printf %s ${shellQuote(encoded)} | base64 -d > ${DEPLOYED}.new && chmod 0644 ${DEPLOYED}.new && mv ${DEPLOYED}.new ${DEPLOYED} && echo`);
 }
 
 async function main(argv) {

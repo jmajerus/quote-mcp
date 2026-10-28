@@ -1,0 +1,49 @@
+{
+  "VsCodeTaskButtons.tasks": [
+    {
+      "label": "$(server) Deploy Quotes",
+      "tooltip": "npm run deploy — build, test, install this checkout as a release on quote-mcp.localdomain, migrate, restart, health-check, roll back on failure",
+      "alignment": "left",
+      "tasks": [
+        {
+          "label": "Deploy this checkout",
+          "task": "Deploy Quotes",
+          "description": "$(device-desktop) Local working tree, unpushed changes included"
+        },
+        {
+          "label": "Deploy this checkout without tests",
+          "task": "Deploy Quotes: skip tests",
+          "description": "$(debug-step-over) --skip-tests"
+        },
+        {
+          "label": "Push Zotero and old-site settings",
+          "task": "Deploy Quotes: settings",
+          "description": "$(key) --env — copy the settings from .env and restart"
+        },
+        {
+          "label": "Import with the old site",
+          "task": "Deploy Quotes: import old site",
+          "description": "$(database) --import-drupal — the timer's import leaves the old site out"
+        }
+      ]
+    },
+    {
+      "label": "$(beaker) Test",
+      "task": "Test",
+      "tooltip": "npm test",
+      "alignment": "left"
+    }
+  ],
+  "statusProbe.items": [
+    {
+      "id": "quote-server",
+      "command": "node tools/quote-status.mjs",
+      "intervalSeconds": 300,
+      "alignment": "left",
+      "priority": -101,
+      "refreshOnTasks": [
+        "Deploy Quotes*"
+      ]
+    }
+  ]
+}

@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import http from "node:http";
+import path from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { DB } from "./db.js";
@@ -14,12 +16,22 @@ import { renderAdmin } from "./web.js";
 
 export interface ServeOptions { host: string; port: number }
 
+/** What tools/deploy.mjs last installed (branch, commit, when), written beside the store after the restart, so read per request. */
+function readDeployed(): unknown {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(path.dirname(process.env.QUOTE_DB ?? "data/quotes.db"), "deployed.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     try {
       if (url.pathname === "/health") {
-        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, quotes: overview(db).quotes }));
+        const { quotes, notes } = overview(db);
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, quotes, notes, deployed: readDeployed() }));
         return;
       }
       if (url.pathname === "/" ) {
