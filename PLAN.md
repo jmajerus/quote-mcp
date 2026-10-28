@@ -1,8 +1,8 @@
 # Quote MCP plan
 
 Proposed 2026-10-27; revised the same day so Quote MCP owns the quotes, and
-again after the surveys found the old Drupal site. Phase 0 is done; nothing
-else is built.
+again after the surveys found the old Drupal site, and to add margin notes.
+Phases 0 and 1 are done.
 
 Quote MCP is the store for quotations: structured records you can search,
 tag, repair, and cite. Most of its quotes come from paper books that will
@@ -25,9 +25,10 @@ their home from then on.
 | Works | A quote cites a Zotero item. About 300 of the 495 old-site works with quotes match a Zotero item by title; the rest are filed into Zotero's staging collection from their Biblio record before or during the import, so every quote ends up citable. |
 | Quoted text is protected | People edit quotes directly. Agents add quotes and change tags and comments, but changes to an existing quote's text or locator are proposals that a person approves. |
 | Zotero copies | Optional and later: Quote MCP can write a read-only copy of each book's quotes into Zotero as child notes. A copy is never read back as data; an edit made to one becomes a proposal. |
+| Notes | A margin note (your own words at a page, or about a whole book, with no quoted passage) is a second kind of record in the same store, not a separate Notes MCP: it needs the same works, locators, concepts, tags, and search. A short note that only names concepts, as on Kindle highlights, is read as tags, not discarded. |
 | Corpus quotes | Quote MCP owns their content and tags too. corpus-mcp keeps what only it can do: checking text against a Calibre book and re-anchoring after scans. |
 | Storage | SQLite (`quotes.db`), primary data from day one: a nightly online backup kept 14 days (corpus-mcp's pattern), Proxmox backups of the LXC, and a full JSON export. |
-| Runtime | A second systemd service on the corpus-mcp LXC to begin with, on its own port, with its own Access application and claude.ai connector. It can move to its own LXC later without changes. |
+| Runtime | A systemd service on its own LXC (quote-mcp.localdomain, port 8000), with its own Access application and claude.ai connector. |
 | Language | TypeScript on Node 22. The Zotero Web API client comes from corpus-mcp's `src/zotero.ts`, either copied or moved into a shared package like `packages/citekey`. |
 
 ## Survey (2026-10-27)
@@ -87,7 +88,8 @@ the same span, several to a note.
 
 ## Data model
 
-- **`quotes`:** id (Quote MCP's own, stable), Zotero item key, cached
+- **`quotes`:** id (Quote MCP's own, stable), kind (`quote` or `note`; see
+  *Notes*), Zotero item key, cached
   citekey and Calibre UUID when there is one, text (paragraphs and list
   items, emphasis kept), locator kind (`page`, `kindle`, `none`) and value,
   printed page label, chapter author, comment (your own words about the
@@ -260,6 +262,59 @@ flag as "sic, as printed", which stops it from being re-flagged.
 New tags reuse an existing tag's spelling, ignoring case, the same rule
 corpus-mcp's quotes use, so one concept keeps one name.
 
+## Notes
+
+Readers write in margins, and ebook readers let you attach a note to a
+highlight. Some of those notes are prose; many, especially on a Kindle,
+are just concept tags typed against the highlighted passage, the same
+tagging the paper books got. Quote MCP keeps both, and tells them apart.
+
+**Two kinds of record.** A record's `kind` is `quote` or `note`:
+
+- **quote:** a passage, with your note on it (if any) kept as its comment.
+- **note:** your own words at a locator, or about the whole work when
+  there's no locator. The words are the record's comment; there's no
+  quoted text.
+
+Notes share works, locators, tags, history, and the worklists with quotes.
+`search_quotes` finds both, with a `kind` filter; the admin pages show
+both. `cite_quote` on a note gives the work's citation and the locator, and
+says there's no quote to cite.
+
+**Tag or note.** One classifier reads any free text attached to a mark,
+whatever the source:
+
+1. Split it on commas, semicolons, and line breaks. If every piece is a
+   concept's label or alternative label, it's tags.
+2. If every piece is short (up to four words, no sentence punctuation), it's
+   still tags; pieces that aren't concepts go to the unresolved-tags
+   worklist as candidate concepts.
+3. Otherwise it's prose, kept as the comment. Leading pieces that are
+   concepts ("mobbing, false self — compare Goffman") become tags, and the
+   rest stays prose.
+4. A piece written as `.mobbing` or `.false-self` is always a tag. This is
+   an optional convention for new notes, quick to type on a small screen;
+   old notes rely on rules 1 to 3.
+
+The raw text stays with the record's origin, so a wrong reading can be
+redone when the rules change.
+
+**Sources.**
+
+- **Now:** Zotero notes that aren't quotes, which the import currently sets
+  aside as "other" (research notes, "Discussed in:" lists, `[VERIFY]`
+  notes), and text outside quote spans that isn't a quote's commentary.
+- **When the Kindle books are retrieved** (in progress; what exists isn't
+  known yet): Kindle highlights and their notes, from `My Clippings.txt`
+  (a highlight and its note are separate entries with the same location)
+  or Amazon's notebook export; Calibre viewer annotations, of which there
+  are few so far; KOReader if it's used. A highlight is a quote; its note
+  goes through the classifier. When the book is in Calibre, the highlight
+  can be checked against corpus-mcp's text and become `verified`, with a
+  chapter to cite instead of a Kindle location.
+- **Later:** Zotero annotation comments (phase 4) go through the same
+  classifier.
+
 ## Citing
 
 `cite_quote` returns the quote text, its locator, and the book's CSL JSON
@@ -321,7 +376,8 @@ highlighting quotes from the anchors.
    mirror, whose re-sync every 30 minutes is the watch. First run: 827
    quotes (812 transcribed, 15 unparsed), 282 merged from a second source,
    221 concepts, 782 relations; works 283 in Zotero, 33 ambiguous (several
-   editions), 183 unmatched. A read-only service: MCP over HTTP at `/mcp`
+   editions), 183 unmatched, and after matching editions by full title,
+   292, 24, and 183. A read-only service: MCP over HTTP at `/mcp`
    (stateless) and stdio, with `search_quotes`, `get_quote`, `cite_quote`,
    `list_concepts`, `get_concept`, and `quote_worklist`; admin pages at
    `/admin` (overview, quote search, a quote with its citation, the concept
@@ -329,18 +385,23 @@ highlighting quotes from the anchors.
    quote-mcp.localdomain (Debian 13 LXC, port 8000; `npm run deploy`), public
    at https://quote-mcp.majerus.us behind Cloudflare Access (Managed OAuth).
    Works without a Zotero item are listed for filing; filing them is the
-   first Zotero write, so it waits for phase 3 unless they're filed by hand.
+   first Zotero write, so it waits for phase 4 unless they're filed by hand.
 2. **Repair.** Editing and history on the admin pages, proposals,
    tag hygiene, the corpus-mcp verify endpoint, the OCR detector's agent
    pass, and shelf sessions.
-3. **Capture.** The capture form and `add_quote`, filing new books into
-   staging (the first Zotero writes), and Zotero annotations as a source.
-4. **Zotero copies.** The read-only book notes.
-5. **Corpus quotes.** The anchor split and migration described above.
+3. **Notes.** The `kind` field, the tag-or-note classifier, importing
+   Zotero's non-quote notes as notes, and the `kind` filter in search and
+   the admin pages. The ebook highlight import follows once the Kindle books
+   are retrieved and it's known which source holds the annotations.
+4. **Capture.** The capture form, `add_quote` and `add_note`, filing new
+   books into staging (the first Zotero writes), and Zotero annotations as
+   a source.
+5. **Zotero copies.** The read-only book notes.
+6. **Corpus quotes.** The anchor split and migration described above.
 
 ## Open questions
 
-- **Write access.** Phase 3 needs a Zotero key with write access, which can
+- **Write access.** Phase 4 needs a Zotero key with write access, which can
   write any item, not only staging. Is that acceptable, or should new books
   go through the Zotero MCP server instead?
 - **Legacy notes.** Once a book's quotes are repaired, keep its original
@@ -354,5 +415,8 @@ highlighting quotes from the anchors.
   taxonomy when that server exists?
 - **Kindle locations.** Keep them as a locator kind, and re-locate them when
   the book reaches Calibre? They can't be converted to pages reliably.
+- **Ebook annotations.** Which source holds the Kindle highlights and
+  notes (`My Clippings.txt`, Amazon's notebook export, Calibre, KOReader)?
+  Known once the Kindle books are retrieved.
 - **Hosting and name.** The corpus-mcp LXC, or a new one; "Quote MCP" or
   something else.
