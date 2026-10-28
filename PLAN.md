@@ -486,15 +486,25 @@ server has public pages, off unless they're turned on.
 - **Linking with corpus-mcp.** corpus-mcp can do the same: its book
   catalogue public (titles, authors, subjects, shelves), book text and page
   images private. The two link by a convention, not shared code:
-  - `/site.json` gives the site's name, kind (`quotes` or `library`), public
-    URL, and level.
+  - `/site.json` gives `version` (1), the site's name, kind (`quotes` or
+    `library`), public URL, level, and the path of its key list.
+  - The key list (`/api/public/citekeys`) maps each public work's or book's
+    Zotero citekeys (`citekeys`) and Zotero item keys (`zotero_keys`, as
+    `users/<id>/<key>` or `groups/<id>/<key>`) to the path of its public
+    page; a link matches on either. Item keys are the stable ones; a work
+    with several editions lists each, all pointing at its one page.
+  - corpus-mcp's side (agreed with its session 2026-10-28): `/books/<id>`, a
+    catalogue entry only (title, authors, year, subjects, shelves, citekey),
+    with `CORPUS_PUBLIC`, `CORPUS_PUBLIC_PORT`, and `CORPUS_SITE_LINKS`.
+    Few of its books have citekeys yet, so it lists the Zotero items its
+    mirror links to Calibre books as well as pinned citekeys.
   - Each site lists the other's public URL in its settings
-    (`QUOTE_SITE_LINKS`), and their front pages link to each other.
-  - The Zotero citekey is the shared key. A work page here asks the
-    library's public API whether it has that citekey and links to "this book
-    in the library" if so. A book page there links to "quotes from this
-    book" the same way. A link shows only when the other side says yes.
-  - The convention goes into corpus-mcp's plan too, agreed with its session.
+    (`QUOTE_SITE_LINKS`), fetches its `site.json` and citekey list now and
+    then (hourly), and caches them: the front pages link to each other, and
+    a work page here links to "this book in the library" when the library
+    lists its citekey (a book page there links to "quotes from this book").
+    The fetches are server-side, so there's no CORS, and when the other site
+    is down its links just don't show.
 
 ## Phases
 
@@ -533,7 +543,10 @@ server has public pages, off unless they're turned on.
 5. **Zotero copies.** The read-only book notes.
 6. **Corpus quotes.** The anchor split and migration described above.
 7. **The public site.** In this order: the `catalogue` level (front page,
-   concepts, sets, works, the maps menu) with `QUOTE_PUBLIC_PORT`; then the
+   concepts, sets, works, the maps menu) with `QUOTE_PUBLIC_PORT` (built
+   2026-10-28, `src/site.ts`; the public port answers 404 for
+   `/api/concepts/:slug/quotes` until the quotes level cuts it to public
+   fields); then the
    `quotes` level (quote pages, "cite this", search); then `/site.json` and
    the citekey links, once corpus-mcp has its side. The Cloudflare route for
    the public hostname is the user's to set up.

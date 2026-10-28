@@ -68,7 +68,7 @@ export function findConcept(db: DB, name: string): ConceptRow {
 }
 
 /** A concept and everything narrower than it, at any depth. */
-function withNarrower(db: DB, id: number): number[] {
+export function withNarrower(db: DB, id: number): number[] {
   const seen = new Set([id]);
   const next = db.prepare("SELECT to_id FROM concept_relations WHERE from_id = ? AND type = 'narrower'");
   for (const current of seen) for (const r of next.all(current) as { to_id: number }[]) seen.add(r.to_id);

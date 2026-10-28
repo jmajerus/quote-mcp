@@ -3,12 +3,13 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb } from "./db.js";
 import { openReadOnly } from "./queries.js";
-import { serveHttp, serveStdio } from "./server.js";
+import { servePublic, serveHttp, serveStdio } from "./server.js";
 import { drupalUrl, loadDrupal } from "./drupal.js";
 import { exportAll } from "./export.js";
 import { runImport } from "./import.js";
 import { loadDictionary } from "./ocr.js";
 import { type ConceptSet, listSets, loadSets } from "./sets.js";
+import { LEVELS, type Level, type SiteOptions, loadIntro } from "./site.js";
 import { syncLibrary } from "./sync.js";
 import { ZoteroClient, zoteroConfig } from "./zotero.js";
 
@@ -90,16 +91,31 @@ function statsCommand() {
   }, null, 2));
 }
 
-/** The concept sets: QUOTE_SETS, or the checkout's vocab/sets.json (one level up from src/ and dist/) when there is one. */
+/** A file in the checkout's vocab/ folder (one level up from src/ and dist/). */
+const vocab = (name: string) => fileURLToPath(new URL(`../vocab/${name}`, import.meta.url));
+
+/** The concept sets: QUOTE_SETS, or the checkout's vocab/sets.json when there is one. */
 function sets(): ConceptSet[] {
   if (process.env.QUOTE_SETS) return loadSets(process.env.QUOTE_SETS);
-  const file = fileURLToPath(new URL("../vocab/sets.json", import.meta.url));
-  return existsSync(file) ? loadSets(file) : [];
+  return existsSync(vocab("sets.json")) ? loadSets(vocab("sets.json")) : [];
+}
+
+/** The public site's settings: QUOTE_PUBLIC, QUOTE_PUBLIC_NOTES, and the introduction in QUOTE_INTRO or vocab/site.md. */
+function site(mapDir: string | undefined, conceptSets: ConceptSet[]): SiteOptions {
+  const level = (process.env.QUOTE_PUBLIC || "none") as Level;
+  if (!LEVELS.includes(level)) throw new Error(`QUOTE_PUBLIC is "${level}"; it should be ${LEVELS.join(", ")}.`);
+  const notes = process.env.QUOTE_PUBLIC_NOTES || "none";
+  if (notes !== "none" && notes !== "all") throw new Error(`QUOTE_PUBLIC_NOTES is "${notes}"; it should be none or all.`);
+  return { level, notes: notes === "all", intro: loadIntro(process.env.QUOTE_INTRO || vocab("site.md")), mapDir, sets: conceptSets };
 }
 
 async function serveCommand() {
-  await serveHttp(openReadOnly(), { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010),
-    mapDir: process.env.QUOTE_MAP_DIR || undefined, sets: sets() });
+  const mapDir = process.env.QUOTE_MAP_DIR || undefined;
+  const conceptSets = sets();
+  const options = { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010), mapDir, sets: conceptSets, site: site(mapDir, conceptSets) };
+  const db = openReadOnly();
+  await serveHttp(db, options);
+  if (process.env.QUOTE_PUBLIC_PORT) await servePublic(db, { ...options, port: Number(process.env.QUOTE_PUBLIC_PORT) });
 }
 
 /** Each concept set as the store has it now; fails when a set names a concept the scheme doesn't have. */

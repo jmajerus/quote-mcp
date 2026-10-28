@@ -10,7 +10,7 @@ import {
 
 type Section = "overview" | "quotes" | "concepts" | "worklists";
 
-const CSS = `
+export const CSS = `
 :root {
   --bg: #f7f7f5; --surface: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --border: #dedcd6;
   --accent: #2f5d8a; --chip: #eef2f7; --chip-text: #23405e; --warn: #a15c07; --warn-bg: #fdf1e0; --ok: #2e7d4f; --quote: #f2f0ea;
@@ -64,7 +64,7 @@ mark { background: var(--warn-bg); color: inherit; }
 .pager { display: flex; gap: 12px; margin-top: 14px; }
 `;
 
-const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+export const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 function qs(params: Record<string, unknown>): string {
   const p = new URLSearchParams();

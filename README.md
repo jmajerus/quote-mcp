@@ -7,7 +7,7 @@ A store of quotations from books, most of them paper books, and of your own marg
 | Command | What it does |
 |---|---|
 | `npm run import` | Syncs the Zotero mirror, reads the old Drupal site, and imports. Safe to run again. |
-| `npm run serve` | MCP at `/mcp`, the admin pages at `/admin`, the JSON API at `/api`, and the concept map at `/map/` when `QUOTE_MAP_DIR` is set (port `QUOTE_PORT`, default 8010). |
+| `npm run serve` | MCP at `/mcp`, the admin pages at `/admin`, the JSON API at `/api`, the concept map at `/map/` when `QUOTE_MAP_DIR` is set, and the public site at `/` when `QUOTE_PUBLIC` is set (port `QUOTE_PORT`, default 8010; a public-only port with `QUOTE_PUBLIC_PORT`). |
 | `npm run quotes -- stdio` | MCP over stdio. |
 | `npm run quotes -- migrate` | Brings the store up to this build's schema. Deploy runs it. |
 | `npm run quotes -- export --out quotes.json` | Everything as JSON. |
@@ -28,6 +28,8 @@ To define a concept set (a part of a scheme, for a map, a theme, or search), add
 
 A malformed file stops the server starting (so a deploy rolls back); a slug the scheme doesn't have is left out and shown as `missing`. A set's `types` decide only who's in it; quote-atlas's export keeps its own edge filter (related only by default), so `around` with all types takes in more concepts than its `--around` does.
 
+To publish your collection, set `QUOTE_PUBLIC`: `catalogue` shows concepts, sets, maps, and works by title and author, with counts but no quoted text; `quotes` adds quote text with citations (the `quotes` pages are still to come). The front page's title and introduction come from [vocab/site.md](vocab/site.md), a `# Title` line then paragraphs. Notes stay private unless `QUOTE_PUBLIC_NOTES=all`, and a note tagged `private` in Zotero stays private even then. Unparsed quotes, flags, worklists, `/admin`, and `/mcp` are never public. For a hostname with no login in front of it, set `QUOTE_PUBLIC_PORT` and point the hostname there: that port serves only the public pages, `/map/`, and the API routes with no quoted text, and 404 for everything else.
+
 Configuration is in `.env`; see [.env.example](.env.example).
 
 ## MCP tools
@@ -46,6 +48,8 @@ All read-only for now; `search_quotes` finds quotes and notes (filter with `kind
 | `GET /api/sets` | The concept sets, with how many concepts each has and any `missing` slugs. |
 | `GET /api/sets/:slug` | One set as a piece of the graph: `concepts` and `relations` as `/api/graph` gives them, with the set's `slug`, `scheme`, `label`, `description`, `definition`, and `missing`. |
 | `GET /map/` | The concept maps' built files from `QUOTE_MAP_DIR` (quote-atlas): a menu, and each map at `/map/<name>/`. |
+| `GET /` | The public site's front page when `QUOTE_PUBLIC` is set; otherwise a redirect to `/admin`. |
+| `GET /concepts`, `/concepts/:slug`, `/sets/:slug`, `/works`, `/works/:id` | The public site's pages. |
 | `GET /health` | Version, counts, and what the last deploy installed. |
 
 The API is read-only and a contract with the map: add fields, but keep the routes and existing fields stable.
