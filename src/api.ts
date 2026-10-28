@@ -1,7 +1,8 @@
 import type http from "node:http";
+import { type Routes, answerApi, publishedRoutes } from "./api-routes.js";
 import type { DB } from "./db.js";
-import { NotPublic, type Published } from "./published.js";
-import { ToolError, conceptGraph, findConcept, getConcept, searchQuotes } from "./queries.js";
+import type { Published } from "./published.js";
+import { conceptGraph, findConcept, getConcept, searchQuotes } from "./queries.js";
 import { type ConceptSet, listSets, setGraph } from "./sets.js";
 
 /**
@@ -17,67 +18,20 @@ import { type ConceptSet, listSets, setGraph } from "./sets.js";
  *   GET /api/sets/:slug               one set as a piece of the graph: /api/graph's shape, with the set's
  *                                     slug, scheme, label, description, definition, and missing slugs
  *
- * handleApi answers from the store, on the same queries as the MCP tools, so the two can't disagree.
- * handlePublishedApi answers the same routes from the public snapshot (src/published.ts), for the
- * public site: counts of public records, quotes as public records, and 403 for quotes below the
- * quotes level.
+ * The routing is in src/api-routes.ts, shared with the Worker. handleApi answers from the store, on the
+ * same queries as the MCP tools, so the two can't disagree. handlePublishedApi answers the same routes
+ * from the public snapshot (src/published.ts), for the public site: counts of public records, quotes as
+ * public records, and 403 for quotes below the quotes level.
  */
 
-class BadRequest extends Error {}
-
-/** What each route returns, now or as a promise. */
-interface Routes {
-  graph(): unknown;
-  sets(): unknown;
-  set(slug: string): unknown;
-  concept(slug: string): unknown;
-  quotes(slug: string, narrower: boolean, limit: number | undefined, offset: number | undefined): unknown;
-}
-
-function send(res: http.ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...headers }).end(JSON.stringify(body));
-}
-
-function integer(params: URLSearchParams, name: string): number | undefined {
-  const value = params.get(name);
-  if (value === null || value === "") return undefined;
-  if (!/^\d+$/.test(value)) throw new BadRequest(`${name} must be a whole number.`);
-  return Number(value);
-}
-
-function slugOf(raw: string): string {
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    throw new BadRequest("The name in the path isn't valid.");
-  }
-}
-
-async function answer(routes: Routes, req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
-  if (req.method !== "GET") {
-    send(res, 405, { error: "Method not allowed: the API is read-only." }, { allow: "GET" });
-    return;
-  }
-  try {
-    if (url.pathname === "/api/graph") return send(res, 200, await routes.graph());
-    if (url.pathname === "/api/sets") return send(res, 200, { sets: await routes.sets() });
-    const set = /^\/api\/sets\/([^/]+)$/.exec(url.pathname);
-    if (set) return send(res, 200, await routes.set(slugOf(set[1])));
-    const m = /^\/api\/concepts\/([^/]+)(\/quotes)?$/.exec(url.pathname);
-    if (!m) return send(res, 404, { error: "Not found." });
-    const p = url.searchParams;
-    send(res, 200, await (m[2] ? routes.quotes(slugOf(m[1]), p.get("narrower") !== "false", integer(p, "limit"), integer(p, "offset")) : routes.concept(slugOf(m[1]))));
-  } catch (error) {
-    if (error instanceof ToolError) send(res, 404, { error: error.message });
-    else if (error instanceof BadRequest) send(res, 400, { error: error.message });
-    else if (error instanceof NotPublic) send(res, 403, { error: error.message });
-    else throw error;
-  }
+async function send(res: http.ServerResponse, routes: Routes, req: http.IncomingMessage, url: URL): Promise<void> {
+  const a = await answerApi(routes, req.method ?? "GET", url);
+  res.writeHead(a.status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...a.headers }).end(JSON.stringify(a.body));
 }
 
 /** Answers an /api request from the store. */
 export function handleApi(db: DB, req: http.IncomingMessage, res: http.ServerResponse, url: URL, sets: ConceptSet[] = []): Promise<void> {
-  return answer({
+  return send(res, {
     graph: () => conceptGraph(db),
     sets: () => listSets(db, sets),
     set: (slug) => setGraph(db, sets, slug),
@@ -86,19 +40,10 @@ export function handleApi(db: DB, req: http.IncomingMessage, res: http.ServerRes
       const concept = findConcept(db, slug);
       return { concept, ...searchQuotes(db, { concept: `${concept.scheme}:${concept.slug}`, narrower, limit, offset }) };
     },
-  }, req, res, url);
+  }, req, url);
 }
 
 /** Answers an /api request from the public snapshot. */
 export function handlePublishedApi(p: Published, req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
-  return answer({
-    graph: () => p.graph(),
-    sets: () => p.sets(),
-    set: async (slug) => (await p.set(slug)).set,
-    concept: async (slug) => (await p.concept(slug)).concept,
-    quotes: async (slug, narrower, limit, offset) => {
-      const concept = await p.findConcept(slug);
-      return { concept, ...(await p.quotes({ conceptIds: narrower ? await p.withNarrower(concept.id) : [concept.id], limit, offset })) };
-    },
-  }, req, res, url);
+  return send(res, publishedRoutes(p), req, url);
 }

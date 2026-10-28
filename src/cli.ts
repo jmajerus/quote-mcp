@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import Database from "better-sqlite3";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb } from "./db.js";
@@ -11,6 +12,7 @@ import { loadDictionary } from "./ocr.js";
 import { loadCollections, loadIntro } from "./intro.js";
 import { LEVELS, type Level } from "./public.js";
 import { snapshotReader } from "./published-sqlite.js";
+import { replicaScript } from "./replica.js";
 import { type ConceptSet, listSets, loadSets } from "./sets.js";
 import { type SnapshotOptions, buildSnapshot, readMapsFile } from "./snapshot.js";
 import { syncLibrary } from "./sync.js";
@@ -30,6 +32,7 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *                                       QUOTE_PORT, QUOTE_MAP_DIR, QUOTE_PUBLIC, QUOTE_PUBLIC_PORT).
  *   quote-mcp publish --dry-run        Builds the public snapshot (QUOTE_SNAPSHOT, by default public.db beside
  *                                       the store), which the preview reads; an import also builds it.
+ *   quote-mcp publish --sql <file>     The same, and a SQL file that loads it into a local D1 for the Worker.
  *   quote-mcp stdio                     MCP over stdio, for local clients and tests.
  */
 
@@ -136,12 +139,25 @@ function snapshotOptions(): SnapshotOptions | null {
 const snapshotLine = (s: ReturnType<typeof buildSnapshot>) =>
   `Public snapshot (${s.level}): ${s.records} records, ${s.works} works, ${s.concepts} concepts, ${s.sets} sets, ${s.maps} maps, written to ${s.file} (${s.hash.slice(0, 12)}).`;
 
-/** Builds the public snapshot; sending it to the Worker comes later, so for now only --dry-run. */
+/**
+ * Builds the public snapshot. With --sql, also writes it as a SQL file that loads a replica from scratch
+ * (for a local D1 under `wrangler dev`). Sending it to D1 is the drain's, still to come, so for now
+ * --dry-run or --sql.
+ */
 function publishCommand() {
   const options = snapshotOptions();
   if (!options) throw new Error("QUOTE_PUBLIC is none, so there's nothing to publish.");
-  if (!flag("--dry-run")) throw new Error("Sending the snapshot to the public Worker isn't built yet; use --dry-run to build it for the preview.");
-  console.log(snapshotLine(buildSnapshot(openReadOnly(), options, snapshotFile())));
+  const sql = option("--sql");
+  if (!flag("--dry-run") && !sql) throw new Error("Sending the snapshot to D1 isn't built yet; use --dry-run to build it for the preview, or --sql <file> for a local D1.");
+  const summary = buildSnapshot(openReadOnly(), options, snapshotFile());
+  console.log(snapshotLine(summary));
+  if (sql) {
+    const snap = new Database(summary.file, { readonly: true });
+    mkdirSync(dirname(sql), { recursive: true });
+    writeFileSync(sql, replicaScript(snap));
+    snap.close();
+    console.log(`Replica SQL written to ${sql}.`);
+  }
 }
 
 async function serveCommand() {

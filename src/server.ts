@@ -4,6 +4,7 @@ import path from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { handleApi, handlePublishedApi } from "./api.js";
+import { PUBLIC_API } from "./api-routes.js";
 import type { DB } from "./db.js";
 import { serveMap } from "./map.js";
 import type { Published } from "./published.js";
@@ -37,8 +38,6 @@ export interface ServeOptions {
   snapshot?: () => Promise<Published | null>;
 }
 
-/** The API routes the public listener answers, from the snapshot. */
-const PUBLIC_API = /^\/api\/(graph|sets|sets\/[^/]+|concepts\/[^/]+(\/quotes)?)$/;
 
 /** What tools/deploy.mjs last installed (branch, commit, when), written beside the store after the restart, so read per request. */
 function readDeployed(): unknown {

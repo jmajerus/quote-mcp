@@ -135,7 +135,7 @@ function fill(store: DB, snap: Database.Database, o: SnapshotOptions): void {
     insert("works", {
       id, title: w.title, authors: JSON.stringify(w.authors), year: w.year, citekey: w.citekey, zotero_keys: JSON.stringify(keys),
       csl: words && c.csl ? JSON.stringify(c.csl) : null, bibtex: words && c.csl && key ? bibtex(c.csl, key) : null,
-      sort: `${(w.authors[0] ?? "￿").toLowerCase()}\u0000${w.title.toLowerCase()}`,
+      sort: `${(w.authors[0] ?? "￿").toLowerCase()}\u0001${w.title.toLowerCase()}`,
     });
   }
 

@@ -604,11 +604,19 @@ serves and never writes.
     token) in `/etc/quote-mcp/env`. Phase 2's edits can later queue rows in
     the same transaction as the edit, as concept-clusters does, rather than
     waiting for a rebuild.
-- **The Worker.** In this repo (`worker/`, its own `wrangler.jsonc`), on its
-  own hostname, with no Access. It serves the pages and the map's API
-  (`/api/graph`, `/api/concepts/…`, `/api/sets/…`) from D1, read-only, and
-  `site.json` and the key list. Public pages get `cache-control` for the
-  edge, with the snapshot's hash in the ETag.
+- **The Worker** (built 2026-10-28, `worker/`, its own `wrangler.jsonc`), on
+  its own hostname, with no Access. It serves the pages and the map's API
+  (`/api/graph`, `/api/concepts/…`, `/api/sets/…`, routed by
+  `src/api-routes.ts`, shared with the Node server) from D1, read-only, and
+  later `site.json` and the key list. Responses can be cached for a minute,
+  with the snapshot's hash as the ETag, so a revalidation is a 304 until
+  something new is published; a bare `/map` is sent to `/map/`; with nothing
+  published yet it answers 503. D1's schema is a migration
+  (`worker/migrations/0001_snapshot.sql`) kept identical to the snapshot's
+  by a test. Locally, `npm run worker:load` builds the snapshot, writes it
+  as SQL (`publish --sql`, `src/replica.ts`), and loads it into a local D1;
+  `npm run worker:dev` runs the Worker on it. On the local store its pages
+  and API answers are byte for byte the LAN preview's and the public port's.
 - **The maps.** quote-atlas's build needs the same origin as the API. Both
   sessions prefer that quote-atlas deploys its own assets-only Worker on a
   `quotes.majerus.us/map/*` route, so its deploys stay its own (its user is
@@ -683,7 +691,7 @@ serves and never writes.
    and D1 ("Hosting the public site"), in this order: the snapshot builder
    and `publish --dry-run`, with the LAN preview and the public port reading
    it (built 2026-10-28); `src/site.ts` behind the async store interface
-   (built 2026-10-28); the Worker under `wrangler dev` with a local D1; the queue and the drain; then
+   (built 2026-10-28); the Worker under `wrangler dev` with a local D1 (built 2026-10-28); the queue and the drain; then
    `/site.json`, the key list, and the links with corpus-mcp, whose rows are
    queued like any other when the other site's key list changes. Creating the D1 database, the Worker, its secret,
    and the hostname, and the first deploy, are the user's.

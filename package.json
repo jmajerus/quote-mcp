@@ -10,7 +10,9 @@
     "build": "tsc -p tsconfig.build.json",
     "deploy": "node --env-file-if-exists=.env tools/deploy.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "worker:load": "tsx --env-file-if-exists=.env src/cli.ts publish --sql worker/.wrangler/replica.sql && wrangler d1 migrations apply DB --local -c worker/wrangler.jsonc && wrangler d1 execute DB --local -c worker/wrangler.jsonc --file worker/.wrangler/replica.sql",
+    "worker:dev": "wrangler dev -c worker/wrangler.jsonc --local"
   },
   "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
@@ -30,6 +32,7 @@
     "@types/node": "^26.6.5",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.5"
+    "vitest": "^5.0.5",
+    "wrangler": "^4.154.0"
   }
 }

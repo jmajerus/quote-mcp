@@ -3,9 +3,7 @@ import type http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type DB, openDb } from "../src/db.js";
-import type { DrupalSite } from "../src/drupal.js";
-import { runImport } from "../src/import.js";
+import type { DB } from "../src/db.js";
 import Database from "better-sqlite3";
 import { readIntro } from "../src/intro.js";
 import type { Published } from "../src/published.js";
@@ -15,29 +13,7 @@ import type { ConceptSet } from "../src/sets.js";
 import { bibtex, plainText, quoteHtml } from "../src/public.js";
 import { renderSite } from "../src/site.js";
 import { type SnapshotOptions, buildSnapshot, readMapsFile } from "../src/snapshot.js";
-
-const PRIMARY = "users/1";
-
-const drupal: DrupalSite = {
-  concepts: [
-    { kid: 1, word: "abuse", altLabels: [], definition: "cruel or inhumane treatment", closeMatch: null },
-    { kid: 2, word: "mobbing", altLabels: ["group bullying"], definition: null, closeMatch: null },
-    { kid: 3, word: "dignity", altLabels: [], definition: null, closeMatch: null },
-  ],
-  relations: [{ from: "abuse", to: "mobbing", type: "N" }, { from: "mobbing", to: "abuse", type: "B" }, { from: "abuse", to: "dignity", type: "I" }],
-  works: [{
-    nid: 7, title: "Mobbing: Emotional Abuse in the American Workplace", type: "Book", year: "1999", isbn: null, url: null, citekey: null, authors: ["Davenport, Noa"], keywords: [],
-    notes: `<span class="quote" title="mobbing">\n"Mobbing is an emotional assault." (p. 40)\n</span>\n<span class="quote" title="abuse">\n"Abuse at work rarely announces itself." (p. 12)\n</span>`,
-  }, {
-    nid: 8, title: "A Book Nobody Filed", type: "Book", year: "2001", isbn: null, url: null, citekey: null, authors: ["Doe, Jane"], keywords: [],
-    notes: `<span class="quote" title="dignity">\n"Everyone deserves dignity." \n</span>`,
-  }],
-  quotes: [],
-};
-
-const QUOTED = ["Mobbing is an emotional assault", "Abuse at work rarely", "Everyone deserves dignity"];
-const SHARED_NOTE = "Compare Leymann";
-const PRIVATE_NOTE = "Too harsh on her";
+import { PRIVATE_NOTE, QUOTED, SHARED_NOTE, makeStore } from "./fixture.js";
 
 let db: DB;
 let mapDir: string;
@@ -54,7 +30,7 @@ async function site(rest: Partial<SnapshotOptions> = {}): Promise<Published> {
 }
 
 async function start(options: Partial<SnapshotOptions> | null, publicPort = true) {
-  const published = options && (await await site(options));
+  const published = options && (await site(options));
   const base = { host: "127.0.0.1", port: 0, mapDir, sets: SETS, snapshot: published ? async () => published : undefined };
   const url = (server: http.Server) => {
     const a = server.address();
@@ -69,16 +45,7 @@ async function start(options: Partial<SnapshotOptions> | null, publicPort = true
 }
 
 beforeAll(() => {
-  db = openDb(":memory:");
-  db.prepare("INSERT INTO zotero_items (library, key, version, item_type, parent_key, deleted, data) VALUES (?, ?, 1, 'book', NULL, 0, ?)").run(PRIMARY, "MOBB0001", JSON.stringify({
-    itemType: "book", title: "Mobbing: emotional abuse in the American workplace", date: "1999", extra: "Citation Key: davenport1999mobbing",
-    creators: [{ creatorType: "author", lastName: "Davenport", firstName: "Noa" }],
-  }));
-  const note = (key: string, text: string, tags: string[]) => db.prepare("INSERT INTO zotero_items (library, key, version, item_type, parent_key, deleted, data) VALUES (?, ?, 1, 'note', 'MOBB0001', 0, ?)")
-    .run(PRIMARY, key, JSON.stringify({ itemType: "note", parentItem: "MOBB0001", note: `<p>${text} (p. 41)</p>`, tags: tags.map((tag) => ({ tag })) }));
-  note("MARGIN01", `${SHARED_NOTE}'s forty-five behaviours, which she leaves out.`, ["margin", "mobbing"]);
-  note("MARGIN02", `${PRIVATE_NOTE}, I think, but she's right about the HR department.`, ["margin", "private", "mobbing"]);
-  runImport(db, { drupal, primary: PRIMARY, sources: [PRIMARY] });
+  db = makeStore();
   mapDir = fs.mkdtempSync(path.join(os.tmpdir(), "quote-mcp-site-"));
   fs.writeFileSync(path.join(mapDir, "maps.json"), JSON.stringify([{ name: "human-work", title: "Human work", description: "The 2014 diagram", scheme: "human-work" }]));
 });
