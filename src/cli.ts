@@ -19,7 +19,8 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *   quote-mcp export [--out file]      Everything as JSON (stdout by default).
  *   quote-mcp backup [--dir data/backups] [--keep 14]
  *   quote-mcp stats
- *   quote-mcp serve                     MCP over HTTP at /mcp and the admin pages (QUOTE_HOST, QUOTE_PORT).
+ *   quote-mcp serve                     MCP over HTTP at /mcp, the admin pages, the JSON API at /api, and the
+ *                                       concept map at /map/ (QUOTE_HOST, QUOTE_PORT, QUOTE_MAP_DIR).
  *   quote-mcp stdio                     MCP over stdio, for local clients and tests.
  */
 
@@ -88,7 +89,8 @@ function statsCommand() {
 }
 
 async function serveCommand() {
-  await serveHttp(openReadOnly(), { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010) });
+  await serveHttp(openReadOnly(), { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010),
+    mapDir: process.env.QUOTE_MAP_DIR || undefined });
 }
 
 function migrateCommand() {

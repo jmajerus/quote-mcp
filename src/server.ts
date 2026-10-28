@@ -3,18 +3,27 @@ import http from "node:http";
 import path from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { handleApi } from "./api.js";
 import type { DB } from "./db.js";
+import { serveMap } from "./map.js";
 import { VERSION, createServer } from "./mcp.js";
 import { ToolError, overview } from "./queries.js";
 import { renderAdmin } from "./web.js";
 
 /**
  * Streamable HTTP at /mcp (stateless: a fresh server per request, JSON responses), the admin pages at
- * /admin, and /health. Everything is read-only in phase 1, so nothing here needs an identity; Cloudflare
- * Access guards the public hostname, and phase 2's writes will check its token as corpus-mcp does.
+ * /admin, a read-only JSON API at /api (src/api.ts), the concept map's static files at /map/ when
+ * QUOTE_MAP_DIR is set (src/map.ts), and /health. Everything is read-only for now, so nothing here needs
+ * an identity; Cloudflare Access guards the public hostname, and phase 2's writes will check its token
+ * as corpus-mcp does.
  */
 
-export interface ServeOptions { host: string; port: number }
+export interface ServeOptions {
+  host: string;
+  port: number;
+  /** The concept map's built files, served at /map/; without it /map/ is 404. */
+  mapDir?: string;
+}
 
 /** What tools/deploy.mjs last installed (branch, commit, when), written beside the store after the restart, so read per request. */
 function readDeployed(): unknown {
@@ -36,6 +45,14 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
       }
       if (url.pathname === "/" ) {
         res.writeHead(302, { location: "/admin" }).end();
+        return;
+      }
+      if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
+        handleApi(db, req, res, url);
+        return;
+      }
+      if (url.pathname === "/map" || url.pathname.startsWith("/map/")) {
+        await serveMap(options.mapDir, req, res, url);
         return;
       }
       if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
@@ -85,7 +102,7 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
   });
   return new Promise((resolve) => server.listen(options.port, options.host, () => {
     const a = server.address();
-    console.error(`quote-mcp ${VERSION} listening on ${typeof a === "object" && a ? `${a.address}:${a.port}` : options.port} (/mcp, /admin)`);
+    console.error(`quote-mcp ${VERSION} listening on ${typeof a === "object" && a ? `${a.address}:${a.port}` : options.port} (/mcp, /admin, /api${options.mapDir ? `, /map/ from ${options.mapDir}` : ""})`);
     resolve(server);
   }));
 }

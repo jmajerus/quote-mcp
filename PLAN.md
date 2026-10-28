@@ -380,6 +380,35 @@ highlighting quotes from the anchors.
   renaming them. This joins quotes to the same keys as Calibre tags and
   Concept Clusters subcategories (see PLAN.md, *Living taxonomy*).
 
+## The concept map
+
+A separate repo, `human-work-map`, rebuilds the old site's concept graph: a
+static SVG page where clicking a concept shows its quotes. It reads quote-mcp
+live, so new concept-tagged quotes show up without an export. Built
+2026-10-28; the map's own front end and deploy live in that repo.
+
+- **API.** A read-only JSON API at `/api` (`src/api.ts`), on the same
+  queries as the MCP tools so the two can't disagree: `GET /api/graph`
+  (every concept that isn't retired, with `slug`, `scheme`, `label`,
+  `alt_labels`, `status`, `source`, and `quotes`, plus every relation as
+  `from`, `to`, and the stored `type`), `GET /api/concepts/:slug` (what
+  `get_concept` returns; `scheme:slug` works too), and
+  `GET /api/concepts/:slug/quotes` (quotes and notes, unparsed left out,
+  narrower concepts included unless `narrower=false`, with `limit` up to 100
+  and `offset`). An unknown concept is 404, a bad number 400, any method but
+  GET 405. `source` is `drupal:kid:N` for the old site's concepts, which the
+  map uses to place them as the old site's Gephi layout did.
+- **Contract.** The map calls these routes by relative URL. Keep the routes
+  and their fields stable; adding fields is fine.
+- **Hosting.** quote-mcp serves the map's build at `/map/` from
+  `QUOTE_MAP_DIR` (`/opt/quote-mcp/map` on the LXC, outside `releases/` so a
+  quote-mcp deploy never removes it), behind the same Access login, so the
+  map needs no CORS and no auth of its own. human-work-map's deploy copies
+  its build there; quote-mcp only serves what's in the folder. A path that
+  resolves outside the folder is 404; `index.html` is revalidated on every
+  load, and files with a build hash in their names are cached for a year.
+  Without `QUOTE_MAP_DIR`, `/map/` is 404.
+
 ## Phases
 
 0. **Survey** (done 2026-10-27). `npm run survey` for Zotero notes and

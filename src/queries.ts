@@ -91,6 +91,25 @@ export function listConcepts(db: DB, args: { query?: string; scheme?: string } =
     .map((c) => ({ ...c, alt_labels: json<string[]>(c.alt_labels, []) }));
 }
 
+/**
+ * Every concept that isn't retired, with its quote count, and the relations between them: the concept
+ * graph in one piece, for the map. `source` is where a concept came from (`drupal:kid:N` for the old
+ * site's), which the map uses to place concepts as the old site's layout did.
+ */
+export function conceptGraph(db: DB) {
+  const concepts = (db.prepare(`
+    SELECT c.slug, s.slug AS scheme, c.label, c.alt_labels, c.status, c.source,
+      (SELECT COUNT(DISTINCT t.quote_id) FROM quote_tags t JOIN quotes q ON q.id = t.quote_id WHERE t.concept_id = c.id AND q.status != 'unparsed') AS quotes
+    FROM concepts c JOIN schemes s ON s.id = c.scheme_id WHERE c.status != 'retired' ORDER BY s.slug, c.slug`)
+    .all() as { slug: string; scheme: string; label: string; alt_labels: string; status: string; source: string | null; quotes: number }[])
+    .map((c) => ({ ...c, alt_labels: json<string[]>(c.alt_labels, []) }));
+  const relations = db.prepare(`
+    SELECT a.slug AS "from", b.slug AS "to", r.type FROM concept_relations r
+    JOIN concepts a ON a.id = r.from_id JOIN concepts b ON b.id = r.to_id
+    WHERE a.status != 'retired' AND b.status != 'retired' ORDER BY a.slug, b.slug, r.type`).all() as { from: string; to: string; type: string }[];
+  return { concepts, relations };
+}
+
 export function getConcept(db: DB, name: string) {
   const c = findConcept(db, name);
   const row = db.prepare("SELECT definition, alt_labels, close_match, status, source FROM concepts WHERE id = ?").get(c.id) as Record<string, string | null>;

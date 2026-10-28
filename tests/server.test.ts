@@ -1,4 +1,7 @@
-import type http from "node:http";
+import fs from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -30,6 +33,7 @@ const drupal: DrupalSite = {
 let db: DB;
 let server: http.Server;
 let base: string;
+let mapRoot: string;
 
 beforeAll(async () => {
   db = openDb(":memory:");
@@ -41,12 +45,37 @@ beforeAll(async () => {
     itemType: "note", parentItem: "MOBB0001", note: "<p>Compare Leymann's forty-five behaviours, which she leaves out. (p. 41)</p>", tags: [{ tag: "margin" }],
   }));
   runImport(db, { drupal, primary: PRIMARY, sources: [PRIMARY] });
-  server = await serveHttp(db, { host: "127.0.0.1", port: 0 });
+  // The map's folder, beside a file it must never serve, and a symlink pointing at that file.
+  mapRoot = fs.mkdtempSync(path.join(os.tmpdir(), "quote-mcp-map-"));
+  const mapDir = path.join(mapRoot, "map");
+  fs.mkdirSync(path.join(mapDir, "assets"), { recursive: true });
+  fs.writeFileSync(path.join(mapDir, "index.html"), "<!doctype html><title>Map</title>");
+  fs.writeFileSync(path.join(mapDir, "assets", "app-3f9a1c2e.js"), "console.log('map');");
+  fs.writeFileSync(path.join(mapDir, "assets", "index.html"), "<p>assets</p>");
+  fs.writeFileSync(path.join(mapRoot, "secret.txt"), "secret");
+  fs.symlinkSync(path.join(mapRoot, "secret.txt"), path.join(mapDir, "link.txt"));
+  server = await serveHttp(db, { host: "127.0.0.1", port: 0, mapDir });
   const a = server.address();
   base = `http://127.0.0.1:${typeof a === "object" && a ? a.port : 0}`;
 });
 
-afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
+afterAll(() => new Promise<void>((resolve) => server.close(() => {
+  fs.rmSync(mapRoot, { recursive: true, force: true });
+  resolve();
+})));
+
+/** A request with the path sent exactly as written, as fetch would normalize "..". */
+function raw(rawPath: string, method = "GET"): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(`${base}/`, { method, path: rawPath }, (res) => {
+      let body = "";
+      res.on("data", (chunk) => (body += chunk));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
 
 const quoteId = (fragment: string) => db.prepare("SELECT id FROM quotes WHERE text LIKE ?").pluck().get(`%${fragment}%`) as number;
 const noteId = () => db.prepare("SELECT id FROM quotes WHERE kind = 'note'").pluck().get() as number;
@@ -170,5 +199,95 @@ describe("admin pages", () => {
     expect((await fetch(`${base}/admin/quotes/9999`)).status).toBe(404);
     expect((await fetch(`${base}/admin/nowhere`)).status).toBe(404);
     expect((await fetch(`${base}/admin/concepts/nothing`)).status).toBe(404);
+  });
+});
+
+describe("JSON API", () => {
+  const get = async (p: string) => {
+    const res = await fetch(base + p);
+    return { status: res.status, type: res.headers.get("content-type"), body: await res.json() };
+  };
+
+  it("serves the whole concept graph", async () => {
+    const { status, type, body } = await get("/api/graph");
+    expect(status).toBe(200);
+    expect(type).toMatch(/^application\/json/);
+    expect(body.concepts).toEqual([
+      { slug: "abuse", scheme: "human-work", label: "abuse", alt_labels: [], status: "confirmed", source: "drupal:kid:1", quotes: 1 },
+      { slug: "dignity", scheme: "human-work", label: "dignity", alt_labels: [], status: "confirmed", source: "drupal:kid:3", quotes: 1 },
+      { slug: "mobbing", scheme: "human-work", label: "mobbing", alt_labels: ["group bullying"], status: "confirmed", source: "drupal:kid:2", quotes: 1 },
+    ]);
+    expect(body.relations).toEqual([
+      { from: "abuse", to: "dignity", type: "inverse" }, { from: "abuse", to: "mobbing", type: "narrower" }, { from: "mobbing", to: "abuse", type: "broader" },
+    ]);
+  });
+
+  it("serves a concept, by slug or scheme:slug", async () => {
+    const { status, body } = await get("/api/concepts/abuse");
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ slug: "abuse", label: "abuse", relations: { narrower: [{ slug: "mobbing" }] }, quotes: 1, quotes_with_narrower: 2 });
+    expect((await get(`/api/concepts/${encodeURIComponent("human-work:mobbing")}`)).body.slug).toBe("mobbing");
+  });
+
+  it("serves a concept's quotes, with narrower concepts unless asked not to, a page at a time", async () => {
+    const all = await get("/api/concepts/abuse/quotes");
+    expect(all.status).toBe(200);
+    expect(all.body).toMatchObject({ concept: { slug: "abuse", scheme: "human-work" }, total: 2, offset: 0, limit: 20 });
+    expect(all.body.quotes[0]).toMatchObject({ kind: "quote", locator: "p. 40", work: { title: "Mobbing: emotional abuse in the American workplace", year: "1999", citekey: "davenport1999mobbing" } });
+    expect(all.body.quotes[0].tags).toEqual([{ tag: "mobbing", concept: "mobbing", origin: "span" }]);
+    expect((await get("/api/concepts/abuse/quotes?narrower=false")).body.total).toBe(1);
+    const page = await get("/api/concepts/abuse/quotes?limit=1&offset=1");
+    expect(page.body).toMatchObject({ total: 2, offset: 1, limit: 1 });
+    expect(page.body.quotes).toHaveLength(1);
+    expect((await get("/api/concepts/abuse/quotes?limit=many")).status).toBe(400);
+  });
+
+  it("answers 404 for what isn't there, and 405 for anything but GET", async () => {
+    expect((await get("/api/concepts/nothing")).status).toBe(404);
+    expect((await get("/api/concepts/nothing/quotes")).status).toBe(404);
+    expect((await get("/api/nowhere")).status).toBe(404);
+    const post = await fetch(`${base}/api/graph`, { method: "POST" });
+    expect(post.status).toBe(405);
+    expect(post.headers.get("allow")).toBe("GET");
+  });
+});
+
+describe("the map at /map/", () => {
+  it("redirects /map to /map/ and serves index.html there, revalidated on every load", async () => {
+    const redirect = await fetch(`${base}/map?x=1`, { redirect: "manual" });
+    expect(redirect.status).toBe(301);
+    expect(redirect.headers.get("location")).toBe("/map/?x=1");
+    const res = await fetch(`${base}/map/`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(res.headers.get("cache-control")).toBe("no-cache");
+    expect(await res.text()).toContain("<title>Map</title>");
+  });
+
+  it("serves other files with their type, caching hashed ones", async () => {
+    const res = await fetch(`${base}/map/assets/app-3f9a1c2e.js`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
+    expect(res.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+    expect(await (await fetch(`${base}/map/assets/`)).text()).toBe("<p>assets</p>");
+    expect((await fetch(`${base}/map/missing.js`)).status).toBe(404);
+  });
+
+  it.each(["/map/../secret.txt", "/map/%2e%2e/secret.txt", "/map/..%2fsecret.txt", "/map/assets/..%2F..%2Fsecret.txt", "/map/%2E%2E%5Csecret.txt", "/map/link.txt", "/map/%00index.html"])("refuses %s", async (p) => {
+    const res = await raw(p);
+    expect(res.status).toBe(404);
+    expect(res.body).not.toContain("secret");
+  });
+
+  it("refuses writes", async () => {
+    expect((await raw("/map/", "POST")).status).toBe(405);
+  });
+
+  it("is 404 without a map folder", async () => {
+    const bare = await serveHttp(db, { host: "127.0.0.1", port: 0 });
+    const a = bare.address();
+    const res = await fetch(`http://127.0.0.1:${typeof a === "object" && a ? a.port : 0}/map/`);
+    expect(res.status).toBe(404);
+    await new Promise<void>((resolve) => bare.close(() => resolve()));
   });
 });

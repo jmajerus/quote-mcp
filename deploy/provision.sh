@@ -18,7 +18,9 @@ apt-get install -y -q curl build-essential python3 wamerican
 
 id quote >/dev/null 2>&1 || useradd --system --home-dir /var/lib/quote-mcp --shell /usr/sbin/nologin quote
 install -d -o quote -g quote -m 0750 /var/lib/quote-mcp /var/lib/quote-mcp/backups
-install -d -m 0755 /opt/quote-mcp /opt/quote-mcp/releases /etc/quote-mcp
+# /opt/quote-mcp/map holds the concept map's build (human-work-map's deploy writes it), outside
+# releases/ so a quote-mcp deploy never removes it; world-readable so the quote user can serve it.
+install -d -m 0755 /opt/quote-mcp /opt/quote-mcp/releases /opt/quote-mcp/map /etc/quote-mcp
 if [ ! -f /etc/quote-mcp/env ]; then
   install -m 0640 -g quote /dev/null /etc/quote-mcp/env
   cat > /etc/quote-mcp/env <<'ENV'
@@ -28,6 +30,8 @@ QUOTE_PORT=8000
 QUOTE_DICTIONARY=/usr/share/dict/words
 ENV
 fi
+# Added after the first provision, so set it in an existing env too.
+grep -q '^QUOTE_MAP_DIR=' /etc/quote-mcp/env || echo 'QUOTE_MAP_DIR=/opt/quote-mcp/map' >> /etc/quote-mcp/env
 
 echo "node=$(node --version)"
 echo "provisioned=$(hostname)"
