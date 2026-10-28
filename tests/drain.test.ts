@@ -48,16 +48,21 @@ function setup() {
   const replica = new Database(":memory:");
   replica.exec(fs.readFileSync(MIGRATION, "utf8"));
   const env: ProxyEnv = { DB: binding(replica), D1_PROXY_TOKEN: TOKEN };
-  const calls: { statements: number }[] = [];
-  let failNext = false;
+  const calls: { statements: number; sql: { sql: string; params?: unknown[] }[] }[] = [];
+  // fail: the request never reaches D1; lose: D1 commits the batch but the response is lost; hold: the
+  // request waits until released, to overlap another tick.
+  const mode = { fail: false, lose: 0, hold: null as Promise<void> | null };
   const fetchImpl = (async (url: string, init: RequestInit) => {
-    if (failNext) {
-      failNext = false;
+    if (mode.fail) {
+      mode.fail = false;
       throw new Error("connection reset");
     }
+    if (mode.hold) await mode.hold;
     const body = JSON.parse(String(init.body));
-    calls.push({ statements: body.batch ? body.batch.length : 1 });
-    return handleProxy(new Request(url, init), env);
+    calls.push({ statements: body.batch ? body.batch.length : 1, sql: body.batch ?? [body] });
+    const response = await handleProxy(new Request(url, init), env);
+    if (mode.lose > 0 && --mode.lose === 0) throw new Error("connection reset after the commit");
+    return response;
   }) as typeof fetch;
   const d1 = d1Http({ endpoint: "https://proxy.example/query", token: TOKEN }, fetchImpl);
   const state = openReplicaState(path.join(work, "replica.db"));
@@ -68,7 +73,7 @@ function setup() {
     snap.close();
     return equal;
   };
-  return { file, build, replica, state, d1, calls, same, fail: () => (failNext = true), run: () => tick(file, state, d1) };
+  return { file, build, replica, state, d1, calls, same, mode, fail: () => (mode.fail = true), run: () => tick(file, state, d1) };
 }
 
 beforeAll(() => {
@@ -159,6 +164,92 @@ describe("the replica drain", () => {
     } finally {
       store.prepare("UPDATE quotes SET text = ? WHERE id = ?").run(before, id);
     }
+  });
+});
+
+describe("the replica drain, when things go wrong", () => {
+  const edit = (fragment: string, text: string) => {
+    const id = store.prepare("SELECT id FROM quotes WHERE text LIKE ?").pluck().get(`${fragment}%`) as number;
+    const before = store.prepare("SELECT text FROM quotes WHERE id = ?").pluck().get(id) as string;
+    store.prepare("UPDATE quotes SET text = ? WHERE id = ?").run(text, id);
+    return { id, undo: () => store.prepare("UPDATE quotes SET text = ? WHERE id = ?").run(before, id) };
+  };
+
+  it("lets one tick ship at a time; another that starts meanwhile stands back", async () => {
+    const r = setup();
+    let release!: () => void;
+    r.mode.hold = new Promise((resolve) => (release = resolve));
+    const first = r.run();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(await r.run()).toEqual({ queued: 0, shipped: 0, busy: true });
+    r.mode.hold = null;
+    release();
+    expect((await first).shipped).toBeGreaterThan(0);
+    expect(r.same()).toBe(true);
+    expect(await r.run()).toEqual({ queued: 0, shipped: 0 });
+  });
+
+  it("sends a row again when its batch committed but the response was lost, even after the snapshot reverts it", async () => {
+    const r = setup();
+    await r.run();
+    const change = edit("Abuse at work", "Abuse at work, changed.");
+    try {
+      r.build();
+      r.mode.lose = 1;
+      await expect(r.run()).rejects.toThrow(/after the commit/);
+      expect(r.replica.prepare("SELECT text FROM records WHERE id = ?").pluck().get(change.id)).toBe("Abuse at work, changed.");
+    } finally {
+      change.undo();
+    }
+    r.build();
+    await r.run();
+    expect(r.replica.prepare("SELECT text FROM records WHERE id = ?").pluck().get(change.id)).toBe("Abuse at work rarely announces itself.");
+    expect(r.same()).toBe(true);
+  });
+
+  it("deletes a row whose response was lost once it leaves the snapshot, though it was never confirmed", async () => {
+    const r = setup();
+    await r.run();
+    const id = store.prepare("SELECT id FROM quotes WHERE text LIKE 'Everyone deserves%'").pluck().get() as number;
+    const words = store.prepare("SELECT text FROM quotes WHERE id = ?").pluck().get(id) as string;
+    // A quote the replica hasn't seen: take one out, ship that, then bring it back with the response lost.
+    store.prepare("UPDATE quotes SET status = 'unparsed' WHERE id = ?").run(id);
+    r.build();
+    await r.run();
+    store.prepare("UPDATE quotes SET status = 'transcribed' WHERE id = ?").run(id);
+    r.build();
+    r.mode.lose = 1;
+    await expect(r.run()).rejects.toThrow(/after the commit/);
+    expect(r.replica.prepare("SELECT text FROM records WHERE id = ?").pluck().get(id)).toBe(words);
+    store.prepare("UPDATE quotes SET status = 'unparsed' WHERE id = ?").run(id);
+    try {
+      r.build();
+      await r.run();
+      expect(r.replica.prepare("SELECT COUNT(*) FROM records WHERE id = ?").pluck().get(id)).toBe(0);
+      expect(r.same()).toBe(true);
+    } finally {
+      store.prepare("UPDATE quotes SET status = 'transcribed' WHERE id = ?").run(id);
+    }
+  });
+
+  it("writes meta's hash last of all, so a first publication cut short isn't served", async () => {
+    const r = setup();
+    await r.run();
+    const statements = r.calls.flatMap((c) => c.sql);
+    const last = statements.at(-1)!;
+    expect(last.sql).toMatch(/^INSERT OR REPLACE INTO meta/);
+    expect(last.params?.[0]).toBe("hash");
+    // Cut short before the last batch: nothing marks the replica as published.
+    const s = setup();
+    const batches = r.calls.length;
+    let sent = 0;
+    const original = s.d1.batch;
+    s.d1.batch = async (st) => {
+      if (++sent === batches) throw new Error("connection reset");
+      return original(st);
+    };
+    await expect(s.run()).rejects.toThrow(/connection reset/);
+    expect(s.replica.prepare("SELECT COUNT(*) FROM meta WHERE key = 'hash'").pluck().get()).toBe(0);
   });
 });
 

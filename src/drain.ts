@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import Database from "better-sqlite3";
 import { type D1Http, d1Http, d1ConfigFrom } from "./d1-http.js";
@@ -69,21 +69,20 @@ export function enqueue(state: Database.Database, snap: Database.Database): numb
   state.transaction(() => {
     const shipped = new Map((state.prepare("SELECT tbl, key, hash FROM shipped").all() as { tbl: string; key: string; hash: string }[]).map((r) => [`${r.tbl}\u0001${r.key}`, r.hash]));
     const put = state.prepare("INSERT INTO queue (tbl, key, hash, enqueued_at) VALUES (?, ?, ?, ?) ON CONFLICT (tbl, key) DO UPDATE SET hash = excluded.hash, enqueued_at = excluded.enqueued_at");
-    const drop = state.prepare("DELETE FROM queue WHERE tbl = ? AND key = ?");
+    // A queued entry may already be in D1: a batch can commit even when its response is lost. So a row
+    // that's queued is sent again with its current value even when that matches what was last shipped,
+    // and a queued row that's gone from the snapshot is deleted even if it was never recorded as shipped.
+    const waiting = new Set((state.prepare("SELECT tbl, key FROM queue").all() as { tbl: string; key: string }[]).map((q) => `${q.tbl}\u0001${q.key}`));
     for (const [id, r] of want) {
-      if (shipped.get(id) === r.hash) drop.run(r.table, r.key);
-      else (put.run(r.table, r.key, r.hash, now), queued++);
+      if (shipped.get(id) === r.hash && !waiting.has(id)) continue;
+      put.run(r.table, r.key, r.hash, now);
+      queued++;
     }
-    for (const id of shipped.keys()) {
+    for (const id of new Set([...shipped.keys(), ...waiting])) {
       if (want.has(id)) continue;
       const [table, key] = id.split("\u0001");
       put.run(table, key, "", now);
       queued++;
-    }
-    // Queued from an earlier snapshot, never shipped, and gone from this one: nothing to send.
-    for (const q of state.prepare("SELECT tbl, key FROM queue").all() as { tbl: string; key: string }[]) {
-      const id = `${q.tbl}\u0001${q.key}`;
-      if (!want.has(id) && !shipped.has(id)) drop.run(q.tbl, q.key);
     }
     setState(state, "snapshot_hash", hash);
   })();
@@ -98,14 +97,16 @@ export function pending(state: Database.Database): { rows: number; removals: num
 interface Item { table: string; key: string; hash: string; statements: Statement[] }
 
 /** Ships the queue to D1 in batches; returns how many entries were shipped. Throws, leaving the rest queued, when a batch fails. */
-export async function drain(state: Database.Database, snap: Database.Database, d1: D1Http): Promise<number> {
+export async function drain(state: Database.Database, snap: Database.Database, d1: D1Http, renew?: () => void): Promise<number> {
   const queue = state.prepare("SELECT tbl, key, hash FROM queue").all() as { tbl: string; key: string; hash: string }[];
   if (!queue.length) return 0;
   const want = desired(snap);
   const items: Item[] = [];
   const removals = queue.filter((q) => q.hash === "").sort((a, b) => order.get(b.tbl)! - order.get(a.tbl)!);
   for (const q of removals) items.push({ table: q.tbl, key: q.key, hash: "", statements: [remove(q.tbl, q.key)] });
-  const writes = queue.filter((q) => q.hash !== "").sort((a, b) => order.get(a.tbl)! - order.get(b.tbl)!);
+  // meta's hash row goes last of all: the Worker serves the replica once it's there, so it marks a whole publication.
+  const last = (q: { tbl: string; key: string }) => (q.tbl === "meta" && q.key === '["hash"]' ? 1 : 0);
+  const writes = queue.filter((q) => q.hash !== "").sort((a, b) => last(a) - last(b) || order.get(a.tbl)! - order.get(b.tbl)!);
   for (const q of writes) {
     const r = want.get(`${q.tbl}\u0001${q.key}`);
     // Not in this snapshot: enqueue, run with it just before, has queued its removal or dropped it.
@@ -133,6 +134,7 @@ export async function drain(state: Database.Database, snap: Database.Database, d
     await d1.batch(batch.flatMap((i) => i.statements));
     record(batch);
     shipped += batch.length;
+    renew?.();
   }
   setState(state, "shipped_at", new Date().toISOString());
   return shipped;
@@ -140,15 +142,44 @@ export async function drain(state: Database.Database, snap: Database.Database, d
 
 export interface DrainStatus { phase: "off" | "idle" | "ok" | "error"; pending: number; shipped_at: string | null; error: string | null; at: string | null }
 
-/** One tick: compare the snapshot (if it's changed) and ship what's queued. */
-export async function tick(snapshotFile: string, state: Database.Database, d1: D1Http): Promise<{ queued: number; shipped: number }> {
+/** How long a tick's lease lasts without renewal; each shipped batch renews it. */
+const LEASE_MS = 5 * 60_000;
+
+/**
+ * Takes the lease on replica.db, so one tick at a time compares and ships, across processes (the server's
+ * drain and `quote-mcp publish`): an older tick finishing after a newer one could otherwise overwrite
+ * newer rows in D1. A lease left by a process that died expires.
+ */
+function takeLease(state: Database.Database, owner: string): boolean {
+  const now = Date.now();
+  const row = state.prepare(`INSERT INTO state (key, value) VALUES ('lease', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value
+    WHERE json_extract(state.value, '$.until') < ? OR json_extract(state.value, '$.owner') = ? RETURNING value`)
+    .get(JSON.stringify({ owner, until: now + LEASE_MS }), now, owner);
+  return row !== undefined;
+}
+
+function releaseLease(state: Database.Database, owner: string): void {
+  state.prepare("DELETE FROM state WHERE key = 'lease' AND json_extract(value, '$.owner') = ?").run(owner);
+}
+
+/**
+ * One tick: compare the snapshot (if it's changed) and ship what's queued. `busy` when another tick holds
+ * the lease; the next one picks up whatever is left.
+ */
+export async function tick(snapshotFile: string, state: Database.Database, d1: D1Http): Promise<{ queued: number; shipped: number; busy?: boolean }> {
   if (!fs.existsSync(snapshotFile)) return { queued: 0, shipped: 0 };
-  const snap = new Database(snapshotFile, { readonly: true, fileMustExist: true });
+  const owner = `${process.pid}:${randomUUID()}`;
+  if (!takeLease(state, owner)) return { queued: 0, shipped: 0, busy: true };
   try {
-    const queued = enqueue(state, snap);
-    return { queued, shipped: await drain(state, snap, d1) };
+    const snap = new Database(snapshotFile, { readonly: true, fileMustExist: true });
+    try {
+      const queued = enqueue(state, snap);
+      return { queued, shipped: await drain(state, snap, d1, () => takeLease(state, owner)) };
+    } finally {
+      snap.close();
+    }
   } finally {
-    snap.close();
+    releaseLease(state, owner);
   }
 }
 

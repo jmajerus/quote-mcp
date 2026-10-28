@@ -183,8 +183,9 @@ async function publishCommand() {
     console.log(`Replica SQL written to ${sql}.`);
   }
   if (config) {
-    const { queued, shipped } = await tick(summary.file, openReplicaState(replicaStateFile()), d1Http(config));
-    console.log(`Replica in D1: ${queued} queued, ${shipped} shipped.`);
+    const { queued, shipped, busy } = await tick(summary.file, openReplicaState(replicaStateFile()), d1Http(config));
+    console.log(busy ? "Another tick (the server's drain, most likely) is shipping to D1 now; it picks up this snapshot's changes too."
+      : `Replica in D1: ${queued} queued, ${shipped} shipped.`);
   }
 }
 

@@ -629,6 +629,14 @@ serves and never writes.
     byte for byte as the public port. Two local Workers can't share one
     local D1 (workerd locks it), so locally the proxy and the public Worker
     run one at a time.
+  - Fixed 2026-10-28, from corpus-mcp's review of the same code: a lease in
+    `replica.db` lets one tick ship at a time across processes (the
+    server's drain and `quote-mcp publish`), renewed per batch and expiring
+    after 5 minutes if its process dies; a row still queued (its batch may
+    have committed with the response lost) is sent again even when the
+    snapshot reverts it, and deleted if it leaves the snapshot, confirmed or
+    not; and meta's hash row, which the Worker takes as "published", is
+    written last of all.
   - Phase 2's edits can later queue rows in the same transaction as the
     edit, as concept-clusters does, rather than waiting for a rebuild.
 - **The Worker** (built 2026-10-28, `worker/`, its own `wrangler.jsonc`), on
