@@ -454,16 +454,18 @@ server has public pages, off unless they're turned on.
   the public front page (it redirects to `/admin` today); `/admin`, `/mcp`,
   and `/map/` stay where they are. With `QUOTE_PUBLIC=none`, `/` still
   redirects to `/admin`.
-- **A public-only port.** `QUOTE_PUBLIC_PORT` starts a second listener that
+- **A public-only port** (to be re-based on the snapshot; see "Hosting the
+  public site" below). `QUOTE_PUBLIC_PORT` starts a second listener that
   serves only the public pages, the public API, `/map/`, and `/site.json`;
   everything else is 404 there whatever the request. The server enforces
   what's public, not the proxy, so a wrong tunnel or Access rule can't expose
   notes or the admin pages, and someone without Cloudflare can put the
   public port behind any proxy.
 - **Hostnames.** `quote-mcp.majerus.us` keeps its Access login and points
-  at port 8000, for Claude and the admin pages. A second tunnel hostname
-  with no Access (say `quotes.majerus.us`) points at the public port. The
-  user sets up the tunnel route; no Cloudflare changes are made from here.
+  at port 8000, for Claude and the admin pages. The public site gets its own
+  hostname (say `quotes.majerus.us`), served by a Worker (below) rather than
+  a tunnel route to the LAN. The user creates the Cloudflare resources and
+  runs their deploys; no Cloudflare changes are made from here.
 - **Separate code.** The public pages have their own renderer and queries
   that return only public fields. They don't reuse the admin pages with parts
   hidden, so a field added to the admin pages can't leak.
@@ -520,12 +522,80 @@ server has public pages, off unless they're turned on.
     Few of its books have citekeys yet, so it lists the Zotero items its
     mirror links to Calibre books as well as pinned citekeys.
   - Each site lists the other's public URL in its settings
-    (`QUOTE_SITE_LINKS`), fetches its `site.json` and citekey list now and
-    then (hourly), and caches them: the front pages link to each other, and
-    a work page here links to "this book in the library" when the library
-    lists its citekey (a book page there links to "quotes from this book").
-    The fetches are server-side, so there's no CORS, and when the other site
-    is down its links just don't show.
+    (`QUOTE_SITE_LINKS`) and fetches its `site.json` and key list when it
+    publishes, storing the links in its own snapshot: the front pages link
+    to each other, and a work page here links to "this book in the library"
+    when the library lists its citekey (a book page there links to "quotes
+    from this book"). Nothing is fetched while a page is served, so there's
+    no CORS, and when the other site is down at publish time the previous
+    links are kept.
+
+### Hosting the public site: a snapshot in D1, served by a Worker
+
+Decided 2026-10-28, on concept-clusters' model (a Worker with static
+assets and D1). The public site moves off the LAN. The LXC stays the source
+of truth for the store, import, MCP, and the admin pages; what's public is
+copied out as a snapshot, and a Worker serves it.
+
+- **Why.** Only what's published leaves the LAN: notes not shared,
+  comments, unparsed quotes, flags, and history are never in the snapshot,
+  so no bug in the Worker can show them. Public traffic never reaches the
+  home server, the site stays up when the LAN or the tunnel is down, and
+  Cloudflare caches it near readers. The cost is a second runtime and a site
+  only as fresh as the last publish, which suits a collection that changes
+  daily at most.
+- **The snapshot.** A SQLite database of public records only, built by
+  `quote-mcp publish` from the store with `src/public.ts`'s rules (the level
+  and notes settings decide what goes in, as now). Its tables:
+  - `meta`: the snapshot's version, generation, when it was built, from
+    which commit, its level, and a content hash.
+  - `intros`: the site's and each collection's title, HTML, and summary.
+  - `schemes`, `concepts` (slug, label, alternative labels, definition,
+    status, source), and `relations`.
+  - `works` (title, authors, year, citekey, and its Zotero item keys, for
+    links), `records` (the public record's fields: kind, text with markup
+    tidied, note, comment when shared, locator, chapter author, attribution,
+    work, added), and `record_concepts`.
+  - `records_fts`, FTS5 over the public text only, so search can't match
+    words that aren't shown.
+  - `sets` and `set_concepts`, recipes resolved at publish time; `maps`,
+    from quote-atlas's `maps.json`; and `links`, the other sites' key lists.
+- **One renderer.** `src/site.ts` reads the snapshot's schema through a
+  small async store interface, with two adapters: better-sqlite3 on the LAN
+  and D1 in the Worker. The rules for what's public live only in the
+  builder. The pages, search, the map's API, and `site.json` are the same
+  code on both.
+- **The LAN preview.** `http://quote-mcp.localdomain:8000/` serves the
+  snapshot the next publish would send (`data/public.db`, rebuilt by
+  `publish --dry-run` or after each import), so the site can be checked
+  before it goes out.
+- **Publishing.** The Worker has a `POST /_publish` endpoint that takes the
+  snapshot in batches with a bearer token (a Worker secret, and
+  `QUOTE_PUBLISH_URL` and `QUOTE_PUBLISH_TOKEN` in `/etc/quote-mcp/env`), as
+  concept-clusters' d1-proxy does. Rows are written under a new generation
+  and `meta` switches to it in one statement, so readers see the old site or
+  the new one, never half of each; then the old generation is deleted. A
+  publish whose hash matches the last one is skipped, so it can run after
+  every import (a systemd timer after `quote-import`) and send nothing most
+  of the time.
+- **The Worker.** In this repo (`worker/`, its own `wrangler.jsonc`), on its
+  own hostname, with no Access. It serves the pages and the map's API
+  (`/api/graph`, `/api/concepts/…`, `/api/sets/…`) from D1, read-only, and
+  `site.json` and the key list. Public pages get `cache-control` for the
+  edge, and each publish changes the generation, which the ETag carries.
+- **The maps.** quote-atlas's build needs the same origin as the API. The
+  simplest fit is for quote-atlas to deploy its own static Worker on a
+  `quotes.majerus.us/map/*` route, so its deploys stay its own; the
+  alternative is to bundle its build into this Worker's assets, so a map
+  change needs a deploy here. To be agreed with quote-atlas's session.
+- **What retires.** The public port's API cut and filtering per request
+  (`servePublic` and the `pub` branch in `src/api.ts`). The public port
+  itself stays as the option for people without Cloudflare, re-based on the
+  snapshot: it serves `data/public.db` and nothing else, so it can't leak
+  either. The LAN's private `/api` is unchanged.
+- **corpus-mcp** would follow the same model: a catalogue snapshot (titles,
+  authors, subjects, shelves, citekeys, Zotero item keys) in its own D1 and
+  Worker, with book text and page images never leaving the LAN.
 
 ## Phases
 
@@ -570,9 +640,13 @@ server has public pages, off unless they're turned on.
    fields); then the
    `quotes` level (quote pages, "cite this", search; built 2026-10-28,
    `src/public.ts` deciding what a record may show, and the public port's
-   map API cut to public records and counts); then `/site.json` and
-   the citekey links, once corpus-mcp has its side. The Cloudflare route for
-   the public hostname is the user's to set up.
+   map API cut to public records and counts). Then the move to a Worker
+   and D1 ("Hosting the public site"), in this order: the snapshot builder
+   and `publish --dry-run`, with the LAN preview reading it; `src/site.ts`
+   behind the async store interface; the Worker under `wrangler dev` with a
+   local D1, and `POST /_publish`; then `/site.json`, the key list, and the
+   links with corpus-mcp. Creating the D1 database, the Worker, its secret,
+   and the hostname, and the first deploy, are the user's.
 
 ## Open questions
 
