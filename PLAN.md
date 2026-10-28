@@ -434,6 +434,68 @@ its `/quotes`, and filters `/api/graph` by each concept's `scheme`, so
   write tools, so they can be made from a conversation; themes would extend
   the same file.
 
+## The public site
+
+Anyone who runs quote-mcp has their own Zotero library, and some will want
+to show their collection and maps rather than keep them private. So the
+server has public pages, off unless they're turned on.
+
+- **Levels.** `QUOTE_PUBLIC` is `none` (the default: nothing changes),
+  `catalogue` (concepts, sets, maps, works by title and author, counts; no
+  quoted text), or `quotes` (the catalogue plus quote text with citations).
+  This site uses `quotes`, as the old site published its quotes. Unparsed
+  quotes, flags, OCR suspects, worklists, history, `/admin`, and `/mcp` are
+  never public at any level.
+- **Notes.** Reading notes are often shared, as on Goodreads, but they're
+  your own words, so sharing them is a separate choice: `QUOTE_PUBLIC_NOTES`
+  is `none` (the default) or `all`, and with `all` a note whose Zotero note
+  is also tagged `private` stays private. It takes effect only at the
+  `quotes` level, where a work's page shows its notes beside its quotes.
+- **Front page at `/`.** On the LAN, `http://quote-mcp.localdomain:8000/` is
+  the public front page (it redirects to `/admin` today); `/admin`, `/mcp`,
+  and `/map/` stay where they are. With `QUOTE_PUBLIC=none`, `/` still
+  redirects to `/admin`.
+- **A public-only port.** `QUOTE_PUBLIC_PORT` starts a second listener that
+  serves only the public pages, the public API, `/map/`, and `/site.json`;
+  everything else is 404 there whatever the request. The server enforces
+  what's public, not the proxy, so a wrong tunnel or Access rule can't expose
+  notes or the admin pages, and someone without Cloudflare can put the
+  public port behind any proxy.
+- **Hostnames.** `quote-mcp.majerus.us` keeps its Access login and points
+  at port 8000, for Claude and the admin pages. A second tunnel hostname
+  with no Access (say `quotes.majerus.us`) points at the public port. The
+  user sets up the tunnel route; no Cloudflare changes are made from here.
+- **Separate code.** The public pages have their own renderer and queries
+  that return only public fields. They don't reuse the admin pages with parts
+  hidden, so a field added to the admin pages can't leak.
+- **Pages.**
+  - The front page: the owner's title and a short introduction from a
+    Markdown file kept with the sets (`vocab/site.md`), then the counts.
+  - Ways in: the maps (from `/map/maps.json`), the concept sets and later
+    the themes, and a search box.
+  - Concepts A to Z with quote counts, a page per concept (definition,
+    relations, its quotes), and a page per set.
+  - Works by author, as a bibliography, and a page per work with its
+    quotes.
+  - At `quotes`, a page per quote with its work, page, concepts, and a
+    "cite this" box (the Pandoc citation and BibTeX `cite_quote` gives).
+  - Public pages are cacheable, unlike `/admin`.
+- **Public API.** The map's `/api` routes, cut to public fields: the graph,
+  concepts, and sets at `catalogue`, and quotes at `quotes`. On the public
+  port `/map/` works as on the LAN, so the maps are public too.
+- **Linking with corpus-mcp.** corpus-mcp can do the same: its book
+  catalogue public (titles, authors, subjects, shelves), book text and page
+  images private. The two link by a convention, not shared code:
+  - `/site.json` gives the site's name, kind (`quotes` or `library`), public
+    URL, and level.
+  - Each site lists the other's public URL in its settings
+    (`QUOTE_SITE_LINKS`), and their front pages link to each other.
+  - The Zotero citekey is the shared key. A work page here asks the
+    library's public API whether it has that citekey and links to "this book
+    in the library" if so. A book page there links to "quotes from this
+    book" the same way. A link shows only when the other side says yes.
+  - The convention goes into corpus-mcp's plan too, agreed with its session.
+
 ## Phases
 
 0. **Survey** (done 2026-10-27). `npm run survey` for Zotero notes and
@@ -470,6 +532,11 @@ its `/quotes`, and filters `/api/graph` by each concept's `scheme`, so
    a source.
 5. **Zotero copies.** The read-only book notes.
 6. **Corpus quotes.** The anchor split and migration described above.
+7. **The public site.** In this order: the `catalogue` level (front page,
+   concepts, sets, works, the maps menu) with `QUOTE_PUBLIC_PORT`; then the
+   `quotes` level (quote pages, "cite this", search); then `/site.json` and
+   the citekey links, once corpus-mcp has its side. The Cloudflare route for
+   the public hostname is the user's to set up.
 
 ## Open questions
 
