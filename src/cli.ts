@@ -9,13 +9,14 @@ import { drupalUrl, loadDrupal } from "./drupal.js";
 import { exportAll } from "./export.js";
 import { runImport } from "./import.js";
 import { loadDictionary } from "./ocr.js";
-import { loadCollections, loadIntro } from "./intro.js";
+import { loadCollections, loadIntro, loadSiteSettings } from "./intro.js";
 import { LEVELS, type Level } from "./public.js";
 import { snapshotReader } from "./published-sqlite.js";
 import { d1ConfigFrom, d1Http } from "./d1-http.js";
 import { openReplicaState, pending, startDrain, tick } from "./drain.js";
 import { replicaScript } from "./replica.js";
 import { type ConceptSet, listSets, loadSets } from "./sets.js";
+import { configReport, siteSetting } from "./settings.js";
 import { type SnapshotOptions, buildSnapshot, readMapsFile } from "./snapshot.js";
 import { syncLibrary } from "./sync.js";
 import { ZoteroClient, zoteroConfig } from "./zotero.js";
@@ -29,10 +30,11 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *   quote-mcp export [--out file]      Everything as JSON (stdout by default).
  *   quote-mcp backup [--dir data/backups] [--keep 14]
  *   quote-mcp stats
+ *   quote-mcp config                    Each setting, where it came from, and what each feature still needs.
  *   quote-mcp serve                     MCP over HTTP at /mcp, the admin pages, the JSON API at /api, the
  *                                       concept map at /map/, and the public site's preview at / (QUOTE_HOST,
  *                                       QUOTE_PORT, QUOTE_MAP_DIR, QUOTE_PUBLIC, QUOTE_PUBLIC_PORT).
- *   quote-mcp publish --dry-run        Builds the public snapshot (QUOTE_SNAPSHOT, by default public.db beside
+ *   quote-mcp publish --dry-run        (--if-public: nothing when the site isn't public) Builds the public snapshot (QUOTE_SNAPSHOT, by default public.db beside
  *                                       the store), which the preview reads; an import also builds it.
  *   quote-mcp publish --sql <file>     The same, and a SQL file that loads it into a local D1 for the Worker.
  *   quote-mcp publish                  Builds it and ships what changed to its replica in D1 (as the server's
@@ -115,10 +117,15 @@ function sets(): ConceptSet[] {
   return existsSync(vocab("sets.json")) ? loadSets(vocab("sets.json")) : [];
 }
 
-/** QUOTE_PUBLIC: what the public snapshot holds. */
+/** The front page's file, whose settings header holds the public site's choices: QUOTE_INTRO, or vocab/site.md. */
+const introFile = () => process.env.QUOTE_INTRO || vocab("site.md");
+/** The public Worker's wrangler config, for D1's database id. */
+const wranglerFile = () => fileURLToPath(new URL("../worker/wrangler.jsonc", import.meta.url));
+
+/** What the public snapshot holds: QUOTE_PUBLIC, or `public:` in vocab/site.md; none by default. */
 function level(): Level {
-  const value = (process.env.QUOTE_PUBLIC || "none") as Level;
-  if (!LEVELS.includes(value)) throw new Error(`QUOTE_PUBLIC is "${value}"; it should be ${LEVELS.join(", ")}.`);
+  const value = siteSetting("QUOTE_PUBLIC", process.env, loadSiteSettings(introFile())) as Level;
+  if (!LEVELS.includes(value)) throw new Error(`The public site's level is "${value}"; it should be ${LEVELS.join(", ")} (QUOTE_PUBLIC, or public: in vocab/site.md).`);
   return value;
 }
 
@@ -128,16 +135,16 @@ const snapshotFile = () => process.env.QUOTE_SNAPSHOT || join(dirname(process.en
 const replicaStateFile = () => join(dirname(snapshotFile()), "replica.db");
 
 /**
- * What goes into the public snapshot, or null with QUOTE_PUBLIC=none: the level, QUOTE_PUBLIC_NOTES, the
- * introduction in QUOTE_INTRO or vocab/site.md and each collection's in collections/<scheme>.md beside it,
- * the concept sets, and the maps in QUOTE_MAP_DIR's maps.json.
+ * What goes into the public snapshot, or null when the level is none: the level, the notes setting
+ * (QUOTE_PUBLIC_NOTES, or notes: in vocab/site.md), the introduction and each collection's in
+ * collections/<scheme>.md beside it, the concept sets, and the maps in QUOTE_MAP_DIR's maps.json.
  */
 function snapshotOptions(): SnapshotOptions | null {
   const public_ = level();
   if (public_ === "none") return null;
-  const notes = process.env.QUOTE_PUBLIC_NOTES || "none";
-  if (notes !== "none" && notes !== "all") throw new Error(`QUOTE_PUBLIC_NOTES is "${notes}"; it should be none or all.`);
-  const intro = process.env.QUOTE_INTRO || vocab("site.md");
+  const intro = introFile();
+  const notes = siteSetting("QUOTE_PUBLIC_NOTES", process.env, loadSiteSettings(intro));
+  if (notes !== "none" && notes !== "all") throw new Error(`The notes setting is "${notes}"; it should be none or all (QUOTE_PUBLIC_NOTES, or notes: in vocab/site.md).`);
   return { level: public_, notes: notes === "all", intro: loadIntro(intro), collections: loadCollections(join(dirname(intro), "collections")),
     sets: sets(), maps: readMapsFile(process.env.QUOTE_MAP_DIR || undefined) };
 }
@@ -153,17 +160,18 @@ const snapshotLine = (s: ReturnType<typeof buildSnapshot>) =>
 async function publishCommand() {
   if (flag("--status")) {
     const state = openReplicaState(replicaStateFile());
-    console.log(JSON.stringify({ d1: d1ConfigFrom(process.env) ? "configured" : "not configured", ...pending(state),
+    console.log(JSON.stringify({ d1: d1ConfigFrom(process.env, wranglerFile()) ? "configured" : "not configured", ...pending(state),
       snapshot: state.prepare("SELECT value FROM state WHERE key = 'snapshot_hash'").pluck().get() ?? null,
       shipped_at: state.prepare("SELECT value FROM state WHERE key = 'shipped_at'").pluck().get() ?? null }, null, 2));
     return;
   }
   const options = snapshotOptions();
-  if (!options) throw new Error("QUOTE_PUBLIC is none, so there's nothing to publish.");
+  if (!options && flag("--if-public")) return;
+  if (!options) throw new Error("The public site is none, so there's nothing to publish (public: in vocab/site.md, or QUOTE_PUBLIC).");
   const sql = option("--sql");
-  const config = flag("--dry-run") || sql ? null : d1ConfigFrom(process.env);
+  const config = flag("--dry-run") || sql ? null : d1ConfigFrom(process.env, wranglerFile());
   if (!flag("--dry-run") && !sql && !config) {
-    throw new Error("No D1 is configured (QUOTE_D1_PROXY_URL and QUOTE_D1_PROXY_TOKEN, or CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, and QUOTE_D1_DATABASE_ID); use --dry-run to build the snapshot for the preview.");
+    throw new Error("No D1 is configured (QUOTE_D1_PROXY_URL and QUOTE_D1_PROXY_TOKEN; `quote-mcp config` shows the settings); use --dry-run to build the snapshot for the preview.");
   }
   const summary = buildSnapshot(openReadOnly(), options, snapshotFile());
   console.log(snapshotLine(summary));
@@ -180,10 +188,15 @@ async function publishCommand() {
   }
 }
 
+/** Each setting, where it came from, and what each feature still needs; secrets show only as set. */
+function configCommand() {
+  console.log(configReport(process.env, loadSiteSettings(introFile()), wranglerFile()));
+}
+
 async function serveCommand() {
   const conceptSets = sets();
   const snapshot = level() === "none" ? undefined : snapshotReader(snapshotFile());
-  const replica = snapshot ? startDrain(snapshotFile(), replicaStateFile()) : undefined;
+  const replica = snapshot ? startDrain(snapshotFile(), replicaStateFile(), process.env, wranglerFile()) : undefined;
   const options = { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010), mapDir: process.env.QUOTE_MAP_DIR || undefined, sets: conceptSets, snapshot, replica };
   await serveHttp(openReadOnly(), options);
   if (process.env.QUOTE_PUBLIC_PORT) await servePublic({ ...options, port: Number(process.env.QUOTE_PUBLIC_PORT) });
@@ -202,7 +215,7 @@ function migrateCommand() {
 }
 
 const commands: Record<string, () => unknown> = {
-  import: importCommand, migrate: migrateCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, sets: setsCommand, publish: publishCommand, serve: serveCommand,
+  import: importCommand, migrate: migrateCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, sets: setsCommand, publish: publishCommand, config: configCommand, serve: serveCommand,
   stdio: () => serveStdio(openReadOnly(), sets()),
 };
 const command = commands[process.argv[2] ?? ""];

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { Statement } from "./replica.js";
 
 /**
@@ -27,12 +28,25 @@ export interface D1Http {
 
 export class D1HttpError extends Error {}
 
+/** The database_id in a wrangler config (JSON with // comments), unless it's the placeholder of zeros. */
+export function wranglerDatabaseId(file: string): string | undefined {
+  try {
+    const config = JSON.parse(fs.readFileSync(file, "utf8").replace(/^\s*\/\/.*$/gm, "")) as { d1_databases?: { database_id?: string }[] };
+    const id = config.d1_databases?.[0]?.database_id;
+    return id && !/^[0-]+$/.test(id) ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * The D1 settings in the environment: QUOTE_D1_PROXY_URL and QUOTE_D1_PROXY_TOKEN, or
- * CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, and QUOTE_D1_DATABASE_ID. Null when neither is set, and
- * an error naming what's missing when one is set only in part.
+ * The D1 settings in the environment: QUOTE_D1_PROXY_URL and QUOTE_D1_PROXY_TOKEN, or Cloudflare's REST
+ * API, turned on by CLOUDFLARE_ACCOUNT_ID, with CLOUDFLARE_API_TOKEN and the database (QUOTE_D1_DATABASE_ID,
+ * or the id in the Worker's wrangler config). CLOUDFLARE_API_TOKEN alone doesn't turn it on, since
+ * wrangler reads it too. Null when neither is set, and an error naming what's missing when one is set
+ * only in part.
  */
-export function d1ConfigFrom(env: NodeJS.ProcessEnv): D1Config | null {
+export function d1ConfigFrom(env: NodeJS.ProcessEnv, wranglerFile?: string): D1Config | null {
   const v = (name: string) => env[name]?.trim() || undefined;
   const endpoint = v("QUOTE_D1_PROXY_URL");
   if (endpoint) {
@@ -40,8 +54,9 @@ export function d1ConfigFrom(env: NodeJS.ProcessEnv): D1Config | null {
     if (!token) throw new D1HttpError("QUOTE_D1_PROXY_URL is set but QUOTE_D1_PROXY_TOKEN isn't.");
     return { endpoint: endpoint.endsWith("/query") ? endpoint : `${endpoint.replace(/\/+$/, "")}/query`, token };
   }
-  const accountId = v("CLOUDFLARE_ACCOUNT_ID"), token = v("CLOUDFLARE_API_TOKEN"), databaseId = v("QUOTE_D1_DATABASE_ID");
-  if (!accountId && !token && !databaseId) return null;
+  const accountId = v("CLOUDFLARE_ACCOUNT_ID");
+  if (!accountId) return null;
+  const token = v("CLOUDFLARE_API_TOKEN"), databaseId = v("QUOTE_D1_DATABASE_ID") ?? (wranglerFile ? wranglerDatabaseId(wranglerFile) : undefined);
   const missing = [["CLOUDFLARE_ACCOUNT_ID", accountId], ["CLOUDFLARE_API_TOKEN", token], ["QUOTE_D1_DATABASE_ID", databaseId]].filter(([, x]) => !x).map(([n]) => n);
   if (missing.length) throw new D1HttpError(`D1 needs ${missing.join(" and ")} as well.`);
   return { accountId, databaseId, token: token!, apiBase: v("CLOUDFLARE_API_BASE") };

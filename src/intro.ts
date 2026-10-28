@@ -5,6 +5,9 @@ import { esc } from "./style.js";
 /**
  * The public site's introductions, in a little Markdown: vocab/site.md for the whole site and
  * vocab/collections/<scheme>.md for each collection. They're read when a snapshot is built.
+ *
+ * vocab/site.md can start with a few settings between `---` lines (`public: quotes`, `notes: none`), the
+ * site's choices kept with its title, in git, rather than in each machine's environment.
  */
 
 export interface Intro { title: string; html: string; /** The first paragraph as plain text, for a card. */ summary: string | null }
@@ -18,12 +21,30 @@ function inline(text: string): string {
     .replace(/`([^`]+)`/g, "<code>$1</code>");
 }
 
+/** A file's settings header (`key: value` lines between `---` lines at the top), and the rest of it. */
+export function frontMatter(markdown: string): { fields: Record<string, string>; body: string } {
+  const text = markdown.replace(/\r\n/g, "\n");
+  const m = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(text);
+  if (!m) return { fields: {}, body: text };
+  const fields: Record<string, string> = {};
+  for (const line of m[1].split("\n")) {
+    const kv = /^\s*([A-Za-z][\w-]*)\s*:\s*(.*?)\s*$/.exec(line);
+    if (kv) fields[kv[1].toLowerCase()] = kv[2].replace(/^(["'])(.*)\1$/, "$2");
+  }
+  return { fields, body: text.slice(m[0].length) };
+}
+
+/** The settings header of a file, or none when there's no file. */
+export function loadSiteSettings(file: string): Record<string, string> {
+  return fs.existsSync(file) ? frontMatter(fs.readFileSync(file, "utf8")).fields : {};
+}
+
 /**
  * The front page's introduction from a little Markdown: a `# Title` line, then paragraphs, `## headings`,
- * and `- lists`, separated by blank lines.
+ * and `- lists`, separated by blank lines, after any settings header.
  */
 export function readIntro(markdown: string): Intro {
-  const lines = markdown.replace(/\r\n/g, "\n").trim().split("\n");
+  const lines = frontMatter(markdown).body.trim().split("\n");
   const title = /^#\s+(.+)$/.exec(lines[0] ?? "")?.[1].trim();
   const blocks = (title ? lines.slice(1) : lines).join("\n").trim().split(/\n\s*\n/).filter(Boolean);
   const html = blocks.map((b) => {

@@ -156,9 +156,16 @@ export async function tick(snapshotFile: string, state: Database.Database, d1: D
  * Runs the drain every 15 seconds while the server is up, when D1 is configured (see d1ConfigFrom), and
  * returns its status for /health. Without D1 settings it doesn't run, and the status says so.
  */
-export function startDrain(snapshotFile: string, stateFile: string, env: NodeJS.ProcessEnv = process.env, intervalMs = DRAIN_INTERVAL_MS): () => DrainStatus {
+export function startDrain(snapshotFile: string, stateFile: string, env: NodeJS.ProcessEnv = process.env, wranglerFile?: string, intervalMs = DRAIN_INTERVAL_MS): () => DrainStatus {
   const status: DrainStatus = { phase: "off", pending: 0, shipped_at: null, error: null, at: null };
-  const config = d1ConfigFrom(env);
+  let config: ReturnType<typeof d1ConfigFrom>;
+  try {
+    config = d1ConfigFrom(env, wranglerFile);
+  } catch (error) {
+    // Settings half done: the server runs, and /health says what's missing.
+    console.error(`Public replica drain off: ${(error as Error).message}`);
+    return () => ({ ...status, phase: "error", error: (error as Error).message });
+  }
   if (!config) return () => ({ ...status });
   const d1 = d1Http(config);
   const state = openReplicaState(stateFile);

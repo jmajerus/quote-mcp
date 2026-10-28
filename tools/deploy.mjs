@@ -89,7 +89,7 @@ async function deploy({ skipTests }) {
 
   const id = new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "").replace("T", "-");
   const tarball = path.join(os.tmpdir(), `quote-mcp-${id}.tgz`);
-  execFileSync("tar", ["czf", tarball, "-C", root, "dist", "deploy", "vocab", "package.json", "package-lock.json"]);
+  execFileSync("tar", ["czf", tarball, "-C", root, "dist", "deploy", "vocab", "worker/wrangler.jsonc", "package.json", "package-lock.json"]);
   execFileSync("scp", [...sshOptions, tarball, `${HOST}:/tmp/`], { env: sshEnv(), stdio: "inherit" });
   fs.rmSync(tarball);
 
@@ -114,8 +114,9 @@ if [ ! -f "$QUOTE_DB" ]; then
 else
   ${asQuote("migrate")}
 fi
-# The public site's preview reads a snapshot that imports rebuild; build it now so a new build's pages show at once.
-if [ -n "\${QUOTE_PUBLIC:-}" ] && [ "\${QUOTE_PUBLIC}" != none ]; then ${asQuote("publish --dry-run")}; fi
+# The public site's preview reads a snapshot that imports rebuild; build it now so a new build's pages show at once
+# (nothing, when vocab/site.md doesn't make the site public).
+${asQuote("publish --dry-run --if-public")}
 systemctl enable --quiet quote-mcp.service quote-import.timer quote-backup.timer
 systemctl start quote-import.timer quote-backup.timer
 systemctl restart quote-mcp.service

@@ -439,6 +439,13 @@ Anyone who runs quote-mcp has their own Zotero library, and some will want
 to show their collection and maps rather than keep them private. So the
 server has public pages, off unless they're turned on.
 
+- **Where the choices live** (2026-10-28). The level and the notes setting
+  are the site's choices, not a machine's, so they're `public:` and
+  `notes:` in a header at the top of `vocab/site.md`, in git beside the
+  title, and ship with each deploy; `QUOTE_PUBLIC` and `QUOTE_PUBLIC_NOTES`
+  override them on one machine. `.env.example` lists only the two required
+  settings and the optional ones by feature; `quote-mcp config` shows every
+  setting, where it came from, and what each feature still needs.
 - **Levels.** `QUOTE_PUBLIC` is `none` (the default: nothing changes),
   `catalogue` (concepts, sets, maps, works by title and author, counts; no
   quoted text), or `quotes` (the catalogue plus quote text with citations).
