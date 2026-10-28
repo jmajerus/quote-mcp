@@ -79,15 +79,17 @@ export interface ConceptListing {
   scheme: string; slug: string; label: string; definition: string | null; alt_labels: string[]; status: string; quotes: number;
 }
 
-export function listConcepts(db: DB, args: { query?: string; scheme?: string } = {}): ConceptListing[] {
+export function listConcepts(db: DB, args: { query?: string; scheme?: string; within?: { scheme: string; slugs: string[] } } = {}): ConceptListing[] {
   const q = args.query ? `%${args.query.toLowerCase()}%` : null;
+  const within = args.within ? JSON.stringify(args.within.slugs) : null;
   return (db.prepare(`
     SELECT s.slug AS scheme, c.slug, c.label, c.definition, c.alt_labels, c.status,
       (SELECT COUNT(DISTINCT t.quote_id) FROM quote_tags t JOIN quotes q ON q.id = t.quote_id WHERE t.concept_id = c.id AND q.status != 'unparsed') AS quotes
     FROM concepts c JOIN schemes s ON s.id = c.scheme_id
     WHERE (@scheme IS NULL OR s.slug = @scheme) AND c.status != 'retired'
+      AND (@within IS NULL OR (s.slug = @withinScheme AND c.slug IN (SELECT value FROM json_each(@within))))
       AND (@q IS NULL OR lower(c.label) LIKE @q OR lower(c.alt_labels) LIKE @q OR lower(COALESCE(c.definition, '')) LIKE @q)
-    ORDER BY c.label`).all({ scheme: args.scheme ?? null, q }) as (Omit<ConceptListing, "alt_labels"> & { alt_labels: string })[])
+    ORDER BY c.label`).all({ scheme: args.scheme ?? null, q, within, withinScheme: args.within?.scheme ?? null }) as (Omit<ConceptListing, "alt_labels"> & { alt_labels: string })[])
     .map((c) => ({ ...c, alt_labels: json<string[]>(c.alt_labels, []) }));
 }
 
@@ -142,6 +144,8 @@ export interface SearchArgs {
   concept?: string;
   /** Include quotes tagged with narrower concepts too (default true). */
   narrower?: boolean;
+  /** Only quotes tagged with one of these concepts: a concept set's, as src/sets.ts works it out. */
+  within?: { scheme: string; slugs: string[] };
   tag?: string;
   author?: string;
   work?: string;
@@ -174,6 +178,12 @@ export function searchQuotes(db: DB, args: SearchArgs) {
     const c = findConcept(db, args.concept);
     const ids = args.narrower === false ? [c.id] : withNarrower(db, c.id);
     where.push(`q.id IN (SELECT quote_id FROM quote_tags WHERE concept_id IN (${ids.join(",")}))`);
+  }
+  if (args.within) {
+    where.push(`q.id IN (SELECT t.quote_id FROM quote_tags t JOIN concepts c ON c.id = t.concept_id JOIN schemes s ON s.id = c.scheme_id
+      WHERE s.slug = @withinScheme AND c.slug IN (SELECT value FROM json_each(@withinSlugs)))`);
+    params.withinScheme = args.within.scheme;
+    params.withinSlugs = JSON.stringify(args.within.slugs);
   }
   if (args.tag) {
     where.push("q.id IN (SELECT quote_id FROM quote_tags WHERE tag = @tag COLLATE NOCASE)");

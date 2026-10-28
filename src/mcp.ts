@@ -3,11 +3,12 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { DB } from "./db.js";
 import { QUEUES, ToolError, citeQuote, getConcept, getQuote, listConcepts, overview, searchQuotes, worklist } from "./queries.js";
+import { type ConceptSet, listSets, setConcepts } from "./sets.js";
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.3.0";
 
 const INSTRUCTIONS = `Search and cite a store of quotations from books, most of them paper books that exist only on the shelf, collected over years and tagged with concepts.
-Concepts belong to named schemes; "human-work" (the human side of work) holds themes such as mobbing, false self, or psychic prison, with broader, narrower, related, and opposite concepts. Search by concept includes narrower concepts unless narrower=false.
+Concepts belong to named schemes; "human-work" (the human side of work) holds themes such as mobbing, false self, or psychic prison, with broader, narrower, related, and opposite concepts. Search by concept includes narrower concepts unless narrower=false. Concept sets name a part of a scheme (list_sets); search and list_concepts take set to stay within one.
 Typical flow: search_quotes (words, a concept, an author, or a work) → get_quote for the full record → cite_quote for a CSL JSON item, a locator, and a Pandoc citation.
 Beside quotes are notes: your own words at a page, or about a whole work, with no quoted text (kind "note"; the words are in note). Search finds both unless kind is given; cite_quote on a note gives the work and the place, not a quotation.
 Words in a search are looked for in the quote's text and comment only, so a phrase search finds sources that use the phrase; to find quotes tagged with a concept, use concept (or tag).
@@ -31,7 +32,8 @@ function run(body: () => unknown): CallToolResult {
 const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
 const quoteId = z.number().int().min(1).describe("Quote id from search_quotes");
 
-export function createServer(db: DB): McpServer {
+export function createServer(db: DB, sets: ConceptSet[] = []): McpServer {
+  const within = (set: string | undefined) => (set ? setConcepts(db, sets, set) : undefined);
   const server = new McpServer({ name: "quote-mcp", version: VERSION }, { instructions: INSTRUCTIONS });
 
   server.registerTool("search_quotes", {
@@ -41,6 +43,7 @@ export function createServer(db: DB): McpServer {
       query: z.string().optional().describe("Words or \"quoted phrases\" to find"),
       concept: z.string().optional().describe('A concept by name or slug ("job loss", "psychic-prison"); see list_concepts'),
       narrower: z.boolean().optional().describe("Include quotes tagged with narrower concepts (default true)"),
+      set: z.string().optional().describe("A concept set's slug: only quotes tagged with one of its concepts; see list_sets"),
       tag: z.string().optional().describe("An exact tag, including tags that aren't concepts"),
       author: z.string().optional().describe("Part of an author's name, a chapter author, or an attribution"),
       work: z.string().optional().describe("Part of a work's title, its Zotero item key, or its citekey"),
@@ -51,7 +54,7 @@ export function createServer(db: DB): McpServer {
       offset: z.number().int().min(0).optional(),
     },
     annotations: readOnly,
-  }, (args) => run(() => searchQuotes(db, args)));
+  }, ({ set, ...args }) => run(() => searchQuotes(db, { ...args, within: within(set) })));
 
   server.registerTool("get_quote", {
     title: "Get a quote",
@@ -73,9 +76,17 @@ export function createServer(db: DB): McpServer {
     inputSchema: {
       query: z.string().optional().describe("Words to look for"),
       scheme: z.string().optional().describe('A scheme slug, e.g. "human-work"'),
+      set: z.string().optional().describe("Only the concepts in this concept set; see list_sets"),
     },
     annotations: readOnly,
-  }, (args) => run(() => listConcepts(db, args)));
+  }, ({ set, ...args }) => run(() => listConcepts(db, { ...args, within: within(set) })));
+
+  server.registerTool("list_sets", {
+    title: "List concept sets",
+    description: "Named concept sets: parts of a scheme picked for a map or a theme (despair and its neighbours, say), with how many concepts each has. Pass a set's slug as set to search_quotes or list_concepts.",
+    inputSchema: {},
+    annotations: readOnly,
+  }, () => run(() => listSets(db, sets)));
 
   server.registerTool("get_concept", {
     title: "Get a concept",

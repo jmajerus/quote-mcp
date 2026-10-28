@@ -1,0 +1,12 @@
+{
+  "sets": [
+    {
+      "slug": "despair",
+      "scheme": "human-work",
+      "label": "Despair and its neighbours",
+      "description": "Despair and the concepts one step from it: depression, helplessness, humiliation, shame, and others.",
+      "around": ["despair"],
+      "depth": 1
+    }
+  ]
+}

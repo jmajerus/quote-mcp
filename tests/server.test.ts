@@ -10,6 +10,7 @@ import type { DrupalSite } from "../src/drupal.js";
 import { runImport } from "../src/import.js";
 import { citeQuote, ftsQuery, getConcept, searchQuotes } from "../src/queries.js";
 import { serveHttp } from "../src/server.js";
+import type { ConceptSet } from "../src/sets.js";
 
 const PRIMARY = "users/1";
 
@@ -54,7 +55,11 @@ beforeAll(async () => {
   fs.writeFileSync(path.join(mapDir, "assets", "index.html"), "<p>assets</p>");
   fs.writeFileSync(path.join(mapRoot, "secret.txt"), "secret");
   fs.symlinkSync(path.join(mapRoot, "secret.txt"), path.join(mapDir, "link.txt"));
-  server = await serveHttp(db, { host: "127.0.0.1", port: 0, mapDir });
+  const sets: ConceptSet[] = [
+    { slug: "harm", scheme: "human-work", label: "Harm", narrower: ["abuse"] },
+    { slug: "worth", scheme: "human-work", label: "Worth", description: "with a typo", concepts: ["dignity", "dignty"] },
+  ];
+  server = await serveHttp(db, { host: "127.0.0.1", port: 0, mapDir, sets });
   const a = server.address();
   base = `http://127.0.0.1:${typeof a === "object" && a ? a.port : 0}`;
 });
@@ -151,7 +156,7 @@ describe("MCP over HTTP", () => {
     const client = new Client({ name: "test", version: "1" });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
     const tools = (await client.listTools()).tools.map((t) => t.name).sort();
-    expect(tools).toEqual(["cite_quote", "get_concept", "get_quote", "list_concepts", "quote_worklist", "search_quotes"]);
+    expect(tools).toEqual(["cite_quote", "get_concept", "get_quote", "list_concepts", "list_sets", "quote_worklist", "search_quotes"]);
 
     const search = await client.callTool({ name: "search_quotes", arguments: { query: "assault" } });
     const found = JSON.parse((search.content as { text: string }[])[0].text);
@@ -163,6 +168,26 @@ describe("MCP over HTTP", () => {
 
     const counts = JSON.parse(((await client.callTool({ name: "quote_worklist", arguments: {} })).content as { text: string }[])[0].text);
     expect(counts.queues).toMatchObject({ unmatched_works: 1, kindle_locator: 1 });
+    await client.close();
+  });
+
+  it("lists concept sets and searches within one", async () => {
+    const client = new Client({ name: "test", version: "1" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
+    const call = async (name: string, args: Record<string, unknown>) => {
+      const result = await client.callTool({ name, arguments: args });
+      return { isError: result.isError, value: (result.content as { text: string }[])[0].text };
+    };
+    expect(JSON.parse((await call("list_sets", {})).value)).toEqual([
+      { slug: "harm", scheme: "human-work", label: "Harm", description: null, concepts: 2, missing: [] },
+      { slug: "worth", scheme: "human-work", label: "Worth", description: "with a typo", concepts: 1, missing: ["dignty"] },
+    ]);
+    expect(JSON.parse((await call("search_quotes", { set: "harm" })).value).total).toBe(2);
+    expect(JSON.parse((await call("search_quotes", { set: "worth" })).value).quotes[0].text).toBe("Everyone deserves dignity.");
+    expect(JSON.parse((await call("search_quotes", { set: "harm", query: "dignity" })).value).total).toBe(0);
+    expect(JSON.parse((await call("list_concepts", { set: "harm" })).value).map((c: { slug: string }) => c.slug)).toEqual(["abuse", "mobbing"]);
+    const missing = await call("search_quotes", { set: "nothing" });
+    expect(missing).toEqual({ isError: true, value: 'No concept set "nothing". Sets: harm, worth.' });
     await client.close();
   });
 });
@@ -242,7 +267,21 @@ describe("JSON API", () => {
     expect((await get("/api/concepts/abuse/quotes?limit=many")).status).toBe(400);
   });
 
+  it("lists the concept sets, and serves one as a piece of the graph", async () => {
+    const list = await get("/api/sets");
+    expect(list.status).toBe(200);
+    expect(list.body.sets.map((s: { slug: string; concepts: number }) => [s.slug, s.concepts])).toEqual([["harm", 2], ["worth", 1]]);
+    const { status, body } = await get("/api/sets/harm");
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ slug: "harm", scheme: "human-work", label: "Harm", description: null, definition: { narrower: ["abuse"] }, missing: [] });
+    expect(body.concepts.map((c: { slug: string }) => c.slug)).toEqual(["abuse", "mobbing"]);
+    expect(body.concepts[0]).toEqual({ slug: "abuse", scheme: "human-work", label: "abuse", alt_labels: [], status: "confirmed", source: "drupal:kid:1", quotes: 1 });
+    expect(body.relations).toEqual([{ from: "abuse", to: "mobbing", type: "narrower" }, { from: "mobbing", to: "abuse", type: "broader" }]);
+    expect((await get("/api/sets/worth")).body.missing).toEqual(["dignty"]);
+  });
+
   it("answers 404 for what isn't there, and 405 for anything but GET", async () => {
+    expect((await get("/api/sets/nothing")).status).toBe(404);
     expect((await get("/api/concepts/nothing")).status).toBe(404);
     expect((await get("/api/concepts/nothing/quotes")).status).toBe(404);
     expect((await get("/api/nowhere")).status).toBe(404);

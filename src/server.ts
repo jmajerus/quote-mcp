@@ -6,6 +6,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { handleApi } from "./api.js";
 import type { DB } from "./db.js";
 import { serveMap } from "./map.js";
+import type { ConceptSet } from "./sets.js";
 import { VERSION, createServer } from "./mcp.js";
 import { ToolError, overview } from "./queries.js";
 import { renderAdmin } from "./web.js";
@@ -23,6 +24,8 @@ export interface ServeOptions {
   port: number;
   /** The concept map's built files, served at /map/; without it /map/ is 404. */
   mapDir?: string;
+  /** The concept sets (src/sets.ts), for the API and the MCP tools. */
+  sets?: ConceptSet[];
 }
 
 /** What tools/deploy.mjs last installed (branch, commit, when), written beside the store after the restart, so read per request. */
@@ -48,7 +51,7 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
         return;
       }
       if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
-        handleApi(db, req, res, url);
+        handleApi(db, req, res, url, options.sets);
         return;
       }
       if (url.pathname === "/map" || url.pathname.startsWith("/map/")) {
@@ -87,7 +90,7 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
         }));
         return;
       }
-      const mcp = createServer(db);
+      const mcp = createServer(db, options.sets);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       res.on("close", () => {
         void transport.close();
@@ -102,11 +105,11 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
   });
   return new Promise((resolve) => server.listen(options.port, options.host, () => {
     const a = server.address();
-    console.error(`quote-mcp ${VERSION} listening on ${typeof a === "object" && a ? `${a.address}:${a.port}` : options.port} (/mcp, /admin, /api${options.mapDir ? `, /map/ from ${options.mapDir}` : ""})`);
+    console.error(`quote-mcp ${VERSION} listening on ${typeof a === "object" && a ? `${a.address}:${a.port}` : options.port} (/mcp, /admin, /api${options.sets?.length ? ` with ${options.sets.length} concept set${options.sets.length === 1 ? "" : "s"}` : ""}${options.mapDir ? `, /map/ from ${options.mapDir}` : ""})`);
     resolve(server);
   }));
 }
 
-export async function serveStdio(db: DB): Promise<void> {
-  await createServer(db).connect(new StdioServerTransport());
+export async function serveStdio(db: DB, sets: ConceptSet[] = []): Promise<void> {
+  await createServer(db, sets).connect(new StdioServerTransport());
 }

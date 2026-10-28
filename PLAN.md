@@ -415,6 +415,24 @@ its `/quotes`, and filters `/api/graph` by each concept's `scheme`, so
   resolves outside the folder is 404; `index.html` is revalidated on every
   load, and files with a build hash in their names are cached for a year.
   Without `QUOTE_MAP_DIR`, `/map/` is 404.
+- **Concept sets** (built 2026-10-28). Named parts of one scheme (SKOS
+  collections), so a map can show less than a whole scheme, search can stay
+  within one, and themes (quote-atlas's plan) have something to draw on.
+  They're editorial, so they live here, not in quote-atlas, and in a file in
+  git (`vocab/sets.json`, or `QUOTE_SETS`), not the store, so they're
+  reviewed and shared like code and ship with each deploy. A set lists its
+  `concepts`, or gives a recipe worked out on each request (`around` with
+  `depth` and `types`, `narrower`, `exclude`), so a concept added later joins
+  the sets that reach it. A malformed file stops the server starting; a slug
+  the scheme doesn't have is shown as `missing` rather than failing, since a
+  concept retired later shouldn't take the service down.
+  `npm run quotes -- sets` checks them. The API has `GET /api/sets` and
+  `GET /api/sets/:slug` (in `/api/graph`'s shape, so a map draws a set as it
+  draws a scheme); the MCP tools have `list_sets` and a `set` filter on
+  `search_quotes` and `list_concepts`. A map would name its set in
+  quote-atlas's `maps.json`. Sets could move into the store once there are
+  write tools, so they can be made from a conversation; themes would extend
+  the same file.
 
 ## Phases
 

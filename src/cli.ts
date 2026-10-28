@@ -1,5 +1,6 @@
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { openDb } from "./db.js";
 import { openReadOnly } from "./queries.js";
 import { serveHttp, serveStdio } from "./server.js";
@@ -7,6 +8,7 @@ import { drupalUrl, loadDrupal } from "./drupal.js";
 import { exportAll } from "./export.js";
 import { runImport } from "./import.js";
 import { loadDictionary } from "./ocr.js";
+import { type ConceptSet, listSets, loadSets } from "./sets.js";
 import { syncLibrary } from "./sync.js";
 import { ZoteroClient, zoteroConfig } from "./zotero.js";
 
@@ -88,9 +90,24 @@ function statsCommand() {
   }, null, 2));
 }
 
+/** The concept sets: QUOTE_SETS, or the checkout's vocab/sets.json (one level up from src/ and dist/) when there is one. */
+function sets(): ConceptSet[] {
+  if (process.env.QUOTE_SETS) return loadSets(process.env.QUOTE_SETS);
+  const file = fileURLToPath(new URL("../vocab/sets.json", import.meta.url));
+  return existsSync(file) ? loadSets(file) : [];
+}
+
 async function serveCommand() {
   await serveHttp(openReadOnly(), { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010),
-    mapDir: process.env.QUOTE_MAP_DIR || undefined });
+    mapDir: process.env.QUOTE_MAP_DIR || undefined, sets: sets() });
+}
+
+/** Each concept set as the store has it now; fails when a set names a concept the scheme doesn't have. */
+function setsCommand() {
+  const listed = listSets(openReadOnly(), sets());
+  console.log(JSON.stringify(listed, null, 2));
+  const missing = listed.filter((s) => s.missing.length);
+  if (missing.length) throw new Error(`Concepts not in their scheme: ${missing.map((s) => `${s.slug} (${s.missing.join(", ")})`).join("; ")}.`);
 }
 
 function migrateCommand() {
@@ -98,7 +115,8 @@ function migrateCommand() {
 }
 
 const commands: Record<string, () => unknown> = {
-  import: importCommand, migrate: migrateCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, serve: serveCommand, stdio: () => serveStdio(openReadOnly()),
+  import: importCommand, migrate: migrateCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, sets: setsCommand, serve: serveCommand,
+  stdio: () => serveStdio(openReadOnly(), sets()),
 };
 const command = commands[process.argv[2] ?? ""];
 if (!command) {

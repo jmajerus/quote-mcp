@@ -1,6 +1,7 @@
 import type http from "node:http";
 import type { DB } from "./db.js";
 import { ToolError, conceptGraph, findConcept, getConcept, searchQuotes } from "./queries.js";
+import { type ConceptSet, listSets, setGraph } from "./sets.js";
 
 /**
  * A read-only JSON API at /api, for the concept maps (quote-atlas, served at /map/ from the same
@@ -12,6 +13,9 @@ import { ToolError, conceptGraph, findConcept, getConcept, searchQuotes } from "
  *   GET /api/concepts/:slug           one concept, as get_concept returns it; scheme:slug works too
  *   GET /api/concepts/:slug/quotes    its quotes and notes, narrower concepts included unless narrower=false;
  *                                     limit (1–100, default 20) and offset
+ *   GET /api/sets                     the concept sets (src/sets.ts), with how many concepts each has
+ *   GET /api/sets/:slug               one set as a piece of the graph: /api/graph's shape, with the set's
+ *                                     slug, scheme, label, description, definition, and missing slugs
  */
 
 class BadRequest extends Error {}
@@ -31,12 +35,12 @@ function slugOf(raw: string): string {
   try {
     return decodeURIComponent(raw);
   } catch {
-    throw new BadRequest("The concept in the path isn't valid.");
+    throw new BadRequest("The name in the path isn't valid.");
   }
 }
 
 /** Answers an /api request. */
-export function handleApi(db: DB, req: http.IncomingMessage, res: http.ServerResponse, url: URL): void {
+export function handleApi(db: DB, req: http.IncomingMessage, res: http.ServerResponse, url: URL, sets: ConceptSet[] = []): void {
   if (req.method !== "GET") {
     send(res, 405, { error: "Method not allowed: the API is read-only." }, { allow: "GET" });
     return;
@@ -44,6 +48,15 @@ export function handleApi(db: DB, req: http.IncomingMessage, res: http.ServerRes
   try {
     if (url.pathname === "/api/graph") {
       send(res, 200, conceptGraph(db));
+      return;
+    }
+    if (url.pathname === "/api/sets") {
+      send(res, 200, { sets: listSets(db, sets) });
+      return;
+    }
+    const set = /^\/api\/sets\/([^/]+)$/.exec(url.pathname);
+    if (set) {
+      send(res, 200, setGraph(db, sets, slugOf(set[1])));
       return;
     }
     const m = /^\/api\/concepts\/([^/]+)(\/quotes)?$/.exec(url.pathname);
