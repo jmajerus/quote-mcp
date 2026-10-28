@@ -12,6 +12,8 @@ import { loadDictionary } from "./ocr.js";
 import { loadCollections, loadIntro } from "./intro.js";
 import { LEVELS, type Level } from "./public.js";
 import { snapshotReader } from "./published-sqlite.js";
+import { d1ConfigFrom, d1Http } from "./d1-http.js";
+import { openReplicaState, pending, startDrain, tick } from "./drain.js";
 import { replicaScript } from "./replica.js";
 import { type ConceptSet, listSets, loadSets } from "./sets.js";
 import { type SnapshotOptions, buildSnapshot, readMapsFile } from "./snapshot.js";
@@ -33,6 +35,8 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *   quote-mcp publish --dry-run        Builds the public snapshot (QUOTE_SNAPSHOT, by default public.db beside
  *                                       the store), which the preview reads; an import also builds it.
  *   quote-mcp publish --sql <file>     The same, and a SQL file that loads it into a local D1 for the Worker.
+ *   quote-mcp publish                  Builds it and ships what changed to its replica in D1 (as the server's
+ *                                       drain does every 15 seconds); --status shows the queue.
  *   quote-mcp stdio                     MCP over stdio, for local clients and tests.
  */
 
@@ -120,6 +124,8 @@ function level(): Level {
 
 /** The public snapshot's file: QUOTE_SNAPSHOT, or public.db beside the store. */
 const snapshotFile = () => process.env.QUOTE_SNAPSHOT || join(dirname(process.env.QUOTE_DB ?? "data/quotes.db"), "public.db");
+/** The replica's queue and what's been shipped to D1: replica.db beside the snapshot. */
+const replicaStateFile = () => join(dirname(snapshotFile()), "replica.db");
 
 /**
  * What goes into the public snapshot, or null with QUOTE_PUBLIC=none: the level, QUOTE_PUBLIC_NOTES, the
@@ -140,15 +146,25 @@ const snapshotLine = (s: ReturnType<typeof buildSnapshot>) =>
   `Public snapshot (${s.level}): ${s.records} records, ${s.works} works, ${s.concepts} concepts, ${s.sets} sets, ${s.maps} maps, written to ${s.file} (${s.hash.slice(0, 12)}).`;
 
 /**
- * Builds the public snapshot. With --sql, also writes it as a SQL file that loads a replica from scratch
- * (for a local D1 under `wrangler dev`). Sending it to D1 is the drain's, still to come, so for now
- * --dry-run or --sql.
+ * Builds the public snapshot and ships what changed to its replica in D1 (the server's drain does the
+ * same every 15 seconds). --dry-run only builds it, for the preview; --sql <file> also writes it as a SQL
+ * file that loads a replica from scratch (for a local D1 under `wrangler dev`); --status shows the queue.
  */
-function publishCommand() {
+async function publishCommand() {
+  if (flag("--status")) {
+    const state = openReplicaState(replicaStateFile());
+    console.log(JSON.stringify({ d1: d1ConfigFrom(process.env) ? "configured" : "not configured", ...pending(state),
+      snapshot: state.prepare("SELECT value FROM state WHERE key = 'snapshot_hash'").pluck().get() ?? null,
+      shipped_at: state.prepare("SELECT value FROM state WHERE key = 'shipped_at'").pluck().get() ?? null }, null, 2));
+    return;
+  }
   const options = snapshotOptions();
   if (!options) throw new Error("QUOTE_PUBLIC is none, so there's nothing to publish.");
   const sql = option("--sql");
-  if (!flag("--dry-run") && !sql) throw new Error("Sending the snapshot to D1 isn't built yet; use --dry-run to build it for the preview, or --sql <file> for a local D1.");
+  const config = flag("--dry-run") || sql ? null : d1ConfigFrom(process.env);
+  if (!flag("--dry-run") && !sql && !config) {
+    throw new Error("No D1 is configured (QUOTE_D1_PROXY_URL and QUOTE_D1_PROXY_TOKEN, or CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, and QUOTE_D1_DATABASE_ID); use --dry-run to build the snapshot for the preview.");
+  }
   const summary = buildSnapshot(openReadOnly(), options, snapshotFile());
   console.log(snapshotLine(summary));
   if (sql) {
@@ -158,12 +174,17 @@ function publishCommand() {
     snap.close();
     console.log(`Replica SQL written to ${sql}.`);
   }
+  if (config) {
+    const { queued, shipped } = await tick(summary.file, openReplicaState(replicaStateFile()), d1Http(config));
+    console.log(`Replica in D1: ${queued} queued, ${shipped} shipped.`);
+  }
 }
 
 async function serveCommand() {
   const conceptSets = sets();
   const snapshot = level() === "none" ? undefined : snapshotReader(snapshotFile());
-  const options = { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010), mapDir: process.env.QUOTE_MAP_DIR || undefined, sets: conceptSets, snapshot };
+  const replica = snapshot ? startDrain(snapshotFile(), replicaStateFile()) : undefined;
+  const options = { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010), mapDir: process.env.QUOTE_MAP_DIR || undefined, sets: conceptSets, snapshot, replica };
   await serveHttp(openReadOnly(), options);
   if (process.env.QUOTE_PUBLIC_PORT) await servePublic({ ...options, port: Number(process.env.QUOTE_PUBLIC_PORT) });
 }

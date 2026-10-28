@@ -584,8 +584,9 @@ serves and never writes.
   serves the snapshot (rebuilt by `quote-mcp publish --dry-run`, after each
   import, and on deploy), reread when it's replaced, so the site can be
   checked as it will go out. Without one yet, `/` says how to build it.
-- **The queue and the drain** (concept-clusters' `publishedReplica`). D1 is
-  only a replica, kept in step by rows:
+- **The queue and the drain** (built 2026-10-28, `src/drain.ts`, on
+  concept-clusters' `publishedReplica`). D1 is only a replica, kept in step
+  by rows:
   - After the snapshot is rebuilt, each row is compared with what was last
     shipped (by table, key, and a hash of the row, kept beside the store),
     and each new, changed, or removed row is queued, keyed by table and key,
@@ -600,10 +601,29 @@ serves and never writes.
     leaves the queue waiting.
   - Nothing writes D1 but the drain. A reader may see a drain's rows arrive
     over a few seconds, but never a reference to a row that isn't there yet.
-  - Settings: the D1 database and an API token (or the proxy's URL and
-    token) in `/etc/quote-mcp/env`. Phase 2's edits can later queue rows in
-    the same transaction as the edit, as concept-clusters does, rather than
-    waiting for a rebuild.
+  - The queue and what was shipped live in `replica.db` beside the snapshot
+    (the server reads the store read-only, but can write there). The drain
+    runs inside `serve`: each tick, if the snapshot's hash has changed, it
+    compares and queues, then ships. Batches are at most 100 statements; a
+    record's FTS row is a delete and an insert, since FTS5 takes no upsert.
+    `quote-mcp publish` does one tick by hand; `publish --status` shows the
+    queue; `/health` shows the drain's state.
+  - D1 is reached through the proxy Worker (`worker/proxy.ts`, a copy of
+    concept-clusters' d1-proxy: the REST API's `/query` shape through the
+    database's binding, behind a bearer token) or the REST API itself
+    (`src/d1-http.ts`). Settings in `/etc/quote-mcp/env`:
+    `QUOTE_D1_PROXY_URL` and `QUOTE_D1_PROXY_TOKEN`, or
+    `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, and
+    `QUOTE_D1_DATABASE_ID`. Without them the drain doesn't run.
+  - Tried end to end locally: from an empty D1, the first tick shipped the
+    whole snapshot (4,042 rows) in about a second; one edited quote then
+    shipped as four rows (the record, its search row, and meta's hash and
+    build time) within a tick; and the public Worker on that D1 answered
+    byte for byte as the public port. Two local Workers can't share one
+    local D1 (workerd locks it), so locally the proxy and the public Worker
+    run one at a time.
+  - Phase 2's edits can later queue rows in the same transaction as the
+    edit, as concept-clusters does, rather than waiting for a rebuild.
 - **The Worker** (built 2026-10-28, `worker/`, its own `wrangler.jsonc`), on
   its own hostname, with no Access. It serves the pages and the map's API
   (`/api/graph`, `/api/concepts/…`, `/api/sets/…`, routed by
@@ -691,7 +711,7 @@ serves and never writes.
    and D1 ("Hosting the public site"), in this order: the snapshot builder
    and `publish --dry-run`, with the LAN preview and the public port reading
    it (built 2026-10-28); `src/site.ts` behind the async store interface
-   (built 2026-10-28); the Worker under `wrangler dev` with a local D1 (built 2026-10-28); the queue and the drain; then
+   (built 2026-10-28); the Worker under `wrangler dev` with a local D1 (built 2026-10-28); the queue and the drain (built 2026-10-28); then
    `/site.json`, the key list, and the links with corpus-mcp, whose rows are
    queued like any other when the other site's key list changes. Creating the D1 database, the Worker, its secret,
    and the hostname, and the first deploy, are the user's.

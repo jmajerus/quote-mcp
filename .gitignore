@@ -4,3 +4,4 @@ dist
 survey
 data
 .wrangler
+.dev.vars

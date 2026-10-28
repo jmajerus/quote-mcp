@@ -7,6 +7,7 @@ import { handleApi, handlePublishedApi } from "./api.js";
 import { PUBLIC_API } from "./api-routes.js";
 import type { DB } from "./db.js";
 import { serveMap } from "./map.js";
+import type { DrainStatus } from "./drain.js";
 import type { Published } from "./published.js";
 import type { ConceptSet } from "./sets.js";
 import { isSitePath, renderSite } from "./site.js";
@@ -36,6 +37,8 @@ export interface ServeOptions {
   sets?: ConceptSet[];
   /** The public snapshot, reread when it's rebuilt; without it (QUOTE_PUBLIC=none), / redirects to /admin. */
   snapshot?: () => Promise<Published | null>;
+  /** The drain that keeps the snapshot's replica in D1 in step (src/drain.ts), for /health. */
+  replica?: () => DrainStatus;
 }
 
 
@@ -88,7 +91,7 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
     try {
       if (url.pathname === "/health") {
         const { quotes, notes } = overview(db);
-        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, quotes, notes, deployed: readDeployed() }));
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, quotes, notes, deployed: readDeployed(), ...(options.replica ? { replica: options.replica() } : {}) }));
         return;
       }
       if (await sitePage(options, req, res, url)) return;
