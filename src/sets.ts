@@ -4,7 +4,7 @@ import type { DB } from "./db.js";
 import { RELATION_LABEL, ToolError, conceptGraph } from "./queries.js";
 
 /**
- * Named concept sets (SKOS collections): a part of one scheme, for a map or a theme to draw on, and for
+ * Named concept sets: a part of one scheme, for a map or a theme to draw on, and for
  * search. They're editorial, so they're defined in a JSON file kept in git (vocab/sets.json, or
  * QUOTE_SETS), not imported. A set lists its concepts, or gives a recipe that is worked out against the
  * store on each request, so a concept added later joins the sets whose recipe reaches it:

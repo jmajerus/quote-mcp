@@ -56,7 +56,7 @@ function sitePage(db: DB, options: ServeOptions, req: http.IncomingMessage, res:
   }
   let html: string | null;
   try {
-    html = renderSite(db, options.site, url.pathname);
+    html = renderSite(db, options.site, url.pathname, url.searchParams);
   } catch (error) {
     if (!(error instanceof ToolError)) throw error;
     html = null;

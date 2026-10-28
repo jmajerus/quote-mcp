@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb } from "./db.js";
 import { openReadOnly } from "./queries.js";
@@ -9,7 +9,7 @@ import { exportAll } from "./export.js";
 import { runImport } from "./import.js";
 import { loadDictionary } from "./ocr.js";
 import { type ConceptSet, listSets, loadSets } from "./sets.js";
-import { LEVELS, type Level, type SiteOptions, loadIntro } from "./site.js";
+import { LEVELS, type Level, type SiteOptions, loadCollections, loadIntro } from "./site.js";
 import { syncLibrary } from "./sync.js";
 import { ZoteroClient, zoteroConfig } from "./zotero.js";
 
@@ -100,13 +100,17 @@ function sets(): ConceptSet[] {
   return existsSync(vocab("sets.json")) ? loadSets(vocab("sets.json")) : [];
 }
 
-/** The public site's settings: QUOTE_PUBLIC, QUOTE_PUBLIC_NOTES, and the introduction in QUOTE_INTRO or vocab/site.md. */
+/**
+ * The public site's settings: QUOTE_PUBLIC, QUOTE_PUBLIC_NOTES, the introduction in QUOTE_INTRO or vocab/site.md,
+ * and each collection's beside it in collections/<scheme>.md.
+ */
 function site(mapDir: string | undefined, conceptSets: ConceptSet[]): SiteOptions {
   const level = (process.env.QUOTE_PUBLIC || "none") as Level;
   if (!LEVELS.includes(level)) throw new Error(`QUOTE_PUBLIC is "${level}"; it should be ${LEVELS.join(", ")}.`);
   const notes = process.env.QUOTE_PUBLIC_NOTES || "none";
   if (notes !== "none" && notes !== "all") throw new Error(`QUOTE_PUBLIC_NOTES is "${notes}"; it should be none or all.`);
-  return { level, notes: notes === "all", intro: loadIntro(process.env.QUOTE_INTRO || vocab("site.md")), mapDir, sets: conceptSets };
+  const intro = process.env.QUOTE_INTRO || vocab("site.md");
+  return { level, notes: notes === "all", intro: loadIntro(intro), collections: loadCollections(join(dirname(intro), "collections")), mapDir, sets: conceptSets };
 }
 
 async function serveCommand() {

@@ -39,7 +39,7 @@ const servers: http.Server[] = [];
 
 function site(rest: Partial<SiteOptions> = {}): SiteOptions {
   const sets: ConceptSet[] = [{ slug: "harm", scheme: "human-work", label: "Harm", description: "Abuse and what it includes", narrower: ["abuse"] }];
-  return { level: "catalogue", notes: false, intro: readIntro("# Work quotes\n\nQuotes about work."), mapDir, sets, ...rest };
+  return { level: "catalogue", notes: false, intro: readIntro("# Work quotes\n\nQuotes about work."), collections: {}, mapDir, sets, ...rest };
 }
 
 async function start(options: Partial<SiteOptions>, publicPort = true) {
@@ -135,6 +135,63 @@ describe("the catalogue level", () => {
     expect(renderSite(db, site({ level: "quotes", notes: true }), "/")).toContain("4 quotes and notes from 2 works");
     expect(renderSite(db, site({ level: "quotes" }), "/")).toContain("3 quotes from 2 works");
     expect(renderSite(db, site({ level: "catalogue", notes: true }), "/")).toContain("3 quotes from 2 works");
+  });
+});
+
+describe("collections", () => {
+  // A second scheme, with one concept tagged on the dignity quote, so that quote is in both collections.
+  beforeAll(() => {
+    const now = new Date().toISOString();
+    const scheme = db.prepare("INSERT INTO schemes (slug, label, description, created_at) VALUES ('ethics', 'Ethics', 'Right and wrong', ?)").run(now).lastInsertRowid;
+    const concept = db.prepare("INSERT INTO concepts (scheme_id, slug, label, created_at, updated_at) VALUES (?, 'respect', 'respect', ?, ?)").run(scheme, now, now).lastInsertRowid;
+    const quote = db.prepare("SELECT id FROM quotes WHERE text LIKE 'Everyone deserves%'").pluck().get();
+    db.prepare("INSERT INTO quote_tags (quote_id, tag, concept_id, origin) VALUES (?, 'respect', ?, 'span')").run(quote, concept);
+  });
+  afterAll(() => {
+    db.prepare("DELETE FROM quote_tags WHERE tag = 'respect'").run();
+    db.prepare("DELETE FROM concepts WHERE slug = 'respect'").run();
+    db.prepare("DELETE FROM schemes WHERE slug = 'ethics'").run();
+  });
+  const intros = { "human-work": readIntro("# The human side of work\n\nWhat work does to people.\n\nSince 2014.") };
+
+  it("lists the collections on the front page, each with its introduction's first paragraph and counts", () => {
+    const html = renderSite(db, site({ collections: intros }), "/")!;
+    expect(html).toContain("<h2>Collections</h2>");
+    expect(html).toMatch(/href="\/collections\/ethics"><h3>Ethics<\/h3>\s*<p>Right and wrong<\/p><p class="count">1 quote · 1 work · 1 concept<\/p>/);
+    expect(html).toMatch(/href="\/collections\/human-work"><h3>The human side of work<\/h3>\s*<p>What work does to people.<\/p><p class="count">3 quotes · 2 works · 3 concepts<\/p>/);
+    expect(html).not.toContain("Since 2014");
+  });
+
+  it("gives each collection a page with its own maps, sets, and filtered lists", () => {
+    const work = renderSite(db, site({ collections: intros }), "/collections/human-work")!;
+    expect(work).toContain("<h1>The human side of work</h1>");
+    expect(work).toContain("Since 2014");
+    expect(work).toContain('href="/map/human-work/"');
+    expect(work).toContain('href="/sets/harm"');
+    expect(work).toContain('href="/concepts?collection=human-work"');
+    const ethics = renderSite(db, site({ collections: intros }), "/collections/ethics")!;
+    expect(ethics).toContain("<p>Right and wrong</p>");
+    expect(ethics).not.toContain("/map/human-work/");
+    expect(ethics).not.toContain("/sets/harm");
+    const concepts = renderSite(db, site(), "/concepts", new URLSearchParams("collection=ethics"))!;
+    expect(concepts).toContain("respect");
+    expect(concepts).not.toContain("mobbing");
+    const works = renderSite(db, site(), "/works", new URLSearchParams("collection=ethics"))!;
+    expect(works).toContain("A Book Nobody Filed");
+    expect(works).not.toContain("Davenport");
+    expect(renderSite(db, site(), "/concepts/respect")).toContain('href="/collections/ethics"');
+    expect(() => renderSite(db, site(), "/collections/nothing")).toThrow();
+    expect(() => renderSite(db, site(), "/works", new URLSearchParams("collection=nothing"))).toThrow();
+  });
+});
+
+describe("one collection", () => {
+  it("shows it inline on the front page, under its own heading when it has an introduction", () => {
+    const html = renderSite(db, site({ collections: { "human-work": readIntro("# The human side of work\n\nWhat work does to people.") } }), "/")!;
+    expect(html).not.toContain("<h2>Collections</h2>");
+    expect(html).toContain("<h2>The human side of work</h2>");
+    expect(html).toContain('href="/concepts"');
+    expect(renderSite(db, site(), "/")).not.toContain("<h2>The human side of work</h2>");
   });
 });
 

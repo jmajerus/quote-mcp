@@ -6,8 +6,10 @@ import { type ConceptSet, listSets, setGraph } from "./sets.js";
 import { CSS, esc } from "./web.js";
 
 /**
- * The public site: a front page at / and pages for concepts, sets, and works, off unless QUOTE_PUBLIC is
- * set. It has its own queries, which return only what a level makes public, rather than the admin pages
+ * The public site: a front page at / and pages for collections, concepts, sets, and works, off unless
+ * QUOTE_PUBLIC is set. A collection is a concept scheme as readers see it (the human side of work, say):
+ * its concepts decide what's in it, so a work quoted in two collections is in both, and each has an
+ * introduction in vocab/collections/<scheme>.md. With one collection the front page shows it inline. It has its own queries, which return only what a level makes public, rather than the admin pages
  * with parts hidden, so a field added there can't leak here.
  *
  *   catalogue   concepts, sets, maps, works by title and author, and counts; no quoted text
@@ -26,11 +28,13 @@ export interface SiteOptions {
   notes: boolean;
   /** The front page's title and introduction, from vocab/site.md. */
   intro: Intro;
+  /** Each collection's title and introduction, by scheme slug, from vocab/collections/<scheme>.md. */
+  collections: Record<string, Intro>;
   mapDir?: string;
   sets: ConceptSet[];
 }
 
-export interface Intro { title: string; html: string }
+export interface Intro { title: string; html: string; /** The first paragraph as plain text, for a card. */ summary: string | null }
 
 // --- The introduction ----------------------------------------------------------------------------
 
@@ -58,12 +62,20 @@ export function readIntro(markdown: string): Intro {
     if (items.every((l) => /^[-*]\s+/.test(l))) return `<ul>${items.map((l) => `<li>${inline(l.replace(/^[-*]\s+/, ""))}</li>`).join("")}</ul>`;
     return `<p>${inline(b.replace(/\n/g, " "))}</p>`;
   }).join("\n");
-  return { title: title ?? "Quotes", html };
+  const first = blocks.find((b) => !/^(##\s|[-*]\s)/.test(b));
+  const summary = first?.replace(/\n/g, " ").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/[*`]/g, "") ?? null;
+  return { title: title ?? "Quotes", html, summary };
 }
 
 /** The introduction from a file, or a plain title when there isn't one. */
 export function loadIntro(file: string): Intro {
-  return fs.existsSync(file) ? readIntro(fs.readFileSync(file, "utf8")) : { title: "Quotes", html: "" };
+  return fs.existsSync(file) ? readIntro(fs.readFileSync(file, "utf8")) : { title: "Quotes", html: "", summary: null };
+}
+
+/** The collections' introductions in a folder, one <scheme>.md each; none when there's no folder. */
+export function loadCollections(dir: string): Record<string, Intro> {
+  if (!fs.existsSync(dir)) return {};
+  return Object.fromEntries(fs.readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => [f.slice(0, -3), readIntro(fs.readFileSync(path.join(dir, f), "utf8"))]));
 }
 
 // --- Public queries ------------------------------------------------------------------------------
@@ -92,10 +104,10 @@ function conceptCounts(db: DB, site: SiteOptions): Map<number, number> {
   return new Map(rows.map((r) => [r.id, r.n]));
 }
 
-function publicConcepts(db: DB, site: SiteOptions) {
+function publicConcepts(db: DB, site: SiteOptions, scheme: string | null = null) {
   const n = conceptCounts(db, site);
   return (db.prepare(`SELECT c.id, s.slug AS scheme, c.slug, c.label, c.definition FROM concepts c JOIN schemes s ON s.id = c.scheme_id
-    WHERE c.status != 'retired' ORDER BY lower(c.label)`).all() as { id: number; scheme: string; slug: string; label: string; definition: string | null }[])
+    WHERE c.status != 'retired' AND (? IS NULL OR s.slug = ?) ORDER BY lower(c.label)`).all(scheme, scheme) as { id: number; scheme: string; slug: string; label: string; definition: string | null }[])
     .map((c) => ({ ...c, quotes: n.get(c.id) ?? 0 }));
 }
 
@@ -104,6 +116,33 @@ function publicWorks(db: DB, site: SiteOptions, conceptIds?: number[]): PublicWo
   const within = conceptIds ? `AND q.id IN (SELECT quote_id FROM quote_tags WHERE concept_id IN (${conceptIds.join(",")}))` : "";
   return works(db.prepare(`SELECT w.id, w.title, w.authors, w.year, COUNT(*) AS quotes FROM quotes q JOIN works w ON w.id = q.work_id
     WHERE ${visible(site)} ${within} GROUP BY w.id ORDER BY lower(json_extract(w.authors, '$[0]')) NULLS LAST, lower(w.title)`).all() as never);
+}
+
+interface Collection { scheme: string; intro: Intro; quotes: number; works: number; concepts: number; conceptIds: number[] }
+
+/** Each concept scheme with concepts, as a collection: its introduction (or the scheme's label and description) and its public counts. */
+function collections(db: DB, site: SiteOptions): Collection[] {
+  const schemes = db.prepare("SELECT id, slug, label, description FROM schemes ORDER BY lower(label)").all() as { id: number; slug: string; label: string; description: string | null }[];
+  const ids = db.prepare("SELECT id FROM concepts WHERE scheme_id = ? AND status != 'retired'").pluck();
+  return schemes.map((s) => {
+    const conceptIds = ids.all(s.id) as number[];
+    const n = db.prepare(`SELECT COUNT(*) AS quotes, COUNT(DISTINCT q.work_id) AS works FROM quotes q
+      WHERE ${visible(site)} AND q.id IN (SELECT quote_id FROM quote_tags WHERE concept_id IN (${conceptIds.join(",")}))`).get() as { quotes: number; works: number };
+    const intro = site.collections[s.slug] ?? { title: s.label, html: s.description ? `<p>${esc(s.description)}</p>` : "", summary: s.description };
+    return { scheme: s.slug, intro, ...n, concepts: conceptIds.length, conceptIds };
+  }).filter((c) => c.concepts > 0);
+}
+
+function findCollection(db: DB, site: SiteOptions, scheme: string): Collection {
+  const c = collections(db, site).find((x) => x.scheme === scheme);
+  if (!c) throw new ToolError(`No collection "${scheme}".`);
+  return c;
+}
+
+/** Public records tagged with no concept, so in no collection yet. */
+function untagged(db: DB, site: SiteOptions): number {
+  return db.prepare(`SELECT COUNT(*) FROM quotes q WHERE ${visible(site)} AND NOT EXISTS (SELECT 1 FROM quote_tags t JOIN concepts c ON c.id = t.concept_id
+    WHERE t.quote_id = q.id AND c.status != 'retired')`).pluck().get() as number;
 }
 
 function publicWork(db: DB, site: SiteOptions, id: number) {
@@ -179,26 +218,67 @@ function card(href: string, title: string, text: string | null | undefined): str
   return `<a class="card" href="${esc(href)}"><h3>${esc(title)}</h3>${text ? `<p>${esc(text)}</p>` : ""}</a>`;
 }
 
-function frontPage(db: DB, site: SiteOptions): string {
-  const n = counts(db, site);
-  const maps = readMaps(site);
-  const sets = listSets(db, site.sets).filter((s) => s.concepts > 0);
-  return page(site, null, "home", `<h1>${esc(site.intro.title)}</h1>
-<div class="intro">${site.intro.html}</div>
-<p class="stats">${records(site, n.quotes)} from ${plural(n.works, "work")}, tagged with ${plural(n.concepts, "concept")}.</p>
-${maps.length ? `<h2>Maps</h2><div class="grid">${maps.map((m) => card(`/map/${m.name}/`, m.title ?? m.name, m.description)).join("")}</div>` : ""}
-${sets.length ? `<h2>Starting points</h2><div class="grid">${sets.map((s) => card(`/sets/${s.slug}`, s.label, s.description)).join("")}</div>` : ""}
-<h2>Browse</h2><div class="grid">${card("/concepts", "Concepts", `${plural(n.concepts, "concept")}, A to Z`)}${card("/works", "Works", `${plural(n.works, "work")}, by author`)}</div>`);
+/** A collection's maps and starting points (concept sets), or every collection's. */
+function waysIn(db: DB, site: SiteOptions, scheme: string | null): string {
+  const maps = readMaps(site).filter((m) => !scheme || (m.scheme ?? m.name) === scheme);
+  const sets = listSets(db, site.sets).filter((s) => s.concepts > 0 && (!scheme || s.scheme === scheme));
+  return `${maps.length ? `<h2>Maps</h2><div class="grid">${maps.map((m) => card(`/map/${m.name}/`, m.title ?? m.name, m.description)).join("")}</div>` : ""}
+${sets.length ? `<h2>Starting points</h2><div class="grid">${sets.map((s) => card(`/sets/${s.slug}`, s.label, s.description)).join("")}</div>` : ""}`;
 }
 
-function conceptsPage(db: DB, site: SiteOptions): string {
-  const list = publicConcepts(db, site);
+function browse(site: SiteOptions, n: { works: number; concepts: number }, scheme: string | null): string {
+  const q = scheme ? `?collection=${encodeURIComponent(scheme)}` : "";
+  return `<h2>Browse</h2><div class="grid">${card(`/concepts${q}`, "Concepts", `${plural(n.concepts, "concept")}, A to Z`)}${card(`/works${q}`, "Works", `${plural(n.works, "work")}, by author`)}</div>`;
+}
+
+function stats(site: SiteOptions, n: { quotes: number; works: number; concepts: number }): string {
+  return `<p class="stats">${records(site, n.quotes)} from ${plural(n.works, "work")}, tagged with ${plural(n.concepts, "concept")}.</p>`;
+}
+
+function frontPage(db: DB, site: SiteOptions): string {
+  const n = counts(db, site);
+  const all = collections(db, site);
+  const head = `<h1>${esc(site.intro.title)}</h1>\n<div class="intro">${site.intro.html}</div>\n${stats(site, n)}`;
+  if (all.length <= 1) {
+    // One collection: shown inline, under its own heading when it has an introduction of its own.
+    const c = all[0];
+    const own = c && site.collections[c.scheme] ? `<h2>${esc(c.intro.title)}</h2><div class="intro">${c.intro.html}</div>` : "";
+    return page(site, null, "home", `${head}${own}${waysIn(db, site, null)}${browse(site, n, null)}`);
+  }
+  const loose = untagged(db, site);
+  return page(site, null, "home", `${head}
+<h2>Collections</h2><div class="grid">${all.map((c) => `<a class="card" href="/collections/${encodeURIComponent(c.scheme)}"><h3>${esc(c.intro.title)}</h3>
+${c.intro.summary ? `<p>${esc(c.intro.summary)}</p>` : ""}<p class="count">${records(site, c.quotes)} · ${plural(c.works, "work")} · ${plural(c.concepts, "concept")}</p></a>`).join("")}</div>
+${loose ? `<p class="note">${records(site, loose)} not yet tagged with a concept, so in no collection; they're under Works.</p>` : ""}
+${waysIn(db, site, null)}${browse(site, n, null)}`);
+}
+
+function collectionPage(db: DB, site: SiteOptions, scheme: string): string {
+  const c = findCollection(db, site, scheme);
+  return page(site, c.intro.title, "home", `<h1>${esc(c.intro.title)}</h1>
+<div class="intro">${c.intro.html}</div>${stats(site, c)}${waysIn(db, site, c.scheme)}${browse(site, c, c.scheme)}`);
+}
+
+/** The collection a ?collection= asks for, or null for all; a ToolError for one that isn't there. */
+function chosen(db: DB, site: SiteOptions, params: URLSearchParams): Collection | null {
+  const scheme = params.get("collection");
+  return scheme ? findCollection(db, site, scheme) : null;
+}
+
+/** "in <collection>", linked, when there's more than one collection to tell apart. */
+function within(db: DB, site: SiteOptions, c: Collection | null): string {
+  return c && collections(db, site).length > 1 ? ` in <a href="/collections/${encodeURIComponent(c.scheme)}">${esc(c.intro.title)}</a> · <a href="?">all collections</a>` : "";
+}
+
+function conceptsPage(db: DB, site: SiteOptions, params: URLSearchParams): string {
+  const c = chosen(db, site, params);
+  const list = publicConcepts(db, site, c?.scheme ?? null);
   const groups = new Map<string, typeof list>();
   for (const c of list) {
     const letter = /^[a-z]/i.test(c.label) ? c.label[0].toUpperCase() : "#";
     (groups.get(letter) ?? groups.set(letter, []).get(letter)!).push(c);
   }
-  return page(site, "Concepts", "concepts", `<h1>Concepts</h1><p class="sub">${plural(list.length, "concept")}. A concept's count includes only what's tagged with it, not its narrower concepts.</p>
+  return page(site, "Concepts", "concepts", `<h1>Concepts</h1><p class="sub">${plural(list.length, "concept")}${within(db, site, c)}. A concept's count includes only what's tagged with it, not its narrower concepts.</p>
 <nav class="letters">${[...groups.keys()].map((l) => `<a href="#${l === "#" ? "other" : l}">${l}</a>`).join("")}</nav>
 <div class="az">${[...groups].map(([l, cs]) => `<h2 id="${l === "#" ? "other" : l}">${l}</h2><ul>${cs.map((c) => `<li><a href="${conceptHref(c.slug)}">${esc(c.label)}</a> <span class="count">${c.quotes}</span></li>`).join("")}</ul>`).join("")}</div>`);
 }
@@ -212,8 +292,10 @@ function conceptPage(db: DB, site: SiteOptions, slug: string): string {
     `<tr><th>${esc(type)}</th><td>${list.map((r) => `<a class="chip" href="${conceptHref(r.slug)}">${esc(r.label)}</a>`).join("")}</td></tr>`).join("");
   const inSets = listSets(db, site.sets).filter((s) => s.scheme === c.scheme && setGraph(db, site.sets, s.slug).concepts.some((m) => m.slug === c.slug));
   const maps = readMaps(site).filter((m) => (m.scheme ?? m.name) === c.scheme && !m.set);
+  const all = collections(db, site);
+  const home = all.length > 1 ? all.find((x) => x.scheme === c.scheme) : undefined;
   return page(site, c.label, "concepts", `<h1>${esc(c.label)}</h1>
-<p class="sub">${records(site, total)}${ids.length > 1 ? ", with its narrower concepts" : ""}${maps.map((m) => ` · <a href="/map/${m.name}/#/concept/${encodeURIComponent(c.slug)}">on the map</a>`).join("")}</p>
+<p class="sub">${home ? `<a href="/collections/${encodeURIComponent(home.scheme)}">${esc(home.intro.title)}</a> · ` : ""}${records(site, total)}${ids.length > 1 ? ", with its narrower concepts" : ""}${maps.map((m) => ` · <a href="/map/${m.name}/#/concept/${encodeURIComponent(c.slug)}">on the map</a>`).join("")}</p>
 ${c.definition ? `<p>${esc(c.definition)}</p>` : ""}
 ${c.alt_labels.length || relations ? `<div class="scroll"><table>${c.alt_labels.length ? `<tr><th>Also</th><td>${c.alt_labels.map(esc).join(", ")}</td></tr>` : ""}${relations}</table></div>` : ""}
 ${inSets.length ? `<p class="meta">In ${inSets.map((s) => `<a href="/sets/${s.slug}">${esc(s.label)}</a>`).join(", ")}</p>` : ""}
@@ -231,9 +313,10 @@ ${set.description ? `<p class="intro">${esc(set.description)}</p>` : ""}
 <ul class="plain-list">${set.concepts.map((c) => `<li><a href="${conceptHref(c.slug)}">${esc(c.label)}</a> <span class="count">${n.get(ids.get(c.slug) ?? -1) ?? 0}</span></li>`).join("")}</ul>`);
 }
 
-function worksPage(db: DB, site: SiteOptions): string {
-  const list = publicWorks(db, site);
-  return page(site, "Works", "works", `<h1>Works</h1><p class="sub">${plural(list.length, "work")} quoted, by first author.</p>
+function worksPage(db: DB, site: SiteOptions, params: URLSearchParams): string {
+  const c = chosen(db, site, params);
+  const list = publicWorks(db, site, c?.conceptIds);
+  return page(site, "Works", "works", `<h1>Works</h1><p class="sub">${plural(list.length, "work")} quoted${within(db, site, c)}, by first author.</p>
 <ul class="plain-list works" style="columns:auto">${list.map((w) => workItem(w, site)).join("")}</ul>`);
 }
 
@@ -246,7 +329,7 @@ function workPage(db: DB, site: SiteOptions, id: number): string {
 
 /** The paths the public site answers, so the server can route them. */
 export function isSitePath(pathname: string): boolean {
-  return pathname === "/" || /^\/(concepts|works|sets)(\/|$)/.test(pathname);
+  return pathname === "/" || /^\/(collections|concepts|works|sets)(\/|$)/.test(pathname);
 }
 
 function decoded(part: string): string {
@@ -258,12 +341,14 @@ function decoded(part: string): string {
 }
 
 /** The HTML for a public path, or null when there's no such page; a ToolError for a concept, set, or work that isn't there. */
-export function renderSite(db: DB, site: SiteOptions, pathname: string): string | null {
+export function renderSite(db: DB, site: SiteOptions, pathname: string, params = new URLSearchParams()): string | null {
   if (site.level === "none") return null;
   if (pathname === "/") return frontPage(db, site);
-  if (pathname === "/concepts" || pathname === "/concepts/") return conceptsPage(db, site);
-  if (pathname === "/works" || pathname === "/works/") return worksPage(db, site);
-  let m = /^\/concepts\/([^/]+)$/.exec(pathname);
+  if (pathname === "/concepts" || pathname === "/concepts/") return conceptsPage(db, site, params);
+  if (pathname === "/works" || pathname === "/works/") return worksPage(db, site, params);
+  let m = /^\/collections\/([^/]+)$/.exec(pathname);
+  if (m) return collectionPage(db, site, decoded(m[1]));
+  m = /^\/concepts\/([^/]+)$/.exec(pathname);
   if (m) return conceptPage(db, site, decoded(m[1]));
   m = /^\/sets\/([^/]+)$/.exec(pathname);
   if (m) return setPage(db, site, decoded(m[1]));

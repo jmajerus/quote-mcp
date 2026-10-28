@@ -415,8 +415,7 @@ its `/quotes`, and filters `/api/graph` by each concept's `scheme`, so
   resolves outside the folder is 404; `index.html` is revalidated on every
   load, and files with a build hash in their names are cached for a year.
   Without `QUOTE_MAP_DIR`, `/map/` is 404.
-- **Concept sets** (built 2026-10-28). Named parts of one scheme (SKOS
-  collections), so a map can show less than a whole scheme, search can stay
+- **Concept sets** (built 2026-10-28). Named parts of one scheme, so a map can show less than a whole scheme, search can stay
   within one, and themes (quote-atlas's plan) have something to draw on.
   They're editorial, so they live here, not in quote-atlas, and in a file in
   git (`vocab/sets.json`, or `QUOTE_SETS`), not the store, so they're
@@ -468,9 +467,23 @@ server has public pages, off unless they're turned on.
 - **Separate code.** The public pages have their own renderer and queries
   that return only public fields. They don't reuse the admin pages with parts
   hidden, so a field added to the admin pages can't leak.
+- **Collections.** A collection is a concept scheme as readers see it: the
+  human side of work is one, and quotes from books in other fields would go
+  in others, each a scheme with its own concepts. Its concepts decide what's
+  in it, so a work quoted in two collections is in both. Each has a page at
+  `/collections/<scheme>` (its introduction from
+  `vocab/collections/<scheme>.md`, else the scheme's label and description;
+  its counts, maps, and sets; its concepts and works), and the concept and
+  work lists take `?collection=`. Concept sets are starting points within a
+  collection, not collections themselves. "Collection" is the readers' word
+  only; in the code and the store it stays a scheme, and Zotero's
+  collections are always called that in full. A per-collection switch to keep
+  one private can come when there's a second collection to need it.
 - **Pages.**
-  - The front page: the owner's title and a short introduction from a
-    Markdown file kept with the sets (`vocab/site.md`), then the counts.
+  - The front page: the owner's title and a short introduction for the whole
+    site (`vocab/site.md`), then the counts. With several collections, a card
+    for each (its introduction's first paragraph and counts) and a note of
+    quotes not yet tagged, so in no collection; with one, it's shown inline.
   - Ways in: the maps (from `/map/maps.json`), the concept sets and later
     the themes, and a search box.
   - Concepts A to Z with quote counts, a page per concept (definition,
@@ -544,7 +557,7 @@ server has public pages, off unless they're turned on.
 6. **Corpus quotes.** The anchor split and migration described above.
 7. **The public site.** In this order: the `catalogue` level (front page,
    concepts, sets, works, the maps menu) with `QUOTE_PUBLIC_PORT` (built
-   2026-10-28, `src/site.ts`; the public port answers 404 for
+   2026-10-28, `src/site.ts`, with collections; the public port answers 404 for
    `/api/concepts/:slug/quotes` until the quotes level cuts it to public
    fields); then the
    `quotes` level (quote pages, "cite this", search); then `/site.json` and
