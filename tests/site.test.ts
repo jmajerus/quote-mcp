@@ -6,10 +6,14 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type DB, openDb } from "../src/db.js";
 import type { DrupalSite } from "../src/drupal.js";
 import { runImport } from "../src/import.js";
+import Database from "better-sqlite3";
+import { readIntro } from "../src/intro.js";
+import { Published, snapshotReader } from "../src/published.js";
 import { servePublic, serveHttp } from "../src/server.js";
 import type { ConceptSet } from "../src/sets.js";
 import { bibtex, plainText, quoteHtml } from "../src/public.js";
-import { type SiteOptions, readIntro, renderSite } from "../src/site.js";
+import { renderSite } from "../src/site.js";
+import { type SnapshotOptions, buildSnapshot, readMapsFile } from "../src/snapshot.js";
 
 const PRIMARY = "users/1";
 
@@ -38,14 +42,19 @@ let db: DB;
 let mapDir: string;
 const servers: http.Server[] = [];
 
-function site(rest: Partial<SiteOptions> = {}): SiteOptions {
-  const sets: ConceptSet[] = [{ slug: "harm", scheme: "human-work", label: "Harm", description: "Abuse and what it includes", narrower: ["abuse"] }];
-  return { level: "catalogue", notes: false, intro: readIntro("# Work quotes\n\nQuotes about work."), collections: {}, mapDir, sets, ...rest };
+const SETS: ConceptSet[] = [{ slug: "harm", scheme: "human-work", label: "Harm", description: "Abuse and what it includes", narrower: ["abuse"] }];
+let built = 0;
+
+/** A snapshot of the test store with these settings, opened as the public pages read it. */
+function site(rest: Partial<SnapshotOptions> = {}): Published {
+  const file = path.join(mapDir, `public-${built++}.db`);
+  buildSnapshot(db, { level: "catalogue", notes: false, intro: readIntro("# Work quotes\n\nQuotes about work."), collections: {}, sets: SETS, maps: readMapsFile(mapDir), ...rest }, file);
+  return new Published(new Database(file, { readonly: true }));
 }
 
-async function start(options: Partial<SiteOptions>, publicPort = true) {
-  const s = site(options);
-  const base = { host: "127.0.0.1", port: 0, mapDir, sets: s.sets, site: s };
+async function start(options: Partial<SnapshotOptions> | null, publicPort = true) {
+  const published = options && site(options);
+  const base = { host: "127.0.0.1", port: 0, mapDir, sets: SETS, snapshot: published ? () => published : undefined };
   const url = (server: http.Server) => {
     const a = server.address();
     return `http://127.0.0.1:${typeof a === "object" && a ? a.port : 0}`;
@@ -53,7 +62,7 @@ async function start(options: Partial<SiteOptions>, publicPort = true) {
   const lan = await serveHttp(db, base);
   servers.push(lan);
   if (!publicPort) return { lan: url(lan), pub: "" };
-  const pub = await servePublic(db, base);
+  const pub = await servePublic(base);
   servers.push(pub);
   return { lan: url(lan), pub: url(pub) };
 }
@@ -99,7 +108,7 @@ describe("the introduction", () => {
 
 describe("the catalogue level", () => {
   it("shows the front page: introduction, counts, maps, sets, and ways to browse", () => {
-    const html = renderSite(db, site(), "/")!;
+    const html = renderSite(site(), "/")!;
     expect(html).toContain("<h1>Work quotes</h1>");
     expect(html).toContain("<p>Quotes about work.</p>");
     expect(html).toContain("3 quotes from 2 works, tagged with 3 concepts.");
@@ -108,34 +117,34 @@ describe("the catalogue level", () => {
   });
 
   it("lists concepts, sets, and works, with counts of public quotes only", () => {
-    expect(renderSite(db, site(), "/concepts/abuse")).toContain("2 quotes, with its narrower concepts");
-    expect(renderSite(db, site(), "/concepts/abuse")).toContain('href="/map/human-work/#/concept/abuse"');
-    expect(renderSite(db, site(), "/concepts/mobbing")).toContain("In <a href=\"/sets/harm\">Harm</a>");
-    expect(renderSite(db, site(), "/sets/harm")).toMatch(/abuse<\/a> <span class="count">1<\/span>.*mobbing<\/a> <span class="count">1<\/span>/s);
-    const works = renderSite(db, site(), "/works")!;
+    expect(renderSite(site(), "/concepts/abuse")).toContain("2 quotes, with its narrower concepts");
+    expect(renderSite(site(), "/concepts/abuse")).toContain('href="/map/human-work/#/concept/abuse"');
+    expect(renderSite(site(), "/concepts/mobbing")).toContain("In <a href=\"/sets/harm\">Harm</a>");
+    expect(renderSite(site(), "/sets/harm")).toMatch(/abuse<\/a> <span class="count">1<\/span>.*mobbing<\/a> <span class="count">1<\/span>/s);
+    const works = renderSite(site(), "/works")!;
     expect(works.indexOf("Davenport")).toBeLessThan(works.indexOf("Doe"));
-    expect(renderSite(db, site(), `/works/${workId("Mobbing")}`)).toContain("2 quotes");
+    expect(renderSite(site(), `/works/${workId("Mobbing")}`)).toContain("2 quotes");
   });
 
   it("shows no quoted text and no notes", () => {
     for (const p of pages()) {
-      const html = renderSite(db, site(), p)!;
+      const html = renderSite(site(), p)!;
       for (const words of [...QUOTED, SHARED_NOTE, PRIVATE_NOTE]) expect(html, `${p} shows "${words}"`).not.toContain(words);
     }
   });
 
   it("answers null or a not-found for what isn't there", () => {
-    expect(renderSite(db, site(), "/nowhere")).toBeNull();
-    expect(() => renderSite(db, site(), "/concepts/nothing")).toThrow();
-    expect(() => renderSite(db, site(), "/sets/nothing")).toThrow();
-    expect(() => renderSite(db, site(), "/works/99999")).toThrow();
-    expect(renderSite(db, site({ level: "none" }), "/")).toBeNull();
+    expect(renderSite(site(), "/nowhere")).toBeNull();
+    expect(() => renderSite(site(), "/concepts/nothing")).toThrow();
+    expect(() => renderSite(site(), "/sets/nothing")).toThrow();
+    expect(() => renderSite(site(), "/works/99999")).toThrow();
+    expect(() => site({ level: "none" })).toThrow(/nothing to publish/);
   });
 
   it("counts shared notes at the quotes level, but not private ones", () => {
-    expect(renderSite(db, site({ level: "quotes", notes: true }), "/")).toContain("4 quotes and notes from 2 works");
-    expect(renderSite(db, site({ level: "quotes" }), "/")).toContain("3 quotes from 2 works");
-    expect(renderSite(db, site({ level: "catalogue", notes: true }), "/")).toContain("3 quotes from 2 works");
+    expect(renderSite(site({ level: "quotes", notes: true }), "/")).toContain("4 quotes and notes from 2 works");
+    expect(renderSite(site({ level: "quotes" }), "/")).toContain("3 quotes from 2 works");
+    expect(renderSite(site({ level: "catalogue", notes: true }), "/")).toContain("3 quotes from 2 works");
   });
 });
 
@@ -156,7 +165,7 @@ describe("collections", () => {
   const intros = { "human-work": readIntro("# The human side of work\n\nWhat work does to people.\n\nSince 2014.") };
 
   it("lists the collections on the front page, each with its introduction's first paragraph and counts", () => {
-    const html = renderSite(db, site({ collections: intros }), "/")!;
+    const html = renderSite(site({ collections: intros }), "/")!;
     expect(html).toContain("<h2>Collections</h2>");
     expect(html).toMatch(/href="\/collections\/ethics"><h3>Ethics<\/h3>\s*<p>Right and wrong<\/p><p class="count">1 quote · 1 work · 1 concept<\/p>/);
     expect(html).toMatch(/href="\/collections\/human-work"><h3>The human side of work<\/h3>\s*<p>What work does to people.<\/p><p class="count">3 quotes · 2 works · 3 concepts<\/p>/);
@@ -164,35 +173,35 @@ describe("collections", () => {
   });
 
   it("gives each collection a page with its own maps, sets, and filtered lists", () => {
-    const work = renderSite(db, site({ collections: intros }), "/collections/human-work")!;
+    const work = renderSite(site({ collections: intros }), "/collections/human-work")!;
     expect(work).toContain("<h1>The human side of work</h1>");
     expect(work).toContain("Since 2014");
     expect(work).toContain('href="/map/human-work/"');
     expect(work).toContain('href="/sets/harm"');
     expect(work).toContain('href="/concepts?collection=human-work"');
-    const ethics = renderSite(db, site({ collections: intros }), "/collections/ethics")!;
+    const ethics = renderSite(site({ collections: intros }), "/collections/ethics")!;
     expect(ethics).toContain("<p>Right and wrong</p>");
     expect(ethics).not.toContain("/map/human-work/");
     expect(ethics).not.toContain("/sets/harm");
-    const concepts = renderSite(db, site(), "/concepts", new URLSearchParams("collection=ethics"))!;
+    const concepts = renderSite(site(), "/concepts", new URLSearchParams("collection=ethics"))!;
     expect(concepts).toContain("respect");
     expect(concepts).not.toContain("mobbing");
-    const works = renderSite(db, site(), "/works", new URLSearchParams("collection=ethics"))!;
+    const works = renderSite(site(), "/works", new URLSearchParams("collection=ethics"))!;
     expect(works).toContain("A Book Nobody Filed");
     expect(works).not.toContain("Davenport");
-    expect(renderSite(db, site(), "/concepts/respect")).toContain('href="/collections/ethics"');
-    expect(() => renderSite(db, site(), "/collections/nothing")).toThrow();
-    expect(() => renderSite(db, site(), "/works", new URLSearchParams("collection=nothing"))).toThrow();
+    expect(renderSite(site(), "/concepts/respect")).toContain('href="/collections/ethics"');
+    expect(() => renderSite(site(), "/collections/nothing")).toThrow();
+    expect(() => renderSite(site(), "/works", new URLSearchParams("collection=nothing"))).toThrow();
   });
 });
 
 describe("one collection", () => {
   it("shows it inline on the front page, under its own heading when it has an introduction", () => {
-    const html = renderSite(db, site({ collections: { "human-work": readIntro("# The human side of work\n\nWhat work does to people.") } }), "/")!;
+    const html = renderSite(site({ collections: { "human-work": readIntro("# The human side of work\n\nWhat work does to people.") } }), "/")!;
     expect(html).not.toContain("<h2>Collections</h2>");
     expect(html).toContain("<h2>The human side of work</h2>");
     expect(html).toContain('href="/concepts"');
-    expect(renderSite(db, site(), "/")).not.toContain("<h2>The human side of work</h2>");
+    expect(renderSite(site(), "/")).not.toContain("<h2>The human side of work</h2>");
   });
 });
 
@@ -223,11 +232,11 @@ describe("serving the public site", () => {
   });
 
   it("redirects / to /admin with no public site, and refuses a public port", async () => {
-    const { lan } = await start({ level: "none" }, false);
+    const { lan } = await start(null, false);
     const res = await fetch(`${lan}/`, { redirect: "manual" });
     expect(res.status).toBe(302);
     expect((await fetch(`${lan}/concepts`)).status).toBe(404);
-    expect(() => servePublic(db, { host: "127.0.0.1", port: 0, site: site({ level: "none" }) })).toThrow(/QUOTE_PUBLIC/);
+    expect(() => servePublic({ host: "127.0.0.1", port: 0 })).toThrow(/QUOTE_PUBLIC/);
   });
 });
 
@@ -248,52 +257,52 @@ describe("old-site markup in quote text", () => {
 });
 
 describe("the quotes level", () => {
-  const quotes = (rest: Partial<SiteOptions> = {}) => site({ level: "quotes", ...rest });
+  const quotes = (rest: Partial<SnapshotOptions> = {}) => site({ level: "quotes", ...rest });
   const id = (fragment: string) => db.prepare("SELECT id FROM quotes WHERE text LIKE ? OR comment LIKE ?").pluck().get(`%${fragment}%`, `%${fragment}%`) as number;
 
   it("gives each quote a page with its source, concepts, and how to cite it", () => {
-    const html = renderSite(db, quotes(), `/quotes/${id("emotional assault")}`)!;
+    const html = renderSite(quotes(), `/quotes/${id("emotional assault")}`)!;
     expect(html).toContain("<blockquote>Mobbing is an emotional assault.</blockquote>");
     expect(html).toContain(`<a href="/works/${workId("Mobbing")}"><cite>Mobbing: emotional abuse in the American workplace</cite></a> (1999), p. 40`);
     expect(html).toContain('href="/concepts/mobbing"');
     expect(html).toContain("<code>[@davenport1999mobbing, p. 40]</code>");
     expect(html).toContain("@book{davenport1999mobbing,");
-    const unfiled = renderSite(db, quotes(), `/quotes/${id("deserves dignity")}`)!;
+    const unfiled = renderSite(quotes(), `/quotes/${id("deserves dignity")}`)!;
     expect(unfiled).toContain("isn't filed in Zotero");
     expect(unfiled).toContain("@book{work-");
   });
 
   it("lists quotes on concept, set, and work pages, and the newest on the front page", () => {
-    expect(renderSite(db, quotes(), "/concepts/abuse")).toMatch(/Mobbing is an emotional assault[\s\S]*Abuse at work rarely|Abuse at work rarely[\s\S]*Mobbing is an emotional assault/);
-    expect(renderSite(db, quotes(), "/sets/harm")).toContain("Abuse at work rarely");
-    const work = renderSite(db, quotes(), `/works/${workId("Mobbing")}`)!;
+    expect(renderSite(quotes(), "/concepts/abuse")).toMatch(/Mobbing is an emotional assault[\s\S]*Abuse at work rarely|Abuse at work rarely[\s\S]*Mobbing is an emotional assault/);
+    expect(renderSite(quotes(), "/sets/harm")).toContain("Abuse at work rarely");
+    const work = renderSite(quotes(), `/works/${workId("Mobbing")}`)!;
     expect(work.indexOf("Abuse at work rarely")).toBeLessThan(work.indexOf("Mobbing is an emotional assault"));
     expect(work).toContain("Cite as <code>[@davenport1999mobbing]</code>");
-    const front = renderSite(db, quotes(), "/")!;
+    const front = renderSite(quotes(), "/")!;
     expect(front).toContain("<h2>Recently added</h2>");
     expect(front).toContain('action="/search"');
   });
 
   it("searches what quotes say, a page at a time", () => {
-    const html = renderSite(db, quotes(), "/search", new URLSearchParams("q=assault"))!;
+    const html = renderSite(quotes(), "/search", new URLSearchParams("q=assault"))!;
     expect(html).toContain("<mark>assault</mark>");
     expect(html).toContain("1–1 of 1 quote");
-    expect(renderSite(db, quotes(), "/search", new URLSearchParams("q=forty-five"))).toContain("None yet.");
-    expect(renderSite(db, quotes(), "/search", new URLSearchParams('q="'))).toContain("no words to look for");
-    expect(renderSite(db, quotes(), "/search")).not.toContain('class="quotes"');
+    expect(renderSite(quotes(), "/search", new URLSearchParams("q=forty-five"))).toContain("None yet.");
+    expect(renderSite(quotes(), "/search", new URLSearchParams('q="'))).toContain("no words to look for");
+    expect(renderSite(quotes(), "/search")).not.toContain('class="quotes"');
   });
 
   it("keeps notes private unless they're shared, and private-tagged notes always", () => {
     const shared = id(SHARED_NOTE), hidden = id(PRIVATE_NOTE);
-    expect(() => renderSite(db, quotes(), `/quotes/${shared}`)).toThrow();
-    expect(renderSite(db, quotes({ notes: true }), `/quotes/${shared}`)).toContain(SHARED_NOTE);
-    expect(() => renderSite(db, quotes({ notes: true }), `/quotes/${hidden}`)).toThrow();
-    expect(renderSite(db, quotes({ notes: true }), "/search", new URLSearchParams("q=forty-five"))).toContain("1–1 of 1 quote or note");
-    expect(renderSite(db, quotes({ notes: true }), "/search", new URLSearchParams("q=harsh"))).toContain("None yet.");
+    expect(() => renderSite(quotes(), `/quotes/${shared}`)).toThrow();
+    expect(renderSite(quotes({ notes: true }), `/quotes/${shared}`)).toContain(SHARED_NOTE);
+    expect(() => renderSite(quotes({ notes: true }), `/quotes/${hidden}`)).toThrow();
+    expect(renderSite(quotes({ notes: true }), "/search", new URLSearchParams("q=forty-five"))).toContain("1–1 of 1 quote or note");
+    expect(renderSite(quotes({ notes: true }), "/search", new URLSearchParams("q=harsh"))).toContain("None yet.");
     for (const p of [...pages(), "/search?q=her"]) {
       const [path, query] = p.split("?");
       for (const notes of [false, true]) {
-        const html = renderSite(db, quotes({ notes }), path, new URLSearchParams(query))!;
+        const html = renderSite(quotes({ notes }), path, new URLSearchParams(query))!;
         expect(html, p).not.toContain(PRIVATE_NOTE);
         if (!notes) expect(html, p).not.toContain(SHARED_NOTE);
       }
@@ -312,5 +321,71 @@ describe("the quotes level", () => {
     expect(graph.concepts.find((c: { slug: string }) => c.slug === "mobbing").quotes).toBe(1);
     expect((await fetch(`${pub}/quotes/${id("emotional assault")}`)).status).toBe(200);
     expect((await fetch(`${pub}/quotes/${id(SHARED_NOTE)}`)).status).toBe(404);
+  });
+});
+
+describe("the public snapshot", () => {
+  const options = (rest: Partial<SnapshotOptions> = {}): SnapshotOptions =>
+    ({ level: "quotes", notes: false, intro: readIntro("# Work quotes"), collections: {}, sets: SETS, maps: [], ...rest });
+  const build = (rest: Partial<SnapshotOptions> = {}) => {
+    const file = path.join(mapDir, `check-${built++}.db`);
+    const summary = buildSnapshot(db, options(rest), file);
+    return { summary, snap: new Database(file, { readonly: true }), file };
+  };
+  const all = (snap: Database.Database, sql: string) => snap.prepare(sql).all();
+
+  it("holds no words at the catalogue level, only what the pages count", () => {
+    const { snap } = build({ level: "catalogue" });
+    expect(all(snap, "SELECT text, note, comment, locator, chapter_author, attribution, pandoc FROM records WHERE text != '' OR note IS NOT NULL OR comment IS NOT NULL OR locator IS NOT NULL OR chapter_author IS NOT NULL OR attribution IS NOT NULL OR pandoc IS NOT NULL")).toEqual([]);
+    expect(all(snap, "SELECT * FROM records_fts")).toEqual([]);
+    expect(all(snap, "SELECT csl, bibtex FROM works WHERE csl IS NOT NULL OR bibtex IS NOT NULL")).toEqual([]);
+    expect(snap.prepare("SELECT COUNT(*) FROM records").pluck().get()).toBe(3);
+  });
+
+  it("leaves out notes unless they're shared, and private-tagged notes always", () => {
+    expect(all(build().snap, "SELECT id FROM records WHERE kind = 'note'")).toEqual([]);
+    const shared = build({ notes: true }).snap;
+    const notes = all(shared, "SELECT note FROM records WHERE kind = 'note'") as { note: string }[];
+    expect(notes).toHaveLength(1);
+    expect(notes[0].note).toContain(SHARED_NOTE);
+    const dump = JSON.stringify(all(shared, "SELECT * FROM records")) + JSON.stringify(all(shared, "SELECT * FROM records_fts"));
+    expect(dump).not.toContain(PRIVATE_NOTE);
+  });
+
+  it("leaves out unparsed quotes, and has no columns for status, grade, flags, or tags", () => {
+    const id = db.prepare("SELECT id FROM quotes WHERE text LIKE 'Abuse at work%'").pluck().get() as number;
+    db.prepare("UPDATE quotes SET status = 'unparsed' WHERE id = ?").run(id);
+    try {
+      const { snap } = build();
+      expect(snap.prepare("SELECT COUNT(*) FROM records WHERE id = ?").pluck().get(id)).toBe(0);
+      const columns = (snap.prepare("SELECT name FROM pragma_table_info('records')").pluck().all() as string[]);
+      for (const private_ of ["status", "grade", "flags", "suspects", "tags", "source_url", "edited"]) expect(columns).not.toContain(private_);
+    } finally {
+      db.prepare("UPDATE quotes SET status = 'transcribed' WHERE id = ?").run(id);
+    }
+  });
+
+  it("tidies the old site's markup and keeps what citing needs", () => {
+    const { snap } = build();
+    const r = snap.prepare("SELECT r.text, r.locator, r.pandoc, w.citekey, w.bibtex FROM records r JOIN works w ON w.id = r.work_id WHERE r.text LIKE 'Mobbing is%'").get() as Record<string, string>;
+    expect(r).toMatchObject({ text: "Mobbing is an emotional assault.", locator: "p. 40", pandoc: "[@davenport1999mobbing, p. 40]", citekey: "davenport1999mobbing" });
+    expect(r.bibtex).toMatch(/^@book\{davenport1999mobbing,/);
+  });
+
+  it("gives the same hash for the same content, and a new one when it changes", () => {
+    const a = build().summary.hash, b = build().summary.hash;
+    expect(a).toBe(b);
+    expect(build({ level: "catalogue" }).summary.hash).not.toBe(a);
+    expect(build({ intro: readIntro("# Other title") }).summary.hash).not.toBe(a);
+  });
+
+  it("is reread by the preview when a rebuild replaces it", () => {
+    const file = path.join(mapDir, "replaced.db");
+    buildSnapshot(db, options({ intro: readIntro("# First") }), file);
+    const read = snapshotReader(file);
+    expect(read()!.site.title).toBe("First");
+    buildSnapshot(db, options({ intro: readIntro("# Second") }), file);
+    expect(read()!.site.title).toBe("Second");
+    expect(snapshotReader(path.join(mapDir, "missing.db"))()).toBeNull();
   });
 });

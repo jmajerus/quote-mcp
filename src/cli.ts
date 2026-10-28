@@ -8,8 +8,11 @@ import { drupalUrl, loadDrupal } from "./drupal.js";
 import { exportAll } from "./export.js";
 import { runImport } from "./import.js";
 import { loadDictionary } from "./ocr.js";
+import { loadCollections, loadIntro } from "./intro.js";
+import { LEVELS, type Level } from "./public.js";
+import { snapshotReader } from "./published.js";
 import { type ConceptSet, listSets, loadSets } from "./sets.js";
-import { LEVELS, type Level, type SiteOptions, loadCollections, loadIntro } from "./site.js";
+import { type SnapshotOptions, buildSnapshot, readMapsFile } from "./snapshot.js";
 import { syncLibrary } from "./sync.js";
 import { ZoteroClient, zoteroConfig } from "./zotero.js";
 
@@ -22,8 +25,11 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *   quote-mcp export [--out file]      Everything as JSON (stdout by default).
  *   quote-mcp backup [--dir data/backups] [--keep 14]
  *   quote-mcp stats
- *   quote-mcp serve                     MCP over HTTP at /mcp, the admin pages, the JSON API at /api, and the
- *                                       concept map at /map/ (QUOTE_HOST, QUOTE_PORT, QUOTE_MAP_DIR).
+ *   quote-mcp serve                     MCP over HTTP at /mcp, the admin pages, the JSON API at /api, the
+ *                                       concept map at /map/, and the public site's preview at / (QUOTE_HOST,
+ *                                       QUOTE_PORT, QUOTE_MAP_DIR, QUOTE_PUBLIC, QUOTE_PUBLIC_PORT).
+ *   quote-mcp publish --dry-run        Builds the public snapshot (QUOTE_SNAPSHOT, by default public.db beside
+ *                                       the store), which the preview reads; an import also builds it.
  *   quote-mcp stdio                     MCP over stdio, for local clients and tests.
  */
 
@@ -60,6 +66,8 @@ async function importCommand() {
     `Skipped: ${Object.entries(s.skipped).map(([k, n]) => `${n} ${k}`).join(", ") || "nothing"}.`,
     `Tags not in a concept scheme: ${s.unresolvedTags.length}${s.unresolvedTags.length ? ` (${s.unresolvedTags.slice(0, 25).map(([t, n]) => `${t} ${n}`).join(", ")}${s.unresolvedTags.length > 25 ? ", …" : ""})` : ""}.`,
   ].join("\n"));
+  const publish = snapshotOptions();
+  if (publish) console.log(snapshotLine(buildSnapshot(db, publish, snapshotFile())));
 }
 
 function exportCommand() {
@@ -100,26 +108,48 @@ function sets(): ConceptSet[] {
   return existsSync(vocab("sets.json")) ? loadSets(vocab("sets.json")) : [];
 }
 
+/** QUOTE_PUBLIC: what the public snapshot holds. */
+function level(): Level {
+  const value = (process.env.QUOTE_PUBLIC || "none") as Level;
+  if (!LEVELS.includes(value)) throw new Error(`QUOTE_PUBLIC is "${value}"; it should be ${LEVELS.join(", ")}.`);
+  return value;
+}
+
+/** The public snapshot's file: QUOTE_SNAPSHOT, or public.db beside the store. */
+const snapshotFile = () => process.env.QUOTE_SNAPSHOT || join(dirname(process.env.QUOTE_DB ?? "data/quotes.db"), "public.db");
+
 /**
- * The public site's settings: QUOTE_PUBLIC, QUOTE_PUBLIC_NOTES, the introduction in QUOTE_INTRO or vocab/site.md,
- * and each collection's beside it in collections/<scheme>.md.
+ * What goes into the public snapshot, or null with QUOTE_PUBLIC=none: the level, QUOTE_PUBLIC_NOTES, the
+ * introduction in QUOTE_INTRO or vocab/site.md and each collection's in collections/<scheme>.md beside it,
+ * the concept sets, and the maps in QUOTE_MAP_DIR's maps.json.
  */
-function site(mapDir: string | undefined, conceptSets: ConceptSet[]): SiteOptions {
-  const level = (process.env.QUOTE_PUBLIC || "none") as Level;
-  if (!LEVELS.includes(level)) throw new Error(`QUOTE_PUBLIC is "${level}"; it should be ${LEVELS.join(", ")}.`);
+function snapshotOptions(): SnapshotOptions | null {
+  const public_ = level();
+  if (public_ === "none") return null;
   const notes = process.env.QUOTE_PUBLIC_NOTES || "none";
   if (notes !== "none" && notes !== "all") throw new Error(`QUOTE_PUBLIC_NOTES is "${notes}"; it should be none or all.`);
   const intro = process.env.QUOTE_INTRO || vocab("site.md");
-  return { level, notes: notes === "all", intro: loadIntro(intro), collections: loadCollections(join(dirname(intro), "collections")), mapDir, sets: conceptSets };
+  return { level: public_, notes: notes === "all", intro: loadIntro(intro), collections: loadCollections(join(dirname(intro), "collections")),
+    sets: sets(), maps: readMapsFile(process.env.QUOTE_MAP_DIR || undefined) };
+}
+
+const snapshotLine = (s: ReturnType<typeof buildSnapshot>) =>
+  `Public snapshot (${s.level}): ${s.records} records, ${s.works} works, ${s.concepts} concepts, ${s.sets} sets, ${s.maps} maps, written to ${s.file} (${s.hash.slice(0, 12)}).`;
+
+/** Builds the public snapshot; sending it to the Worker comes later, so for now only --dry-run. */
+function publishCommand() {
+  const options = snapshotOptions();
+  if (!options) throw new Error("QUOTE_PUBLIC is none, so there's nothing to publish.");
+  if (!flag("--dry-run")) throw new Error("Sending the snapshot to the public Worker isn't built yet; use --dry-run to build it for the preview.");
+  console.log(snapshotLine(buildSnapshot(openReadOnly(), options, snapshotFile())));
 }
 
 async function serveCommand() {
-  const mapDir = process.env.QUOTE_MAP_DIR || undefined;
   const conceptSets = sets();
-  const options = { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010), mapDir, sets: conceptSets, site: site(mapDir, conceptSets) };
-  const db = openReadOnly();
-  await serveHttp(db, options);
-  if (process.env.QUOTE_PUBLIC_PORT) await servePublic(db, { ...options, port: Number(process.env.QUOTE_PUBLIC_PORT) });
+  const snapshot = level() === "none" ? undefined : snapshotReader(snapshotFile());
+  const options = { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010), mapDir: process.env.QUOTE_MAP_DIR || undefined, sets: conceptSets, snapshot };
+  await serveHttp(openReadOnly(), options);
+  if (process.env.QUOTE_PUBLIC_PORT) await servePublic({ ...options, port: Number(process.env.QUOTE_PUBLIC_PORT) });
 }
 
 /** Each concept set as the store has it now; fails when a set names a concept the scheme doesn't have. */
@@ -135,7 +165,7 @@ function migrateCommand() {
 }
 
 const commands: Record<string, () => unknown> = {
-  import: importCommand, migrate: migrateCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, sets: setsCommand, serve: serveCommand,
+  import: importCommand, migrate: migrateCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, sets: setsCommand, publish: publishCommand, serve: serveCommand,
   stdio: () => serveStdio(openReadOnly(), sets()),
 };
 const command = commands[process.argv[2] ?? ""];

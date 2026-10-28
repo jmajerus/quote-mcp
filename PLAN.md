@@ -530,25 +530,32 @@ server has public pages, off unless they're turned on.
     no CORS, and when the other site is down at publish time the previous
     links are kept.
 
-### Hosting the public site: a snapshot in D1, served by a Worker
+### Hosting the public site: a replica in D1, served by a Worker
 
 Decided 2026-10-28, on concept-clusters' model (a Worker with static
-assets and D1). The public site moves off the LAN. The LXC stays the source
-of truth for the store, import, MCP, and the admin pages; what's public is
-copied out as a snapshot, and a Worker serves it.
+assets and D1, and a published replica fed by a queue). The public site
+moves off the LAN. The LXC stays the source of truth for the store, import,
+MCP, and the admin pages; what's public is built as a local snapshot, its
+changed rows are queued, and a drain copies them to D1, which a Worker
+serves and never writes.
 
 - **Why.** Only what's published leaves the LAN: notes not shared,
   comments, unparsed quotes, flags, and history are never in the snapshot,
   so no bug in the Worker can show them. Public traffic never reaches the
   home server, the site stays up when the LAN or the tunnel is down, and
   Cloudflare caches it near readers. The cost is a second runtime and a site
-  only as fresh as the last publish, which suits a collection that changes
-  daily at most.
-- **The snapshot.** A SQLite database of public records only, built by
-  `quote-mcp publish` from the store with `src/public.ts`'s rules (the level
-  and notes settings decide what goes in, as now). Its tables:
-  - `meta`: the snapshot's version, generation, when it was built, from
-    which commit, its level, and a content hash.
+  a little behind the store: seconds after a snapshot is rebuilt, which
+  happens after each import (every 30 minutes) and on deploy.
+- **The snapshot** (built 2026-10-28, `src/snapshot.ts`). A SQLite database
+  of public records only, built from the store with `src/public.ts`'s rules
+  (the level and notes settings decide what goes in) and written beside the
+  store as `public.db`, renamed into place so a reader never sees half of
+  it. At the catalogue level records are copied with no words, only their
+  kind, work, and concepts, so pages can count them. It's the replica's
+  desired state. Its tables:
+  - `meta`: the snapshot's version, level, notes setting, when it was built,
+    and a content hash (of everything but the build time), so an unchanged
+    snapshot is recognised.
   - `intros`: the site's and each collection's title, HTML, and summary.
   - `schemes`, `concepts` (slug, label, alternative labels, definition,
     status, source), and `relations`.
@@ -558,31 +565,44 @@ copied out as a snapshot, and a Worker serves it.
     work, added), and `record_concepts`.
   - `records_fts`, FTS5 over the public text only, so search can't match
     words that aren't shown.
-  - `sets` and `set_concepts`, recipes resolved at publish time; `maps`,
-    from quote-atlas's `maps.json`; and `links`, the other sites' key lists.
-- **One renderer.** `src/site.ts` reads the snapshot's schema through a
-  small async store interface, with two adapters: better-sqlite3 on the LAN
-  and D1 in the Worker. The rules for what's public live only in the
+  - `sets` and `set_concepts`, recipes resolved when the snapshot is built;
+    `maps`, from quote-atlas's `maps.json`; and later `links`, the other
+    sites' key lists.
+- **One renderer.** `src/site.ts` and the public API read the snapshot's
+  schema only (`src/published.ts`), never the store. Next, that goes behind
+  a small async store interface, with two adapters: better-sqlite3 on the
+  LAN and D1 in the Worker. The rules for what's public live only in the
   builder. The pages, search, the map's API, and `site.json` are the same
   code on both.
-- **The LAN preview.** `http://quote-mcp.localdomain:8000/` serves the
-  snapshot the next publish would send (`data/public.db`, rebuilt by
-  `publish --dry-run` or after each import), so the site can be checked
-  before it goes out.
-- **Publishing.** The Worker has a `POST /_publish` endpoint that takes the
-  snapshot in batches with a bearer token (a Worker secret, and
-  `QUOTE_PUBLISH_URL` and `QUOTE_PUBLISH_TOKEN` in `/etc/quote-mcp/env`), as
-  concept-clusters' d1-proxy does. Rows are written under a new generation
-  and `meta` switches to it in one statement, so readers see the old site or
-  the new one, never half of each; then the old generation is deleted. A
-  publish whose hash matches the last one is skipped, so it can run after
-  every import (a systemd timer after `quote-import`) and send nothing most
-  of the time.
+- **The LAN preview** (built 2026-10-28). `http://quote-mcp.localdomain:8000/`
+  serves the snapshot (rebuilt by `quote-mcp publish --dry-run`, after each
+  import, and on deploy), reread when it's replaced, so the site can be
+  checked as it will go out. Without one yet, `/` says how to build it.
+- **The queue and the drain** (concept-clusters' `publishedReplica`). D1 is
+  only a replica, kept in step by rows:
+  - After the snapshot is rebuilt, each row is compared with what was last
+    shipped (by table, key, and a hash of the row, kept beside the store),
+    and each new, changed, or removed row is queued, keyed by table and key,
+    so a later change replaces a pending one.
+  - A drain on the LXC (every 15 seconds, as concept-clusters' does) ships
+    queued rows to D1 as idempotent batches (upserts, and deletes for removed
+    rows), through the D1 HTTP API or a d1-proxy Worker, in dependency order:
+    schemes, concepts, relations, works, records and their FTS rows,
+    record_concepts, sets, set_concepts, maps, intros, meta; removals go in
+    reverse. A queued row is cleared only if its hash still matches what was
+    shipped; a failure leaves it queued for the next tick, so an outage just
+    leaves the queue waiting.
+  - Nothing writes D1 but the drain. A reader may see a drain's rows arrive
+    over a few seconds, but never a reference to a row that isn't there yet.
+  - Settings: the D1 database and an API token (or the proxy's URL and
+    token) in `/etc/quote-mcp/env`. Phase 2's edits can later queue rows in
+    the same transaction as the edit, as concept-clusters does, rather than
+    waiting for a rebuild.
 - **The Worker.** In this repo (`worker/`, its own `wrangler.jsonc`), on its
   own hostname, with no Access. It serves the pages and the map's API
   (`/api/graph`, `/api/concepts/…`, `/api/sets/…`) from D1, read-only, and
   `site.json` and the key list. Public pages get `cache-control` for the
-  edge, and each publish changes the generation, which the ETag carries.
+  edge, with the snapshot's hash in the ETag.
 - **The maps.** quote-atlas's build needs the same origin as the API. Both
   sessions prefer that quote-atlas deploys its own assets-only Worker on a
   `quotes.majerus.us/map/*` route, so its deploys stay its own (its user is
@@ -601,11 +621,11 @@ copied out as a snapshot, and a Worker serves it.
   - The map needs `/api/graph`, `/api/concepts/<scheme>:<slug>` and its
     `/quotes` (`limit`, `offset`, `narrower`), and `/api/sets/<slug>` for a
     map with a set, in the shapes the public port gives today.
-- **What retires.** The public port's API cut and filtering per request
-  (`servePublic` and the `pub` branch in `src/api.ts`). The public port
-  itself stays as the option for people without Cloudflare, re-based on the
-  snapshot: it serves `data/public.db` and nothing else, so it can't leak
-  either. The LAN's private `/api` is unchanged.
+- **What retired** (2026-10-28). Filtering the store per request on the
+  public port. The public port stays as the option for people without
+  Cloudflare, re-based on the snapshot: it serves `public.db` and the map and
+  nothing else, so it can't leak either. The LAN's private `/api` is
+  unchanged.
 - **corpus-mcp** would follow the same model: a catalogue snapshot (titles,
   authors, subjects, shelves, citekeys, Zotero item keys) in its own D1 and
   Worker, with book text and page images never leaving the LAN.
@@ -655,10 +675,11 @@ copied out as a snapshot, and a Worker serves it.
    `src/public.ts` deciding what a record may show, and the public port's
    map API cut to public records and counts). Then the move to a Worker
    and D1 ("Hosting the public site"), in this order: the snapshot builder
-   and `publish --dry-run`, with the LAN preview reading it; `src/site.ts`
-   behind the async store interface; the Worker under `wrangler dev` with a
-   local D1, and `POST /_publish`; then `/site.json`, the key list, and the
-   links with corpus-mcp. Creating the D1 database, the Worker, its secret,
+   and `publish --dry-run`, with the LAN preview and the public port reading
+   it (built 2026-10-28); `src/site.ts` behind the async store interface; the
+   Worker under `wrangler dev` with a local D1; the queue and the drain; then
+   `/site.json`, the key list, and the links with corpus-mcp, whose rows are
+   queued like any other when the other site's key list changes. Creating the D1 database, the Worker, its secret,
    and the hostname, and the first deploy, are the user's.
 
 ## Open questions

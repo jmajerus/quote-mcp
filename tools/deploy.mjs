@@ -114,6 +114,8 @@ if [ ! -f "$QUOTE_DB" ]; then
 else
   ${asQuote("migrate")}
 fi
+# The public site's preview reads a snapshot that imports rebuild; build it now so a new build's pages show at once.
+if [ -n "\${QUOTE_PUBLIC:-}" ] && [ "\${QUOTE_PUBLIC}" != none ]; then ${asQuote("publish --dry-run")}; fi
 systemctl enable --quiet quote-mcp.service quote-import.timer quote-backup.timer
 systemctl start quote-import.timer quote-backup.timer
 systemctl restart quote-mcp.service

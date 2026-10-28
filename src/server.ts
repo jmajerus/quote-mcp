@@ -3,11 +3,12 @@ import http from "node:http";
 import path from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { handleApi } from "./api.js";
+import { handleApi, handlePublishedApi } from "./api.js";
 import type { DB } from "./db.js";
 import { serveMap } from "./map.js";
+import type { Published } from "./published.js";
 import type { ConceptSet } from "./sets.js";
-import { type SiteOptions, isSitePath, renderSite } from "./site.js";
+import { isSitePath, renderSite } from "./site.js";
 import { VERSION, createServer } from "./mcp.js";
 import { ToolError, overview } from "./queries.js";
 import { renderAdmin } from "./web.js";
@@ -15,13 +16,14 @@ import { renderAdmin } from "./web.js";
 /**
  * Streamable HTTP at /mcp (stateless: a fresh server per request, JSON responses), the admin pages at
  * /admin, a read-only JSON API at /api (src/api.ts), the concept map's static files at /map/ when
- * QUOTE_MAP_DIR is set (src/map.ts), the public site at / when QUOTE_PUBLIC is set (src/site.ts), and
- * /health. Everything is read-only for now, so nothing here needs an identity; Cloudflare Access guards
- * the private hostname, and phase 2's writes will check its token as corpus-mcp does.
+ * QUOTE_MAP_DIR is set (src/map.ts), a preview of the public site at / when QUOTE_PUBLIC is set
+ * (src/site.ts, read from the public snapshot), and /health. Everything is read-only for now, so nothing
+ * here needs an identity; Cloudflare Access guards the private hostname, and phase 2's writes will check
+ * its token as corpus-mcp does.
  *
- * servePublic is a second listener, for a hostname with no Access in front of it. It routes only the
- * public site, the map, and the API routes the map needs, cut to what's public, and answers 404 for
- * everything else, so what's public is decided here, not by the proxy.
+ * servePublic is a second listener, for a hostname with no Access in front of it, for those who don't
+ * publish to a Worker. It serves the public snapshot and the map and nothing else: no store, so it can
+ * show only what was published.
  */
 
 export interface ServeOptions {
@@ -31,11 +33,11 @@ export interface ServeOptions {
   mapDir?: string;
   /** The concept sets (src/sets.ts), for the API and the MCP tools. */
   sets?: ConceptSet[];
-  /** The public site; without it, or at level none, / redirects to /admin. */
-  site?: SiteOptions;
+  /** The public snapshot, reread when it's rebuilt; without it (QUOTE_PUBLIC=none), / redirects to /admin. */
+  snapshot?: () => Published | null;
 }
 
-/** The API routes the public listener answers, with only what's public (src/public.ts). */
+/** The API routes the public listener answers, from the snapshot. */
 const PUBLIC_API = /^\/api\/(graph|sets|sets\/[^/]+|concepts\/[^/]+(\/quotes)?)$/;
 
 /** What tools/deploy.mjs last installed (branch, commit, when), written beside the store after the restart, so read per request. */
@@ -47,16 +49,23 @@ function readDeployed(): unknown {
   }
 }
 
-/** Answers a site page, or false when the path isn't one. */
-function sitePage(db: DB, options: ServeOptions, req: http.IncomingMessage, res: http.ServerResponse, url: URL): boolean {
-  if (!options.site || options.site.level === "none" || !isSitePath(url.pathname)) return false;
+const NO_SNAPSHOT = "There's no public snapshot yet. Build one with `quote-mcp publish --dry-run`; an import also builds it.";
+
+/** Answers a site page from the snapshot, or false when the path isn't one. */
+function sitePage(options: ServeOptions, req: http.IncomingMessage, res: http.ServerResponse, url: URL): boolean {
+  if (!options.snapshot || !isSitePath(url.pathname)) return false;
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.writeHead(405, { allow: "GET, HEAD" }).end();
     return true;
   }
+  const published = options.snapshot();
+  if (!published) {
+    res.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end(NO_SNAPSHOT);
+    return true;
+  }
   let html: string | null;
   try {
-    html = renderSite(db, options.site, url.pathname, url.searchParams);
+    html = renderSite(published, url.pathname, url.searchParams);
   } catch (error) {
     if (!(error instanceof ToolError)) throw error;
     html = null;
@@ -83,7 +92,7 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, quotes, notes, deployed: readDeployed() }));
         return;
       }
-      if (sitePage(db, options, req, res, url)) return;
+      if (sitePage(options, req, res, url)) return;
       if (url.pathname === "/") {
         res.writeHead(302, { location: "/admin" }).end();
         return;
@@ -142,19 +151,22 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
     }
   });
   const sets = options.sets?.length ? ` with ${options.sets.length} concept set${options.sets.length === 1 ? "" : "s"}` : "";
-  const site = options.site && options.site.level !== "none" ? `, the public site at / (${options.site.level})` : "";
+  const site = options.snapshot ? ", the public site's preview at /" : "";
   return listen(server, options.port, options.host, `/mcp, /admin, /api${sets}${options.mapDir ? `, /map/ from ${options.mapDir}` : ""}${site}`);
 }
 
-/** The public listener: the public site, the map, and the map's API routes cut to what's public; 404 for everything else. */
-export function servePublic(db: DB, options: ServeOptions): Promise<http.Server> {
-  if (!options.site || options.site.level === "none") throw new Error("A public port needs QUOTE_PUBLIC (catalogue or quotes).");
+/** The public listener: the public site and the map's API from the snapshot, and the map; 404 for everything else. */
+export function servePublic(options: ServeOptions): Promise<http.Server> {
+  const { snapshot } = options;
+  if (!snapshot) throw new Error("A public port needs QUOTE_PUBLIC (catalogue or quotes).");
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     try {
-      if (sitePage(db, options, req, res, url)) return;
+      if (sitePage(options, req, res, url)) return;
       if (PUBLIC_API.test(url.pathname)) {
-        handleApi(db, req, res, url, options.sets, options.site);
+        const published = snapshot();
+        if (published) handlePublishedApi(published, req, res, url);
+        else res.writeHead(503, { "content-type": "application/json" }).end(JSON.stringify({ error: NO_SNAPSHOT }));
         return;
       }
       if (url.pathname === "/map" || url.pathname.startsWith("/map/")) {
@@ -167,7 +179,7 @@ export function servePublic(db: DB, options: ServeOptions): Promise<http.Server>
       if (!res.headersSent) res.writeHead(500).end();
     }
   });
-  return listen(server, options.port, options.host, `public: / (${options.site.level}${options.site.notes ? ", with notes" : ""})${options.mapDir ? ", /map/" : ""}, /api/graph, /api/concepts, /api/sets`);
+  return listen(server, options.port, options.host, `public, from the snapshot: /${options.mapDir ? ", /map/" : ""}, /api/graph, /api/concepts, /api/sets`);
 }
 
 export async function serveStdio(db: DB, sets: ConceptSet[] = []): Promise<void> {
