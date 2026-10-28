@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=oneshot
 User=quote
 Group=quote
-EnvironmentFile=/etc/quote-mcp/generated.env
+EnvironmentFile=/etc/quote-mcp/env
 WorkingDirectory=/opt/quote-mcp/current
 # The old site is a one-time source; the first deploy imports it (tools/deploy.mjs).
 ExecStart=/usr/bin/node /opt/quote-mcp/current/dist/cli.js import --no-drupal

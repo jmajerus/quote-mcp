@@ -18,7 +18,7 @@
         {
           "label": "Push the server's settings",
           "task": "Deploy Quotes: settings",
-          "description": "$(key) --env — write the server's settings from .env without deploying code, and restart"
+          "description": "$(key) --env — copy Zotero, old-site, and D1 proxy settings from .env and restart"
         },
         {
           "label": "Import with the old site",

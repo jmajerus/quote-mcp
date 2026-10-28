@@ -2,16 +2,11 @@
 // Deploys quote-mcp to its LXC (quote-mcp.localdomain), on corpus-mcp's pattern: SSH as the shared
 // `authoring` login, one `sudo -S` call per step with the password piped on stdin, a release
 // directory per deploy, a health check, and rollback to the previous release on failure.
-//
-// The server's settings are never edited on the server: each deploy writes /etc/quote-mcp/generated.env
-// from deploy/server.env (the server's own paths and port, in git) and the server settings in this
-// machine's .env (src/settings.ts marks which), so .env is the one file to edit.
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { writeEnvScript } from "./server-env.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const HOST = process.env.QUOTE_DEPLOY_HOST ?? "authoring@quote-mcp.localdomain";
@@ -24,9 +19,10 @@ const USAGE = `Usage: npm run deploy -- [--provision | --env | --import-drupal] 
                    (the server's /health reports it); the first deploy also runs the first import,
                    the old site included
   --provision      one-time setup of the LXC (Node 22, build tools, word list, quote user, directories)
-  --env            only write the server's settings and restart, without deploying code
-                   (every deploy writes them too: /etc/quote-mcp/generated.env, from
-                   deploy/server.env and the server settings in .env; \`quote-mcp config\` marks them)
+  --env            copy the server's settings from .env into its /etc/quote-mcp/env (mode 0640) and
+                   restart: QUOTE_ZOTERO_LIBRARY, QUOTE_ZOTERO_API_KEY, QUOTE_ZOTERO_SOURCES,
+                   QUOTE_DRUPAL_URL, QUOTE_D1_PROXY_URL, and QUOTE_D1_PROXY_TOKEN. Only those set
+                   in .env are replaced; the server's others are left as they are
   --import-drupal  run an import on the server with the old site included (the timer leaves it out)
   --skip-tests     deploy without running the test suite first
 
@@ -60,39 +56,37 @@ function runAsRoot(script) {
   });
 }
 
-/** The server's settings file, which deploys write and nothing else should. */
-const ENV = "/etc/quote-mcp/generated.env";
-
 /** Runs the CLI on the server as the quote user, with the server's environment. */
-const asQuote = (args) => `runuser -u quote -- bash -c 'set -a; . ${ENV}; set +a; cd /opt/quote-mcp/current && node dist/cli.js ${args}'`;
+const asQuote = (args) => `runuser -u quote -- bash -c 'set -a; . /etc/quote-mcp/env; set +a; cd /opt/quote-mcp/current && node dist/cli.js ${args}'`;
 
 async function provision() {
   await runAsRoot(fs.readFileSync(path.join(root, "deploy", "provision.sh"), "utf8"));
-  console.log("\nProvisioned. Next: npm run deploy (it writes the server's settings from .env).");
+  console.log("\nProvisioned. Next: npm run deploy -- --env, then npm run deploy");
 }
 
 /**
- * The script that writes the server's settings file from deploy/server.env and .env (built into dist/,
- * so this runs after a build). It stops, changing nothing, when the server has a setting the new file
- * wouldn't, such as a key left empty in .env, rather than deleting it. The settings file from before
- * there was one standard, /etc/quote-mcp/env, is moved aside to env.replaced (root only).
+ * Sets the server's settings from this machine's .env, so keys never pass through a chat or a command
+ * line: the Zotero and old-site settings, and the D1 proxy the public replica ships through. Only the
+ * ones set in .env are replaced, so one left out (or left empty, as a second, empty line in .env makes
+ * it) never deletes the server's.
  */
-async function serverEnvScript() {
-  const { serverEnv } = await import(path.join(root, "dist", "settings.js"));
-  const { text, names } = serverEnv(process.env, fs.readFileSync(path.join(root, "deploy", "server.env"), "utf8"));
+async function pushEnv() {
+  const all = ["QUOTE_ZOTERO_LIBRARY", "QUOTE_ZOTERO_API_KEY", "QUOTE_ZOTERO_SOURCES", "QUOTE_DRUPAL_URL", "QUOTE_D1_PROXY_URL", "QUOTE_D1_PROXY_TOKEN"];
   const library = process.env.QUOTE_ZOTERO_LIBRARY ?? "";
   if (library && !/^(users|groups)\/\d+$/.test(library)) throw new Error(`QUOTE_ZOTERO_LIBRARY should be "users/<user id>" or "groups/<group id>", not "${library}".`);
-  console.log(`Server settings: ${names.join(", ")}.`);
-  return writeEnvScript(text, "/etc/quote-mcp");
-}
-
-/** Writes the server's settings and restarts it, without deploying code. */
-async function pushEnv() {
-  execFileSync("npm", ["run", "build"], { cwd: root, stdio: "inherit" });
-  await runAsRoot(`set -euo pipefail
-${await serverEnvScript()}
-if systemctl is-active --quiet quote-mcp.service; then systemctl restart quote-mcp.service; fi
-echo "Written to ${ENV}; quote-mcp restarted."`);
+  const names = all.filter((n) => process.env[n]?.trim());
+  if (!names.length) throw new Error(`None of ${all.join(", ")} is set in .env.`);
+  console.log(`Setting ${names.join(", ")} on the server; leaving ${all.filter((n) => !names.includes(n)).join(", ") || "nothing else"} as it is.`);
+  const lines = names.map((n) => `${n}=${process.env[n].trim()}`).join("\n");
+  const encoded = Buffer.from(`${lines}\n`).toString("base64");
+  await runAsRoot(`
+set -euo pipefail
+f=/etc/quote-mcp/env
+grep -v ${names.map((n) => `-e '^${n}='`).join(" ")} "$f" > "$f.new" || true
+printf %s ${shellQuote(encoded)} | base64 -d >> "$f.new"
+chown root:quote "$f.new" && chmod 0640 "$f.new" && mv "$f.new" "$f"
+cut -d= -f1 "$f" | tr '\\n' ' '; echo
+if systemctl is-active --quiet quote-mcp.service; then systemctl restart quote-mcp.service; fi`);
 }
 
 async function importDrupal() {
@@ -109,10 +103,8 @@ async function deploy({ skipTests }) {
   execFileSync("scp", [...sshOptions, tarball, `${HOST}:/tmp/`], { env: sshEnv(), stdio: "inherit" });
   fs.rmSync(tarball);
 
-  const writeEnv = await serverEnvScript();
   await runAsRoot(`
 set -euo pipefail
-${writeEnv}
 release=/opt/quote-mcp/releases/${id}
 mkdir -p "$release"
 tar xzf /tmp/quote-mcp-${id}.tgz -C "$release"
@@ -125,7 +117,7 @@ previous=$(readlink /opt/quote-mcp/current || true)
 echo "previous=$previous"
 ln -sfn "$release" /opt/quote-mcp/current.new && mv -T /opt/quote-mcp/current.new /opt/quote-mcp/current
 systemctl daemon-reload
-set -a; . ${ENV}; set +a
+set -a; . /etc/quote-mcp/env; set +a
 if [ ! -f "$QUOTE_DB" ]; then
   echo "No store yet: running the first import, the old site included."
   ${asQuote("import")}

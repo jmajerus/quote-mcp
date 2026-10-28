@@ -21,8 +21,17 @@ install -d -o quote -g quote -m 0750 /var/lib/quote-mcp /var/lib/quote-mcp/backu
 # /opt/quote-mcp/map holds the concept maps' build (quote-atlas's deploy writes it), outside
 # releases/ so a quote-mcp deploy never removes it; world-readable so the quote user can serve it.
 install -d -m 0755 /opt/quote-mcp /opt/quote-mcp/releases /opt/quote-mcp/map /etc/quote-mcp
-# The server's settings (/etc/quote-mcp/generated.env) are written by each deploy, from deploy/server.env and
-# the deploying machine's .env; nothing is set here.
+if [ ! -f /etc/quote-mcp/env ]; then
+  install -m 0640 -g quote /dev/null /etc/quote-mcp/env
+  cat > /etc/quote-mcp/env <<'ENV'
+QUOTE_DB=/var/lib/quote-mcp/quotes.db
+QUOTE_HOST=0.0.0.0
+QUOTE_PORT=8000
+QUOTE_DICTIONARY=/usr/share/dict/words
+ENV
+fi
+# Added after the first provision, so set it in an existing env too.
+grep -q '^QUOTE_MAP_DIR=' /etc/quote-mcp/env || echo 'QUOTE_MAP_DIR=/opt/quote-mcp/map' >> /etc/quote-mcp/env
 
 echo "node=$(node --version)"
 echo "provisioned=$(hostname)"

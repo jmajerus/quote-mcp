@@ -48,7 +48,7 @@ notes: none
 
 ## Settings
 
-There's one settings file to edit: `.env`, on the computer you work and deploy from; see [.env.example](.env.example). Each deploy writes the server's settings file (`/etc/quote-mcp/generated.env`) from it and from [deploy/server.env](deploy/server.env), the server's own paths and port, so nothing is edited on the server and the two can't drift. Deploy copies only the settings the server needs (`config` marks them `[server]`); the deploy password and Cloudflare tokens stay on your computer. If the server has a setting the new file wouldn't (one left empty in `.env`, say), deploy stops and names it rather than deleting it. To change settings without deploying code, use Deploy Quotes → Push the server's settings (`npm run deploy -- --env`). Only `QUOTE_ZOTERO_LIBRARY` and `QUOTE_ZOTERO_API_KEY` are needed. `npm run quotes -- config` lists every setting, where each came from (the environment, `vocab/site.md`, or its default), and what each feature still needs; secrets show only as set. The rest have defaults and rarely need changing:
+Settings are in `.env` (`/etc/quote-mcp/env` on the server); see [.env.example](.env.example). Only `QUOTE_ZOTERO_LIBRARY` and `QUOTE_ZOTERO_API_KEY` are needed. `npm run quotes -- config` lists every setting, where each came from (the environment, `vocab/site.md`, or its default), and what each feature still needs; secrets show only as set. The rest have defaults and rarely need changing:
 
 | Setting | Default | What it is |
 |---|---|---|

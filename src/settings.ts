@@ -6,12 +6,9 @@ import { d1ConfigFrom } from "./d1-http.js";
  * set, where from, and what each feature still needs, and .env.example can stay short. Most have
  * defaults; a new install needs only the Zotero library and key.
  *
- * One file is edited: .env, on the computer you work on. Settings marked `server` are also the server's:
- * every deploy writes the server's settings file (/etc/quote-mcp/generated.env) from deploy/server.env (its
- * own paths and port, in git) and the server settings in .env, so the two can't drift. The rest stay on
- * this machine (the deploy password, Cloudflare tokens, local paths). The public site's two choices,
- * `public` and `notes`, can instead be in vocab/site.md's settings header, kept in git with the site's
- * title; the environment overrides them.
+ * A setting comes from the environment (.env, or /etc/quote-mcp/env on the LXC). The public site's two
+ * choices, `public` and `notes`, can instead be in vocab/site.md's settings header, kept in git with the
+ * site's title; the environment overrides them.
  */
 
 export interface Setting {
@@ -23,29 +20,27 @@ export interface Setting {
   fallback?: string;
   /** The field in vocab/site.md's settings header that can give it instead. */
   site?: string;
-  /** Copied from .env to the server by each deploy. */
-  server?: true;
 }
 
 export const SETTINGS: Setting[] = [
-  { name: "QUOTE_ZOTERO_LIBRARY", group: "Zotero (required)", about: "the Zotero library to read: users/<id> or groups/<id>", server: true },
-  { name: "QUOTE_ZOTERO_API_KEY", group: "Zotero (required)", about: "a Zotero API key; read-only is enough", secret: true, server: true },
-  { name: "QUOTE_ZOTERO_SOURCES", group: "Import", about: "other Zotero libraries to import quote notes from, comma-separated", server: true },
-  { name: "QUOTE_DRUPAL_URL", group: "Import", about: "the old Drupal site's database (mysql://…), read-only", secret: true, server: true },
+  { name: "QUOTE_ZOTERO_LIBRARY", group: "Zotero (required)", about: "the Zotero library to read: users/<id> or groups/<id>" },
+  { name: "QUOTE_ZOTERO_API_KEY", group: "Zotero (required)", about: "a Zotero API key; read-only is enough", secret: true },
+  { name: "QUOTE_ZOTERO_SOURCES", group: "Import", about: "other Zotero libraries to import quote notes from, comma-separated" },
+  { name: "QUOTE_DRUPAL_URL", group: "Import", about: "the old Drupal site's database (mysql://…), read-only", secret: true },
   { name: "QUOTE_DICTIONARY", group: "Import", about: "a word list for the OCR check", fallback: "/usr/share/dict/words" },
-  { name: "QUOTE_ZOTERO_API", group: "Import", about: "the Zotero API", fallback: "https://api.zotero.org", server: true },
+  { name: "QUOTE_ZOTERO_API", group: "Import", about: "the Zotero API", fallback: "https://api.zotero.org" },
   { name: "QUOTE_DB", group: "Service", about: "the quote store", fallback: "data/quotes.db" },
   { name: "QUOTE_HOST", group: "Service", about: "the address to listen on", fallback: "0.0.0.0" },
   { name: "QUOTE_PORT", group: "Service", about: "the port for MCP, the admin pages, and the API", fallback: "8010" },
   { name: "QUOTE_SETS", group: "Service", about: "the concept sets", fallback: "vocab/sets.json" },
   { name: "QUOTE_MAP_DIR", group: "Maps", about: "quote-atlas's built maps, served at /map/" },
-  { name: "QUOTE_PUBLIC", group: "Public site", about: "none, catalogue (no quoted text), or quotes", fallback: "none", site: "public", server: true },
-  { name: "QUOTE_PUBLIC_NOTES", group: "Public site", about: "notes on the public site: none or all", fallback: "none", site: "notes", server: true },
+  { name: "QUOTE_PUBLIC", group: "Public site", about: "none, catalogue (no quoted text), or quotes", fallback: "none", site: "public" },
+  { name: "QUOTE_PUBLIC_NOTES", group: "Public site", about: "notes on the public site: none or all", fallback: "none", site: "notes" },
   { name: "QUOTE_INTRO", group: "Public site", about: "the front page's title, introduction, and settings", fallback: "vocab/site.md" },
   { name: "QUOTE_SNAPSHOT", group: "Public site", about: "the public snapshot", fallback: "public.db beside the store" },
-  { name: "QUOTE_PUBLIC_PORT", group: "Public site", about: "a port serving only the public site, for a hostname with no login", server: true },
-  { name: "QUOTE_D1_PROXY_URL", group: "Public replica in D1", about: "the D1 proxy Worker (worker/proxy.ts)", server: true },
-  { name: "QUOTE_D1_PROXY_TOKEN", group: "Public replica in D1", about: "the proxy's token (its D1_PROXY_TOKEN secret)", secret: true, server: true },
+  { name: "QUOTE_PUBLIC_PORT", group: "Public site", about: "a port serving only the public site, for a hostname with no login" },
+  { name: "QUOTE_D1_PROXY_URL", group: "Public replica in D1", about: "the D1 proxy Worker (worker/proxy.ts)" },
+  { name: "QUOTE_D1_PROXY_TOKEN", group: "Public replica in D1", about: "the proxy's token (its D1_PROXY_TOKEN secret)", secret: true },
   { name: "CLOUDFLARE_ACCOUNT_ID", group: "Public replica in D1", about: "instead of the proxy: Cloudflare's REST API, with this account" },
   { name: "CLOUDFLARE_API_TOKEN", group: "Public replica in D1", about: "…a token that can edit D1", secret: true },
   { name: "QUOTE_D1_DATABASE_ID", group: "Public replica in D1", about: "…and the database", fallback: "worker/wrangler.jsonc's database_id" },
@@ -108,41 +103,9 @@ export function configReport(env: NodeJS.ProcessEnv, site: Record<string, string
     if (s.group !== group) lines.push(`${lines.length ? "\n" : ""}${(group = s.group)}`);
     const { value, source } = resolve(s, env, site);
     const shown = value === null ? "—" : s.secret && source === "environment" ? "(set)" : value;
-    const tags = [s.server ? "server" : "", source === "unset" || source === "environment" ? "" : source].filter(Boolean);
-    lines.push(`  ${s.name.padEnd(26)} ${shown.padEnd(36)} ${tags.length ? `[${tags.join(", ")}]` : ""}`.trimEnd());
+    lines.push(`  ${s.name.padEnd(26)} ${shown.padEnd(36)} ${source === "unset" ? "" : source === "environment" ? "" : `[${source}]`}`.trimEnd());
   }
-  lines.push("\n[server]: copied to the server by each deploy; the rest stay on this machine. The server's own paths and port are in deploy/server.env.");
   lines.push("\nFeatures");
   for (const f of features(env, site, wrangler)) lines.push(`  ${f.on ? "on " : "off"}  ${f.name}${f.note ? `: ${f.note}` : ""}`);
   return lines.join("\n");
-}
-
-/** The settings each deploy copies from .env to the server. */
-export const SERVER_SETTINGS = SETTINGS.filter((s) => s.server).map((s) => s.name);
-
-/**
- * The server's settings file: a note that it's written by deploy, the server's own settings (its paths and
- * port, from deploy/server.env), then the server settings set in .env. A setting in both is taken from
- * deploy/server.env, which is about the server; .env's local paths never reach it.
- */
-export function serverEnv(env: NodeJS.ProcessEnv, serverDefaults: string): { text: string; names: string[] } {
-  const own = serverDefaults.split("\n").map((l) => l.trim()).filter((l) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(l));
-  const ownNames = new Set(own.map((l) => l.slice(0, l.indexOf("="))));
-  const copied = SERVER_SETTINGS.filter((n) => !ownNames.has(n) && env[n]?.trim()).map((n) => {
-    const value = env[n]!.trim();
-    if (/[\n\r]/.test(value)) throw new Error(`${n} has a line break in it.`);
-    return `${n}=${value}`;
-  });
-  const text = [
-    "# Written by `npm run deploy` from deploy/server.env and the .env on the computer you deploy from.",
-    "# Don't edit this file: edit .env there and deploy (or use Deploy Quotes → Push the server's settings).",
-    "",
-    "# The server's own settings (deploy/server.env).",
-    ...own,
-    "",
-    "# From .env.",
-    ...copied,
-    "",
-  ].join("\n");
-  return { text, names: [...own, ...copied].map((l) => l.slice(0, l.indexOf("="))) };
 }

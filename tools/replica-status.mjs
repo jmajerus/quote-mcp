@@ -3,9 +3,10 @@
 // (see .vscode/settings.json): the server's drain from /health (src/drain.ts), and whether the public
 // site, on the hostname in worker/wrangler.jsonc, has been published. It only reads.
 //
-// In step: $(cloud). Rows waiting to ship: $(cloud-upload) and how many. The drain off (no D1 settings on
-// the server) or failing, or the public site not published: a warning or an error, with the reason in
-// the tooltip. Status items show state, not actions: noun glyphs, no verbs.
+// In step: $(cloud). Rows waiting to ship: $(cloud-upload) and how many. No drain reported (the public
+// site is none, or an older build), the drain off (no D1 settings on the server) or failing, or the public
+// site not published: a warning or an error, with the reason in the tooltip. Status items show state, not
+// actions: noun glyphs, no verbs.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -66,14 +67,17 @@ if (site) {
 const rows = [
   ["Public site", site ?? "no custom domain in worker/wrangler.jsonc"],
   ["Published", published],
-  ["Drain", replica?.phase ?? "not on this server's build"],
+  ["Drain", replica?.phase ?? "not reported"],
   ["Waiting to ship", String(replica?.pending ?? 0)],
   ["Last shipped", ago(replica?.shipped_at)],
   ...(replica?.error ? [["Error", replica.error]] : []),
   ["Checked", new Date().toLocaleTimeString()],
 ];
 
-if (!replica || replica.phase === "off") {
+if (!replica) {
+  // The server leaves the drain out of /health when its public site is none, and builds before the drain had none.
+  print({ text: "$(cloud) —", level: "warn", tooltip: tooltip(rows, "The server doesn't report a drain: its public site is none (public: in vocab/site.md, or QUOTE_PUBLIC on the server), or it runs a build from before the drain. Deploy to update it.") });
+} else if (replica.phase === "off") {
   print({ text: "$(cloud) off", level: "warn", tooltip: tooltip(rows, "The server's drain isn't running: it has no D1 settings. Push them with Deploy Quotes → Push the server's settings.") });
 } else if (replica.phase === "error") {
   print({ text: "$(cloud) !", level: "error", tooltip: tooltip(rows, "The last drain failed; rows stay queued and the next tick tries again.") });
