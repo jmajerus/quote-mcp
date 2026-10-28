@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { esc } from "./web.js";
+import { esc } from "./style.js";
 
 /**
  * The public site's introductions, in a little Markdown: vocab/site.md for the whole site and

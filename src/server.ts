@@ -34,7 +34,7 @@ export interface ServeOptions {
   /** The concept sets (src/sets.ts), for the API and the MCP tools. */
   sets?: ConceptSet[];
   /** The public snapshot, reread when it's rebuilt; without it (QUOTE_PUBLIC=none), / redirects to /admin. */
-  snapshot?: () => Published | null;
+  snapshot?: () => Promise<Published | null>;
 }
 
 /** The API routes the public listener answers, from the snapshot. */
@@ -52,20 +52,20 @@ function readDeployed(): unknown {
 const NO_SNAPSHOT = "There's no public snapshot yet. Build one with `quote-mcp publish --dry-run`; an import also builds it.";
 
 /** Answers a site page from the snapshot, or false when the path isn't one. */
-function sitePage(options: ServeOptions, req: http.IncomingMessage, res: http.ServerResponse, url: URL): boolean {
+async function sitePage(options: ServeOptions, req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
   if (!options.snapshot || !isSitePath(url.pathname)) return false;
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.writeHead(405, { allow: "GET, HEAD" }).end();
     return true;
   }
-  const published = options.snapshot();
+  const published = await options.snapshot();
   if (!published) {
     res.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end(NO_SNAPSHOT);
     return true;
   }
   let html: string | null;
   try {
-    html = renderSite(published, url.pathname, url.searchParams);
+    html = await renderSite(published, url.pathname, url.searchParams);
   } catch (error) {
     if (!(error instanceof ToolError)) throw error;
     html = null;
@@ -92,13 +92,13 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, quotes, notes, deployed: readDeployed() }));
         return;
       }
-      if (sitePage(options, req, res, url)) return;
+      if (await sitePage(options, req, res, url)) return;
       if (url.pathname === "/") {
         res.writeHead(302, { location: "/admin" }).end();
         return;
       }
       if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
-        handleApi(db, req, res, url, options.sets);
+        await handleApi(db, req, res, url, options.sets);
         return;
       }
       if (url.pathname === "/map" || url.pathname.startsWith("/map/")) {
@@ -162,10 +162,10 @@ export function servePublic(options: ServeOptions): Promise<http.Server> {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     try {
-      if (sitePage(options, req, res, url)) return;
+      if (await sitePage(options, req, res, url)) return;
       if (PUBLIC_API.test(url.pathname)) {
-        const published = snapshot();
-        if (published) handlePublishedApi(published, req, res, url);
+        const published = await snapshot();
+        if (published) await handlePublishedApi(published, req, res, url);
         else res.writeHead(503, { "content-type": "application/json" }).end(JSON.stringify({ error: NO_SNAPSHOT }));
         return;
       }

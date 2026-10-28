@@ -8,7 +8,8 @@ import type { DrupalSite } from "../src/drupal.js";
 import { runImport } from "../src/import.js";
 import Database from "better-sqlite3";
 import { readIntro } from "../src/intro.js";
-import { Published, snapshotReader } from "../src/published.js";
+import type { Published } from "../src/published.js";
+import { openSnapshot, snapshotReader } from "../src/published-sqlite.js";
 import { servePublic, serveHttp } from "../src/server.js";
 import type { ConceptSet } from "../src/sets.js";
 import { bibtex, plainText, quoteHtml } from "../src/public.js";
@@ -46,15 +47,15 @@ const SETS: ConceptSet[] = [{ slug: "harm", scheme: "human-work", label: "Harm",
 let built = 0;
 
 /** A snapshot of the test store with these settings, opened as the public pages read it. */
-function site(rest: Partial<SnapshotOptions> = {}): Published {
+async function site(rest: Partial<SnapshotOptions> = {}): Promise<Published> {
   const file = path.join(mapDir, `public-${built++}.db`);
   buildSnapshot(db, { level: "catalogue", notes: false, intro: readIntro("# Work quotes\n\nQuotes about work."), collections: {}, sets: SETS, maps: readMapsFile(mapDir), ...rest }, file);
-  return new Published(new Database(file, { readonly: true }));
+  return openSnapshot(file);
 }
 
 async function start(options: Partial<SnapshotOptions> | null, publicPort = true) {
-  const published = options && site(options);
-  const base = { host: "127.0.0.1", port: 0, mapDir, sets: SETS, snapshot: published ? () => published : undefined };
+  const published = options && (await await site(options));
+  const base = { host: "127.0.0.1", port: 0, mapDir, sets: SETS, snapshot: published ? async () => published : undefined };
   const url = (server: http.Server) => {
     const a = server.address();
     return `http://127.0.0.1:${typeof a === "object" && a ? a.port : 0}`;
@@ -91,13 +92,13 @@ const workId = (title: string) => db.prepare("SELECT id FROM works WHERE title L
 const pages = () => ["/", "/concepts", "/concepts/abuse", "/concepts/mobbing", "/concepts/dignity", "/sets/harm", "/works", `/works/${workId("Mobbing")}`, `/works/${workId("A Book")}`];
 
 describe("the introduction", () => {
-  it("takes the title from the first heading and renders a little Markdown", () => {
+  it("takes the title from the first heading and renders a little Markdown", async () => {
     const intro = readIntro("# My quotes\n\nFrom **books**, with *pages*.\nSee [the maps](/map/).\n\n## Where\n\n- one\n- two");
     expect(intro.title).toBe("My quotes");
     expect(intro.html).toBe('<p>From <strong>books</strong>, with <em>pages</em>. See <a href="/map/">the maps</a>.</p>\n<h2>Where</h2>\n<ul><li>one</li><li>two</li></ul>');
   });
 
-  it("escapes HTML and links only safe addresses", () => {
+  it("escapes HTML and links only safe addresses", async () => {
     const intro = readIntro('<script>x</script> [bad](javascript:alert(1)) [ok](https://example.org/a)');
     expect(intro.title).toBe("Quotes");
     expect(intro.html).not.toContain("<script>");
@@ -107,8 +108,8 @@ describe("the introduction", () => {
 });
 
 describe("the catalogue level", () => {
-  it("shows the front page: introduction, counts, maps, sets, and ways to browse", () => {
-    const html = renderSite(site(), "/")!;
+  it("shows the front page: introduction, counts, maps, sets, and ways to browse", async () => {
+    const html = (await renderSite(await site(), "/"))!;
     expect(html).toContain("<h1>Work quotes</h1>");
     expect(html).toContain("<p>Quotes about work.</p>");
     expect(html).toContain("3 quotes from 2 works, tagged with 3 concepts.");
@@ -116,35 +117,35 @@ describe("the catalogue level", () => {
     expect(html).toContain('href="/sets/harm"');
   });
 
-  it("lists concepts, sets, and works, with counts of public quotes only", () => {
-    expect(renderSite(site(), "/concepts/abuse")).toContain("2 quotes, with its narrower concepts");
-    expect(renderSite(site(), "/concepts/abuse")).toContain('href="/map/human-work/#/concept/abuse"');
-    expect(renderSite(site(), "/concepts/mobbing")).toContain("In <a href=\"/sets/harm\">Harm</a>");
-    expect(renderSite(site(), "/sets/harm")).toMatch(/abuse<\/a> <span class="count">1<\/span>.*mobbing<\/a> <span class="count">1<\/span>/s);
-    const works = renderSite(site(), "/works")!;
+  it("lists concepts, sets, and works, with counts of public quotes only", async () => {
+    expect((await renderSite(await site(), "/concepts/abuse"))).toContain("2 quotes, with its narrower concepts");
+    expect((await renderSite(await site(), "/concepts/abuse"))).toContain('href="/map/human-work/#/concept/abuse"');
+    expect((await renderSite(await site(), "/concepts/mobbing"))).toContain("In <a href=\"/sets/harm\">Harm</a>");
+    expect((await renderSite(await site(), "/sets/harm"))).toMatch(/abuse<\/a> <span class="count">1<\/span>.*mobbing<\/a> <span class="count">1<\/span>/s);
+    const works = (await renderSite(await site(), "/works"))!;
     expect(works.indexOf("Davenport")).toBeLessThan(works.indexOf("Doe"));
-    expect(renderSite(site(), `/works/${workId("Mobbing")}`)).toContain("2 quotes");
+    expect((await renderSite(await site(), `/works/${workId("Mobbing")}`))).toContain("2 quotes");
   });
 
-  it("shows no quoted text and no notes", () => {
+  it("shows no quoted text and no notes", async () => {
     for (const p of pages()) {
-      const html = renderSite(site(), p)!;
+      const html = (await renderSite(await site(), p))!;
       for (const words of [...QUOTED, SHARED_NOTE, PRIVATE_NOTE]) expect(html, `${p} shows "${words}"`).not.toContain(words);
     }
   });
 
-  it("answers null or a not-found for what isn't there", () => {
-    expect(renderSite(site(), "/nowhere")).toBeNull();
-    expect(() => renderSite(site(), "/concepts/nothing")).toThrow();
-    expect(() => renderSite(site(), "/sets/nothing")).toThrow();
-    expect(() => renderSite(site(), "/works/99999")).toThrow();
-    expect(() => site({ level: "none" })).toThrow(/nothing to publish/);
+  it("answers null or a not-found for what isn't there", async () => {
+    expect((await renderSite(await site(), "/nowhere"))).toBeNull();
+    await expect(renderSite(await site(), "/concepts/nothing")).rejects.toThrow();
+    await expect(renderSite(await site(), "/sets/nothing")).rejects.toThrow();
+    await expect(renderSite(await site(), "/works/99999")).rejects.toThrow();
+    await expect(site({ level: "none" })).rejects.toThrow(/nothing to publish/);
   });
 
-  it("counts shared notes at the quotes level, but not private ones", () => {
-    expect(renderSite(site({ level: "quotes", notes: true }), "/")).toContain("4 quotes and notes from 2 works");
-    expect(renderSite(site({ level: "quotes" }), "/")).toContain("3 quotes from 2 works");
-    expect(renderSite(site({ level: "catalogue", notes: true }), "/")).toContain("3 quotes from 2 works");
+  it("counts shared notes at the quotes level, but not private ones", async () => {
+    expect((await renderSite(await site({ level: "quotes", notes: true }), "/"))).toContain("4 quotes and notes from 2 works");
+    expect((await renderSite(await site({ level: "quotes" }), "/"))).toContain("3 quotes from 2 works");
+    expect((await renderSite(await site({ level: "catalogue", notes: true }), "/"))).toContain("3 quotes from 2 works");
   });
 });
 
@@ -164,44 +165,44 @@ describe("collections", () => {
   });
   const intros = { "human-work": readIntro("# The human side of work\n\nWhat work does to people.\n\nSince 2014.") };
 
-  it("lists the collections on the front page, each with its introduction's first paragraph and counts", () => {
-    const html = renderSite(site({ collections: intros }), "/")!;
+  it("lists the collections on the front page, each with its introduction's first paragraph and counts", async () => {
+    const html = (await renderSite(await site({ collections: intros }), "/"))!;
     expect(html).toContain("<h2>Collections</h2>");
     expect(html).toMatch(/href="\/collections\/ethics"><h3>Ethics<\/h3>\s*<p>Right and wrong<\/p><p class="count">1 quote · 1 work · 1 concept<\/p>/);
     expect(html).toMatch(/href="\/collections\/human-work"><h3>The human side of work<\/h3>\s*<p>What work does to people.<\/p><p class="count">3 quotes · 2 works · 3 concepts<\/p>/);
     expect(html).not.toContain("Since 2014");
   });
 
-  it("gives each collection a page with its own maps, sets, and filtered lists", () => {
-    const work = renderSite(site({ collections: intros }), "/collections/human-work")!;
+  it("gives each collection a page with its own maps, sets, and filtered lists", async () => {
+    const work = (await renderSite(await site({ collections: intros }), "/collections/human-work"))!;
     expect(work).toContain("<h1>The human side of work</h1>");
     expect(work).toContain("Since 2014");
     expect(work).toContain('href="/map/human-work/"');
     expect(work).toContain('href="/sets/harm"');
     expect(work).toContain('href="/concepts?collection=human-work"');
-    const ethics = renderSite(site({ collections: intros }), "/collections/ethics")!;
+    const ethics = (await renderSite(await site({ collections: intros }), "/collections/ethics"))!;
     expect(ethics).toContain("<p>Right and wrong</p>");
     expect(ethics).not.toContain("/map/human-work/");
     expect(ethics).not.toContain("/sets/harm");
-    const concepts = renderSite(site(), "/concepts", new URLSearchParams("collection=ethics"))!;
+    const concepts = (await renderSite(await site(), "/concepts", new URLSearchParams("collection=ethics")))!;
     expect(concepts).toContain("respect");
     expect(concepts).not.toContain("mobbing");
-    const works = renderSite(site(), "/works", new URLSearchParams("collection=ethics"))!;
+    const works = (await renderSite(await site(), "/works", new URLSearchParams("collection=ethics")))!;
     expect(works).toContain("A Book Nobody Filed");
     expect(works).not.toContain("Davenport");
-    expect(renderSite(site(), "/concepts/respect")).toContain('href="/collections/ethics"');
-    expect(() => renderSite(site(), "/collections/nothing")).toThrow();
-    expect(() => renderSite(site(), "/works", new URLSearchParams("collection=nothing"))).toThrow();
+    expect((await renderSite(await site(), "/concepts/respect"))).toContain('href="/collections/ethics"');
+    await expect(renderSite(await site(), "/collections/nothing")).rejects.toThrow();
+    await expect(renderSite(await site(), "/works", new URLSearchParams("collection=nothing"))).rejects.toThrow();
   });
 });
 
 describe("one collection", () => {
-  it("shows it inline on the front page, under its own heading when it has an introduction", () => {
-    const html = renderSite(site({ collections: { "human-work": readIntro("# The human side of work\n\nWhat work does to people.") } }), "/")!;
+  it("shows it inline on the front page, under its own heading when it has an introduction", async () => {
+    const html = (await renderSite(await site({ collections: { "human-work": readIntro("# The human side of work\n\nWhat work does to people.") } }), "/"))!;
     expect(html).not.toContain("<h2>Collections</h2>");
     expect(html).toContain("<h2>The human side of work</h2>");
     expect(html).toContain('href="/concepts"');
-    expect(renderSite(site(), "/")).not.toContain("<h2>The human side of work</h2>");
+    expect((await renderSite(await site(), "/"))).not.toContain("<h2>The human side of work</h2>");
   });
 });
 
@@ -241,7 +242,7 @@ describe("serving the public site", () => {
 });
 
 describe("old-site markup in quote text", () => {
-  it("drops [bib] markers and renders paired asterisks as emphasis", () => {
+  it("drops [bib] markers and renders paired asterisks as emphasis", async () => {
     expect(plainText("Ryan and Oestreich [bib]Ryan1991[/bib], in their study")).toBe("Ryan and Oestreich, in their study");
     expect(plainText("The Player Piano[bib]Vonnegut1952[/bib].")).toBe("The Player Piano.");
     expect(quoteHtml('Choice is the basis *if* relationships are <equal> and "*loyal*" too')).toBe('Choice is the basis <em>if</em> relationships are &lt;equal&gt; and &quot;<em>loyal</em>&quot; too');
@@ -250,7 +251,7 @@ describe("old-site markup in quote text", () => {
     expect(quoteHtml("5 * 3 = 15, 2 * 2")).toBe("5 * 3 = 15, 2 * 2");
   });
 
-  it("writes BibTeX from CSL", () => {
+  it("writes BibTeX from CSL", async () => {
     expect(bibtex({ type: "book", title: "Mobbing", author: [{ family: "Davenport", given: "Noa" }, { literal: "Civil {Society}" }], issued: { "date-parts": [[1999]] }, publisher: "Civil Society Pub.", ISBN: "9780966480397" }, "davenport1999mobbing"))
       .toBe("@book{davenport1999mobbing,\n  author = {Davenport, Noa and Civil Society},\n  title = {Mobbing},\n  year = {1999},\n  publisher = {Civil Society Pub.},\n  isbn = {9780966480397}\n}");
   });
@@ -260,49 +261,49 @@ describe("the quotes level", () => {
   const quotes = (rest: Partial<SnapshotOptions> = {}) => site({ level: "quotes", ...rest });
   const id = (fragment: string) => db.prepare("SELECT id FROM quotes WHERE text LIKE ? OR comment LIKE ?").pluck().get(`%${fragment}%`, `%${fragment}%`) as number;
 
-  it("gives each quote a page with its source, concepts, and how to cite it", () => {
-    const html = renderSite(quotes(), `/quotes/${id("emotional assault")}`)!;
+  it("gives each quote a page with its source, concepts, and how to cite it", async () => {
+    const html = (await renderSite(await quotes(), `/quotes/${id("emotional assault")}`))!;
     expect(html).toContain("<blockquote>Mobbing is an emotional assault.</blockquote>");
     expect(html).toContain(`<a href="/works/${workId("Mobbing")}"><cite>Mobbing: emotional abuse in the American workplace</cite></a> (1999), p. 40`);
     expect(html).toContain('href="/concepts/mobbing"');
     expect(html).toContain("<code>[@davenport1999mobbing, p. 40]</code>");
     expect(html).toContain("@book{davenport1999mobbing,");
-    const unfiled = renderSite(quotes(), `/quotes/${id("deserves dignity")}`)!;
+    const unfiled = (await renderSite(await quotes(), `/quotes/${id("deserves dignity")}`))!;
     expect(unfiled).toContain("isn't filed in Zotero");
     expect(unfiled).toContain("@book{work-");
   });
 
-  it("lists quotes on concept, set, and work pages, and the newest on the front page", () => {
-    expect(renderSite(quotes(), "/concepts/abuse")).toMatch(/Mobbing is an emotional assault[\s\S]*Abuse at work rarely|Abuse at work rarely[\s\S]*Mobbing is an emotional assault/);
-    expect(renderSite(quotes(), "/sets/harm")).toContain("Abuse at work rarely");
-    const work = renderSite(quotes(), `/works/${workId("Mobbing")}`)!;
+  it("lists quotes on concept, set, and work pages, and the newest on the front page", async () => {
+    expect((await renderSite(await quotes(), "/concepts/abuse"))).toMatch(/Mobbing is an emotional assault[\s\S]*Abuse at work rarely|Abuse at work rarely[\s\S]*Mobbing is an emotional assault/);
+    expect((await renderSite(await quotes(), "/sets/harm"))).toContain("Abuse at work rarely");
+    const work = (await renderSite(await quotes(), `/works/${workId("Mobbing")}`))!;
     expect(work.indexOf("Abuse at work rarely")).toBeLessThan(work.indexOf("Mobbing is an emotional assault"));
     expect(work).toContain("Cite as <code>[@davenport1999mobbing]</code>");
-    const front = renderSite(quotes(), "/")!;
+    const front = (await renderSite(await quotes(), "/"))!;
     expect(front).toContain("<h2>Recently added</h2>");
     expect(front).toContain('action="/search"');
   });
 
-  it("searches what quotes say, a page at a time", () => {
-    const html = renderSite(quotes(), "/search", new URLSearchParams("q=assault"))!;
+  it("searches what quotes say, a page at a time", async () => {
+    const html = (await renderSite(await quotes(), "/search", new URLSearchParams("q=assault")))!;
     expect(html).toContain("<mark>assault</mark>");
     expect(html).toContain("1–1 of 1 quote");
-    expect(renderSite(quotes(), "/search", new URLSearchParams("q=forty-five"))).toContain("None yet.");
-    expect(renderSite(quotes(), "/search", new URLSearchParams('q="'))).toContain("no words to look for");
-    expect(renderSite(quotes(), "/search")).not.toContain('class="quotes"');
+    expect((await renderSite(await quotes(), "/search", new URLSearchParams("q=forty-five")))).toContain("None yet.");
+    expect((await renderSite(await quotes(), "/search", new URLSearchParams('q="')))).toContain("no words to look for");
+    expect((await renderSite(await quotes(), "/search"))).not.toContain('class="quotes"');
   });
 
-  it("keeps notes private unless they're shared, and private-tagged notes always", () => {
+  it("keeps notes private unless they're shared, and private-tagged notes always", async () => {
     const shared = id(SHARED_NOTE), hidden = id(PRIVATE_NOTE);
-    expect(() => renderSite(quotes(), `/quotes/${shared}`)).toThrow();
-    expect(renderSite(quotes({ notes: true }), `/quotes/${shared}`)).toContain(SHARED_NOTE);
-    expect(() => renderSite(quotes({ notes: true }), `/quotes/${hidden}`)).toThrow();
-    expect(renderSite(quotes({ notes: true }), "/search", new URLSearchParams("q=forty-five"))).toContain("1–1 of 1 quote or note");
-    expect(renderSite(quotes({ notes: true }), "/search", new URLSearchParams("q=harsh"))).toContain("None yet.");
+    await expect(renderSite(await quotes(), `/quotes/${shared}`)).rejects.toThrow();
+    expect((await renderSite(await quotes({ notes: true }), `/quotes/${shared}`))).toContain(SHARED_NOTE);
+    await expect(renderSite(await quotes({ notes: true }), `/quotes/${hidden}`)).rejects.toThrow();
+    expect((await renderSite(await quotes({ notes: true }), "/search", new URLSearchParams("q=forty-five")))).toContain("1–1 of 1 quote or note");
+    expect((await renderSite(await quotes({ notes: true }), "/search", new URLSearchParams("q=harsh")))).toContain("None yet.");
     for (const p of [...pages(), "/search?q=her"]) {
       const [path, query] = p.split("?");
       for (const notes of [false, true]) {
-        const html = renderSite(quotes({ notes }), path, new URLSearchParams(query))!;
+        const html = (await renderSite(await quotes({ notes }), path, new URLSearchParams(query)))!;
         expect(html, p).not.toContain(PRIVATE_NOTE);
         if (!notes) expect(html, p).not.toContain(SHARED_NOTE);
       }
@@ -334,7 +335,7 @@ describe("the public snapshot", () => {
   };
   const all = (snap: Database.Database, sql: string) => snap.prepare(sql).all();
 
-  it("holds no words at the catalogue level, only what the pages count", () => {
+  it("holds no words at the catalogue level, only what the pages count", async () => {
     const { snap } = build({ level: "catalogue" });
     expect(all(snap, "SELECT text, note, comment, locator, chapter_author, attribution, pandoc FROM records WHERE text != '' OR note IS NOT NULL OR comment IS NOT NULL OR locator IS NOT NULL OR chapter_author IS NOT NULL OR attribution IS NOT NULL OR pandoc IS NOT NULL")).toEqual([]);
     expect(all(snap, "SELECT * FROM records_fts")).toEqual([]);
@@ -342,7 +343,7 @@ describe("the public snapshot", () => {
     expect(snap.prepare("SELECT COUNT(*) FROM records").pluck().get()).toBe(3);
   });
 
-  it("leaves out notes unless they're shared, and private-tagged notes always", () => {
+  it("leaves out notes unless they're shared, and private-tagged notes always", async () => {
     expect(all(build().snap, "SELECT id FROM records WHERE kind = 'note'")).toEqual([]);
     const shared = build({ notes: true }).snap;
     const notes = all(shared, "SELECT note FROM records WHERE kind = 'note'") as { note: string }[];
@@ -352,7 +353,7 @@ describe("the public snapshot", () => {
     expect(dump).not.toContain(PRIVATE_NOTE);
   });
 
-  it("leaves out unparsed quotes, and has no columns for status, grade, flags, or tags", () => {
+  it("leaves out unparsed quotes, and has no columns for status, grade, flags, or tags", async () => {
     const id = db.prepare("SELECT id FROM quotes WHERE text LIKE 'Abuse at work%'").pluck().get() as number;
     db.prepare("UPDATE quotes SET status = 'unparsed' WHERE id = ?").run(id);
     try {
@@ -365,27 +366,27 @@ describe("the public snapshot", () => {
     }
   });
 
-  it("tidies the old site's markup and keeps what citing needs", () => {
+  it("tidies the old site's markup and keeps what citing needs", async () => {
     const { snap } = build();
     const r = snap.prepare("SELECT r.text, r.locator, r.pandoc, w.citekey, w.bibtex FROM records r JOIN works w ON w.id = r.work_id WHERE r.text LIKE 'Mobbing is%'").get() as Record<string, string>;
     expect(r).toMatchObject({ text: "Mobbing is an emotional assault.", locator: "p. 40", pandoc: "[@davenport1999mobbing, p. 40]", citekey: "davenport1999mobbing" });
     expect(r.bibtex).toMatch(/^@book\{davenport1999mobbing,/);
   });
 
-  it("gives the same hash for the same content, and a new one when it changes", () => {
+  it("gives the same hash for the same content, and a new one when it changes", async () => {
     const a = build().summary.hash, b = build().summary.hash;
     expect(a).toBe(b);
     expect(build({ level: "catalogue" }).summary.hash).not.toBe(a);
     expect(build({ intro: readIntro("# Other title") }).summary.hash).not.toBe(a);
   });
 
-  it("is reread by the preview when a rebuild replaces it", () => {
+  it("is reread by the preview when a rebuild replaces it", async () => {
     const file = path.join(mapDir, "replaced.db");
     buildSnapshot(db, options({ intro: readIntro("# First") }), file);
     const read = snapshotReader(file);
-    expect(read()!.site.title).toBe("First");
+    expect((await (await read())!.site()).title).toBe("First");
     buildSnapshot(db, options({ intro: readIntro("# Second") }), file);
-    expect(read()!.site.title).toBe("Second");
-    expect(snapshotReader(path.join(mapDir, "missing.db"))()).toBeNull();
+    expect((await (await read())!.site()).title).toBe("Second");
+    expect(await snapshotReader(path.join(mapDir, "missing.db"))()).toBeNull();
   });
 });

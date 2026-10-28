@@ -1,7 +1,10 @@
 import Database from "better-sqlite3";
 import { citekeyOf, zoteroToCsl } from "./csl.js";
 import type { DB } from "./db.js";
+import { RELATION_LABEL, ToolError, ftsQuery } from "./common.js";
 import type { ApiItem } from "./zotero.js";
+
+export { RELATION_LABEL, ToolError, ftsQuery };
 
 /**
  * Read-only queries over the quote store, shared by the MCP tools and the admin pages. Unparsed quotes
@@ -9,7 +12,6 @@ import type { ApiItem } from "./zotero.js";
  * words, with no quoted text) are found beside quotes unless a kind is asked for.
  */
 
-export class ToolError extends Error {}
 
 export function openReadOnly(path = process.env.QUOTE_DB ?? "data/quotes.db"): DB {
   try {
@@ -21,8 +23,6 @@ export function openReadOnly(path = process.env.QUOTE_DB ?? "data/quotes.db"): D
 
 const json = <T>(v: string | null | undefined, fallback: T): T => (v ? (JSON.parse(v) as T) : fallback);
 
-/** Old-site relation names, as people read them; "inverse" pairs are opposites (acceptance, rejection). */
-export const RELATION_LABEL: Record<string, string> = { broader: "broader", narrower: "narrower", related: "related", inverse: "opposite" };
 
 export interface WorkSummary {
   id: number; title: string; authors: string[]; year: string | null; match: string; zotero_library: string | null; zotero_key: string | null; citekey: string | null;
@@ -129,15 +129,6 @@ export function getConcept(db: DB, name: string) {
 
 // --- Quotes --------------------------------------------------------------------------------------
 
-/** Words and "quoted phrases" as an FTS5 query: every term required, a trailing * kept as a prefix match. */
-export function ftsQuery(text: string): string {
-  const terms = text.match(/"[^"]+"|\S+/g) ?? [];
-  return terms.map((t) => {
-    const prefix = t.endsWith("*") && !t.startsWith('"');
-    const bare = t.replace(/^"|"$/g, "").replace(/\*$/, "").replace(/"/g, "");
-    return bare ? `"${bare}"${prefix ? "*" : ""}` : "";
-  }).filter(Boolean).join(" ");
-}
 
 export interface SearchArgs {
   query?: string;

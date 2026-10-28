@@ -10,7 +10,7 @@ import { runImport } from "./import.js";
 import { loadDictionary } from "./ocr.js";
 import { loadCollections, loadIntro } from "./intro.js";
 import { LEVELS, type Level } from "./public.js";
-import { snapshotReader } from "./published.js";
+import { snapshotReader } from "./published-sqlite.js";
 import { type ConceptSet, listSets, loadSets } from "./sets.js";
 import { type SnapshotOptions, buildSnapshot, readMapsFile } from "./snapshot.js";
 import { syncLibrary } from "./sync.js";

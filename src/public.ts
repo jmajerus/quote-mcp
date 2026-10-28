@@ -1,4 +1,4 @@
-import { esc } from "./web.js";
+import { esc } from "./style.js";
 
 /**
  * The rules for what's public, applied when the public snapshot is built (src/snapshot.ts) and nowhere

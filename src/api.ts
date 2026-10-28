@@ -25,7 +25,7 @@ import { type ConceptSet, listSets, setGraph } from "./sets.js";
 
 class BadRequest extends Error {}
 
-/** What each route returns. */
+/** What each route returns, now or as a promise. */
 interface Routes {
   graph(): unknown;
   sets(): unknown;
@@ -53,20 +53,20 @@ function slugOf(raw: string): string {
   }
 }
 
-function answer(routes: Routes, req: http.IncomingMessage, res: http.ServerResponse, url: URL): void {
+async function answer(routes: Routes, req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
   if (req.method !== "GET") {
     send(res, 405, { error: "Method not allowed: the API is read-only." }, { allow: "GET" });
     return;
   }
   try {
-    if (url.pathname === "/api/graph") return send(res, 200, routes.graph());
-    if (url.pathname === "/api/sets") return send(res, 200, { sets: routes.sets() });
+    if (url.pathname === "/api/graph") return send(res, 200, await routes.graph());
+    if (url.pathname === "/api/sets") return send(res, 200, { sets: await routes.sets() });
     const set = /^\/api\/sets\/([^/]+)$/.exec(url.pathname);
-    if (set) return send(res, 200, routes.set(slugOf(set[1])));
+    if (set) return send(res, 200, await routes.set(slugOf(set[1])));
     const m = /^\/api\/concepts\/([^/]+)(\/quotes)?$/.exec(url.pathname);
     if (!m) return send(res, 404, { error: "Not found." });
     const p = url.searchParams;
-    send(res, 200, m[2] ? routes.quotes(slugOf(m[1]), p.get("narrower") !== "false", integer(p, "limit"), integer(p, "offset")) : routes.concept(slugOf(m[1])));
+    send(res, 200, await (m[2] ? routes.quotes(slugOf(m[1]), p.get("narrower") !== "false", integer(p, "limit"), integer(p, "offset")) : routes.concept(slugOf(m[1]))));
   } catch (error) {
     if (error instanceof ToolError) send(res, 404, { error: error.message });
     else if (error instanceof BadRequest) send(res, 400, { error: error.message });
@@ -76,8 +76,8 @@ function answer(routes: Routes, req: http.IncomingMessage, res: http.ServerRespo
 }
 
 /** Answers an /api request from the store. */
-export function handleApi(db: DB, req: http.IncomingMessage, res: http.ServerResponse, url: URL, sets: ConceptSet[] = []): void {
-  answer({
+export function handleApi(db: DB, req: http.IncomingMessage, res: http.ServerResponse, url: URL, sets: ConceptSet[] = []): Promise<void> {
+  return answer({
     graph: () => conceptGraph(db),
     sets: () => listSets(db, sets),
     set: (slug) => setGraph(db, sets, slug),
@@ -90,15 +90,15 @@ export function handleApi(db: DB, req: http.IncomingMessage, res: http.ServerRes
 }
 
 /** Answers an /api request from the public snapshot. */
-export function handlePublishedApi(p: Published, req: http.IncomingMessage, res: http.ServerResponse, url: URL): void {
-  answer({
+export function handlePublishedApi(p: Published, req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
+  return answer({
     graph: () => p.graph(),
     sets: () => p.sets(),
-    set: (slug) => p.set(slug),
-    concept: (slug) => p.concept(slug),
-    quotes: (slug, narrower, limit, offset) => {
-      const concept = p.findConcept(slug);
-      return { concept, ...p.quotes({ conceptIds: narrower ? p.withNarrower(concept.id) : [concept.id], limit, offset }) };
+    set: async (slug) => (await p.set(slug)).set,
+    concept: async (slug) => (await p.concept(slug)).concept,
+    quotes: async (slug, narrower, limit, offset) => {
+      const concept = await p.findConcept(slug);
+      return { concept, ...(await p.quotes({ conceptIds: narrower ? await p.withNarrower(concept.id) : [concept.id], limit, offset })) };
     },
   }, req, res, url);
 }

@@ -568,10 +568,16 @@ serves and never writes.
   - `sets` and `set_concepts`, recipes resolved when the snapshot is built;
     `maps`, from quote-atlas's `maps.json`; and later `links`, the other
     sites' key lists.
-- **One renderer.** `src/site.ts` and the public API read the snapshot's
-  schema only (`src/published.ts`), never the store. Next, that goes behind
-  a small async store interface, with two adapters: better-sqlite3 on the
-  LAN and D1 in the Worker. The rules for what's public live only in the
+- **One renderer** (built 2026-10-28). `src/site.ts` and the public API read
+  the snapshot's schema only (`src/published.ts`), never the store, through
+  a small async store interface with positional parameters, as D1 wants:
+  better-sqlite3 on the LAN (`src/published-sqlite.ts`) and D1 in the
+  Worker. A list's works and concepts are fetched for all its rows at once,
+  and what doesn't change (introductions, maps, collections, counts) is kept
+  for the life of a snapshot, since each query is a round trip in D1. The
+  pages and the queries use no Node modules (`src/common.ts` and
+  `src/style.ts` hold what they share with the store's code), so they bundle
+  for the Worker as they are. The rules for what's public live only in the
   builder. The pages, search, the map's API, and `site.json` are the same
   code on both.
 - **The LAN preview** (built 2026-10-28). `http://quote-mcp.localdomain:8000/`
@@ -676,8 +682,8 @@ serves and never writes.
    map API cut to public records and counts). Then the move to a Worker
    and D1 ("Hosting the public site"), in this order: the snapshot builder
    and `publish --dry-run`, with the LAN preview and the public port reading
-   it (built 2026-10-28); `src/site.ts` behind the async store interface; the
-   Worker under `wrangler dev` with a local D1; the queue and the drain; then
+   it (built 2026-10-28); `src/site.ts` behind the async store interface
+   (built 2026-10-28); the Worker under `wrangler dev` with a local D1; the queue and the drain; then
    `/site.json`, the key list, and the links with corpus-mcp, whose rows are
    queued like any other when the other site's key list changes. Creating the D1 database, the Worker, its secret,
    and the hostname, and the first deploy, are the user's.
