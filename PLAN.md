@@ -439,6 +439,18 @@ Anyone who runs quote-mcp has their own Zotero library, and some will want
 to show their collection and maps rather than keep them private. So the
 server has public pages, off unless they're turned on.
 
+- **One settings file** (2026-10-28). `.env`, on the computer you deploy
+  from, is the only settings file anyone edits. Each deploy (and
+  `deploy --env` on its own) writes the server's file,
+  `/etc/quote-mcp/generated.env`, from `deploy/server.env` (the server's
+  paths and port, in git) and the settings `src/settings.ts` marks `server`,
+  taken from `.env`; the deploy password and Cloudflare tokens never leave
+  the computer. The server's old hand-edited `/etc/quote-mcp/env` is moved
+  aside to `env.replaced` (root only) on the first such deploy. A deploy that
+  would drop a setting the server has stops and names it. Before this, a
+  settings push copied only four named settings, so the D1 proxy's never
+  reached the server, and deleted them first, so an empty line in `.env`
+  could have deleted the server's Zotero key.
 - **Where the choices live** (2026-10-28). The level and the notes setting
   are the site's choices, not a machine's, so they're `public:` and
   `notes:` in a header at the top of `vocab/site.md`, in git beside the
@@ -618,8 +630,9 @@ serves and never writes.
   - D1 is reached through the proxy Worker (`worker/proxy.ts`, a copy of
     concept-clusters' d1-proxy: the REST API's `/query` shape through the
     database's binding, behind a bearer token) or the REST API itself
-    (`src/d1-http.ts`). Settings in `/etc/quote-mcp/env`:
-    `QUOTE_D1_PROXY_URL` and `QUOTE_D1_PROXY_TOKEN`, or
+    (`src/d1-http.ts`). Settings:
+    `QUOTE_D1_PROXY_URL` and `QUOTE_D1_PROXY_TOKEN` (in `.env`, which deploy
+    copies to the server), or
     `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, and
     `QUOTE_D1_DATABASE_ID`. Without them the drain doesn't run.
   - Tried end to end locally: from an empty D1, the first tick shipped the

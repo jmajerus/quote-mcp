@@ -29,7 +29,7 @@ describe("quote-mcp config", () => {
     const report = configReport({ QUOTE_ZOTERO_LIBRARY: "users/1", QUOTE_ZOTERO_API_KEY: "s3cret", QUOTE_D1_PROXY_URL: "https://p.example" }, { public: "quotes" }, "/nowhere");
     expect(report).not.toContain("s3cret");
     expect(report).toMatch(/QUOTE_ZOTERO_API_KEY\s+\(set\)/);
-    expect(report).toMatch(/QUOTE_PUBLIC\s+quotes\s+\[vocab\/site\.md\]/);
+    expect(report).toMatch(/QUOTE_PUBLIC\s+quotes\s+\[server, vocab\/site\.md\]/);
     expect(report).toMatch(/on\s+Import from Zotero/);
     expect(report).toMatch(/off\s+Public replica in D1: QUOTE_D1_PROXY_URL is set but QUOTE_D1_PROXY_TOKEN isn't/);
   });

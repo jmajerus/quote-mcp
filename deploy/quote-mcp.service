@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 User=quote
 Group=quote
-EnvironmentFile=/etc/quote-mcp/env
+EnvironmentFile=/etc/quote-mcp/generated.env
 WorkingDirectory=/opt/quote-mcp/current
 ExecStart=/usr/bin/node /opt/quote-mcp/current/dist/cli.js serve
 Restart=on-failure

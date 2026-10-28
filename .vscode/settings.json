@@ -16,9 +16,9 @@
           "description": "$(debug-step-over) --skip-tests"
         },
         {
-          "label": "Push Zotero and old-site settings",
+          "label": "Push the server's settings",
           "task": "Deploy Quotes: settings",
-          "description": "$(key) --env — copy the settings from .env and restart"
+          "description": "$(key) --env — write the server's settings from .env without deploying code, and restart"
         },
         {
           "label": "Import with the old site",
@@ -41,6 +41,16 @@
       "intervalSeconds": 300,
       "alignment": "left",
       "priority": -101,
+      "refreshOnTasks": [
+        "Deploy Quotes*"
+      ]
+    },
+    {
+      "id": "quote-replica",
+      "command": "node tools/replica-status.mjs",
+      "intervalSeconds": 60,
+      "alignment": "left",
+      "priority": -102,
       "refreshOnTasks": [
         "Deploy Quotes*"
       ]
