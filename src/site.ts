@@ -51,7 +51,7 @@ async function page(p: Published, title: string | null, section: Section, body: 
   if (maps.length) nav.push(["maps", "Maps", "/map/"]);
   if (p.quoting) nav.push(["search", "Search", "/search"]);
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${title ? `${esc(title)} · ` : ""}${esc(site.title)}</title><style>${CSS}${SITE_CSS}</style></head><body>
+<title>${title ? `${esc(title)} · ` : ""}${esc(site.title)}</title><link rel="icon" type="image/png" href="/favicon.png"><style>${CSS}${SITE_CSS}</style></head><body>
 <header class="topbar"><div class="topbar-inner"><a class="brand" href="/" style="color:inherit;text-decoration:none">${esc(site.title)}</a><nav class="nav">
 ${nav.map(([k, label, href]) => `<a href="${href}"${k === section ? ' aria-current="page"' : ""}>${label}</a>`).join("")}
 </nav></div></header><main>${body}</main></body></html>`;

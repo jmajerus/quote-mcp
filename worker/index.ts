@@ -1,5 +1,6 @@
 import { PUBLIC_API, answerApi, publishedRoutes } from "../src/api-routes.js";
 import { ToolError } from "../src/common.js";
+import { faviconBytes } from "../src/favicon.js";
 import { Published } from "../src/published.js";
 import { isSitePath, renderSite } from "../src/site.js";
 import { type D1Database, d1Store } from "./d1.js";
@@ -37,6 +38,9 @@ async function published(env: Env): Promise<Published | null> {
 export async function handle(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === "/map") return new Response(null, { status: 301, headers: { location: `/map/${url.search}` } });
+  if (url.pathname === "/favicon.png" || url.pathname === "/favicon.ico") {
+    return new Response(request.method === "HEAD" ? null : faviconBytes(), { headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" } });
+  }
   const page = isSitePath(url.pathname);
   if (!page && !PUBLIC_API.test(url.pathname)) return text(404, "Not found");
   if (page && request.method !== "GET" && request.method !== "HEAD") return text(405, "Method not allowed", { allow: "GET, HEAD" });

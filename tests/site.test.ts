@@ -187,6 +187,16 @@ describe("serving the public site", () => {
     expect((await fetch(`${pub}/`, { method: "POST" })).status).toBe(405);
   });
 
+  it("serves the tab icon on the LAN and the public port", async () => {
+    const { lan, pub } = await start({});
+    for (const base of [lan, pub]) {
+      const res = await fetch(`${base}/favicon.png`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe("image/png");
+    }
+    expect(await (await fetch(`${lan}/admin`)).text()).toContain('<link rel="icon" type="image/png" href="/favicon.png">');
+  });
+
   it("serves only public routes on the public port", async () => {
     const { lan, pub } = await start({});
     for (const p of ["/admin", "/admin/quotes", "/mcp", "/health", "/api/nowhere", "/anything", "/search?q=assault", "/quotes/1"]) {

@@ -23,7 +23,7 @@ function qs(params: Record<string, unknown>): string {
 function page(title: string, section: Section, body: string): string {
   const nav: [Section, string, string][] = [["overview", "Overview", "/admin"], ["quotes", "Quotes", "/admin/quotes"], ["concepts", "Concepts", "/admin/concepts"], ["worklists", "Worklists", "/admin/worklists"]];
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(title)} · Quotes</title><style>${CSS}</style></head><body>
+<title>${esc(title)} · Quotes</title><link rel="icon" type="image/png" href="/favicon.png"><style>${CSS}</style></head><body>
 <header class="topbar"><div class="topbar-inner"><span class="brand">Quote MCP</span><nav class="nav">
 ${nav.map(([k, label, href]) => `<a href="${href}"${k === section ? ' aria-current="page"' : ""}>${label}</a>`).join("")}
 </nav></div></header><main>${body}</main></body></html>`;

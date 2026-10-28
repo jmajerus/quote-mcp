@@ -20,6 +20,7 @@ A store of quotations from books, most of them paper books, and of your own marg
 | `npm run quotes -- publish` | Builds the snapshot and ships what changed to its replica in D1, as the server's drain does every 15 seconds; `--status` shows the queue. |
 | `npm run quotes -- publish --sql <file>` | The snapshot as a SQL file that loads a D1 replica from scratch. |
 | `npm run worker:load`, `npm run worker:dev` | Load the snapshot into a local D1 and run the public site's Worker ([worker/](worker/)) on it, at `http://localhost:8787`. |
+| `npm run worker:deploy` | Runs the tests, then deploys the public site's Worker to `quotes.majerus.us` with `CLOUDFLARE_API_TOKEN` from `.env` (Deploy Quotes → Deploy the public Worker). |
 | `npm run worker:proxy` | The D1 proxy the drain can ship through ([worker/proxy.ts](worker/proxy.ts)), locally on port 8788. |
 | `npm test` | The tests. |
 

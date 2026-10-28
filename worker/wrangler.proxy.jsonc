@@ -10,6 +10,7 @@
   "name": "quote-mcp-d1-proxy",
   "main": "proxy.ts",
   "compatibility_date": "2026-08-02",
+  "account_id": "eec00739050a8a4cbf359a1dedb8cad3",
   "workers_dev": true,
   "d1_databases": [
     {

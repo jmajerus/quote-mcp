@@ -21,6 +21,11 @@
           "description": "$(key) --env — copy Zotero, old-site, and D1 proxy settings from .env and restart"
         },
         {
+          "label": "Deploy the public Worker",
+          "task": "Deploy Quotes: public Worker",
+          "description": "$(cloud-upload) npm run worker:deploy — test, then deploy worker/ to quotes.majerus.us with CLOUDFLARE_API_TOKEN from .env"
+        },
+        {
           "label": "Import with the old site",
           "task": "Deploy Quotes: import old site",
           "description": "$(database) --import-drupal — the timer's import leaves the old site out"

@@ -123,6 +123,17 @@ describe("the Worker", () => {
     expect(map.headers.get("location")).toBe("/map/?x=1");
   });
 
+  it("serves the tab icon, even before anything is published, and links it from every page", async () => {
+    const empty = new Database(":memory:");
+    for (const p of ["/favicon.png", "/favicon.ico"]) {
+      const res = await get({ DB: fakeD1(empty) }, p);
+      expect(res.status, p).toBe(200);
+      expect(res.headers.get("content-type")).toBe("image/png");
+      expect(Buffer.from(await res.arrayBuffer()).subarray(1, 4).toString()).toBe("PNG");
+    }
+    expect(await (await get(publish().env, "/")).text()).toContain('<link rel="icon" type="image/png" href="/favicon.png">');
+  });
+
   it("says the site isn't published yet when D1 is empty", async () => {
     const empty = new Database(":memory:");
     expect((await get({ DB: fakeD1(empty) }, "/")).status).toBe(503);

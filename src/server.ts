@@ -6,6 +6,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { handleApi, handlePublishedApi } from "./api.js";
 import { PUBLIC_API } from "./api-routes.js";
 import type { DB } from "./db.js";
+import { faviconBytes } from "./favicon.js";
 import { serveMap } from "./map.js";
 import type { DrainStatus } from "./drain.js";
 import type { Published } from "./published.js";
@@ -51,6 +52,14 @@ function readDeployed(): unknown {
   }
 }
 
+/** Answers /favicon.png (and /favicon.ico, which some browsers ask for), or false for any other path. */
+function favicon(req: http.IncomingMessage, res: http.ServerResponse, url: URL): boolean {
+  if (url.pathname !== "/favicon.png" && url.pathname !== "/favicon.ico") return false;
+  const body = faviconBytes();
+  res.writeHead(200, { "content-type": "image/png", "content-length": body.length, "cache-control": "public, max-age=86400" }).end(req.method === "HEAD" ? undefined : body);
+  return true;
+}
+
 const NO_SNAPSHOT = "There's no public snapshot yet. Build one with `quote-mcp publish --dry-run`; an import also builds it.";
 
 /** Answers a site page from the snapshot, or false when the path isn't one. */
@@ -94,6 +103,7 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, quotes, notes, deployed: readDeployed(), ...(options.replica ? { replica: options.replica() } : {}) }));
         return;
       }
+      if (favicon(req, res, url)) return;
       if (await sitePage(options, req, res, url)) return;
       if (url.pathname === "/") {
         res.writeHead(302, { location: "/admin" }).end();
@@ -164,6 +174,7 @@ export function servePublic(options: ServeOptions): Promise<http.Server> {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     try {
+      if (favicon(req, res, url)) return;
       if (await sitePage(options, req, res, url)) return;
       if (PUBLIC_API.test(url.pathname)) {
         const published = await snapshot();

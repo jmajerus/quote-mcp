@@ -26,6 +26,12 @@
       "problemMatcher": []
     },
     {
+      "label": "Deploy Quotes: public Worker",
+      "type": "npm",
+      "script": "worker:deploy",
+      "problemMatcher": []
+    },
+    {
       "label": "Test",
       "type": "npm",
       "script": "test",
