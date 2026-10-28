@@ -3,7 +3,8 @@
 // `npx wrangler secret put D1_PROXY_TOKEN -c worker/wrangler.proxy.jsonc`). The drain can use the REST API
 // instead (CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, QUOTE_D1_DATABASE_ID); the proxy is faster. Locally,
 // `npm run worker:proxy` runs it on the same local D1 as `npm run worker:dev`, with the token from
-// worker/.dev.vars. Creating it and its secret, and deploying, is the user's.
+// worker/.dev.vars. Deployed at https://quote-mcp-d1-proxy.jmajerus.workers.dev; deploy with
+// `npx wrangler deploy -c worker/wrangler.proxy.jsonc`.
 {
   "$schema": "../node_modules/wrangler/config-schema.json",
   "name": "quote-mcp-d1-proxy",
@@ -15,7 +16,7 @@
       "binding": "DB",
       "database_name": "quote-mcp-public",
       // The same database as worker/wrangler.jsonc's.
-      "database_id": "00000000-0000-0000-0000-000000000000"
+      "database_id": "06c4b49c-5e60-4601-a00e-f718bec81c08"
     }
   ]
 }

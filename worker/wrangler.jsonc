@@ -1,19 +1,19 @@
 // The public site's Worker (worker/index.ts): the public pages and the maps' API from the snapshot's
-// replica in D1. Locally: `npm run worker:load` then `npm run worker:dev`. Before a real deploy, create the
-// database (`npx wrangler d1 create quote-mcp-public`), put its id below, apply the migrations
-// (`npx wrangler d1 migrations apply DB --remote -c worker/wrangler.jsonc`), and add the public hostname
-// as a custom domain. Creating these, and deploying, is the user's.
+// replica in D1, at quotes.majerus.us. Locally: `npm run worker:load` then `npm run worker:dev`. Deploy with
+// `npx wrangler deploy -c worker/wrangler.jsonc`; a new migration goes out with
+// `npx wrangler d1 migrations apply DB --remote -c worker/wrangler.jsonc`.
 {
   "$schema": "../node_modules/wrangler/config-schema.json",
   "name": "quote-mcp-public",
   "main": "index.ts",
   "compatibility_date": "2026-08-02",
+  "workers_dev": false,
+  "routes": [{ "pattern": "quotes.majerus.us", "custom_domain": true }],
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "quote-mcp-public",
-      // Replace with the id `wrangler d1 create` prints; a local `wrangler dev` doesn't need a real one.
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "06c4b49c-5e60-4601-a00e-f718bec81c08",
       "migrations_dir": "migrations"
     }
   ],

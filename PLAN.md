@@ -720,8 +720,13 @@ serves and never writes.
    it (built 2026-10-28); `src/site.ts` behind the async store interface
    (built 2026-10-28); the Worker under `wrangler dev` with a local D1 (built 2026-10-28); the queue and the drain (built 2026-10-28); then
    `/site.json`, the key list, and the links with corpus-mcp, whose rows are
-   queued like any other when the other site's key list changes. Creating the D1 database, the Worker, its secret,
-   and the hostname, and the first deploy, are the user's.
+   queued like any other when the other site's key list changes. Deployed
+   2026-10-28 with the user's token: the D1 database `quote-mcp-public`
+   (ENAM, migration applied), the proxy at
+   `quote-mcp-d1-proxy.jmajerus.workers.dev` with its `D1_PROXY_TOKEN`
+   secret, and the public Worker on the custom domain `quotes.majerus.us`
+   (until then a tunnel route to the whole server with no login, which the
+   user removed). The LXC's drain needs the proxy's two settings.
 
 ## Open questions
 
