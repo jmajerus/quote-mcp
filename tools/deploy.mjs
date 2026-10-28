@@ -86,7 +86,18 @@ grep -v ${names.map((n) => `-e '^${n}='`).join(" ")} "$f" > "$f.new" || true
 printf %s ${shellQuote(encoded)} | base64 -d >> "$f.new"
 chown root:quote "$f.new" && chmod 0640 "$f.new" && mv "$f.new" "$f"
 cut -d= -f1 "$f" | tr '\\n' ' '; echo
-if systemctl is-active --quiet quote-mcp.service; then systemctl restart quote-mcp.service; fi`);
+systemctl is-active --quiet quote-mcp.service || exit 0
+# Wait for the server to answer, as a deploy does, so the push ends only once it's back (and the status
+# items, which refresh when it ends, don't catch it mid-restart).
+systemctl restart quote-mcp.service
+set -a; . "$f"; set +a
+for i in $(seq 1 20); do
+  if curl -sf -o /dev/null "http://127.0.0.1:$QUOTE_PORT/health"; then echo "quote-mcp is back up."; exit 0; fi
+  sleep 1
+done
+journalctl -u quote-mcp.service -n 20 --no-pager || true
+echo "quote-mcp didn't answer /health within 20 seconds of the restart." >&2
+exit 1`);
 }
 
 async function importDrupal() {
