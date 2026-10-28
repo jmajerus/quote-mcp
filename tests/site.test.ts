@@ -8,6 +8,7 @@ import type { DrupalSite } from "../src/drupal.js";
 import { runImport } from "../src/import.js";
 import { servePublic, serveHttp } from "../src/server.js";
 import type { ConceptSet } from "../src/sets.js";
+import { bibtex, plainText, quoteHtml } from "../src/public.js";
 import { type SiteOptions, readIntro, renderSite } from "../src/site.js";
 
 const PRIMARY = "users/1";
@@ -211,12 +212,13 @@ describe("serving the public site", () => {
 
   it("serves only public routes on the public port", async () => {
     const { lan, pub } = await start({});
-    for (const p of ["/admin", "/admin/quotes", "/mcp", "/health", "/api/concepts/abuse/quotes", "/api/nowhere", "/anything"]) {
+    for (const p of ["/admin", "/admin/quotes", "/mcp", "/health", "/api/nowhere", "/anything", "/search?q=assault", "/quotes/1"]) {
       expect((await fetch(`${pub}${p}`, { redirect: "manual" })).status, p).toBe(404);
     }
     expect((await fetch(`${pub}/mcp`, { method: "POST", body: "{}" })).status).toBe(404);
     for (const p of ["/api/graph", "/api/concepts/abuse", "/api/sets", "/api/sets/harm"]) expect((await fetch(`${pub}${p}`)).status, p).toBe(200);
     expect((await fetch(`${pub}/map/maps.json`)).status).toBe(200);
+    expect((await fetch(`${pub}/api/concepts/abuse/quotes`)).status).toBe(403);
     expect((await fetch(`${lan}/admin`)).status).toBe(200);
   });
 
@@ -226,5 +228,89 @@ describe("serving the public site", () => {
     expect(res.status).toBe(302);
     expect((await fetch(`${lan}/concepts`)).status).toBe(404);
     expect(() => servePublic(db, { host: "127.0.0.1", port: 0, site: site({ level: "none" }) })).toThrow(/QUOTE_PUBLIC/);
+  });
+});
+
+describe("old-site markup in quote text", () => {
+  it("drops [bib] markers and renders paired asterisks as emphasis", () => {
+    expect(plainText("Ryan and Oestreich [bib]Ryan1991[/bib], in their study")).toBe("Ryan and Oestreich, in their study");
+    expect(plainText("The Player Piano[bib]Vonnegut1952[/bib].")).toBe("The Player Piano.");
+    expect(quoteHtml('Choice is the basis *if* relationships are <equal> and "*loyal*" too')).toBe('Choice is the basis <em>if</em> relationships are &lt;equal&gt; and &quot;<em>loyal</em>&quot; too');
+    expect(quoteHtml("in *Organizational America* (1979)")).toBe("in <em>Organizational America</em> (1979)");
+    expect(quoteHtml("*Performance appraisals are\nannual")).toBe("*Performance appraisals are\nannual");
+    expect(quoteHtml("5 * 3 = 15, 2 * 2")).toBe("5 * 3 = 15, 2 * 2");
+  });
+
+  it("writes BibTeX from CSL", () => {
+    expect(bibtex({ type: "book", title: "Mobbing", author: [{ family: "Davenport", given: "Noa" }, { literal: "Civil {Society}" }], issued: { "date-parts": [[1999]] }, publisher: "Civil Society Pub.", ISBN: "9780966480397" }, "davenport1999mobbing"))
+      .toBe("@book{davenport1999mobbing,\n  author = {Davenport, Noa and Civil Society},\n  title = {Mobbing},\n  year = {1999},\n  publisher = {Civil Society Pub.},\n  isbn = {9780966480397}\n}");
+  });
+});
+
+describe("the quotes level", () => {
+  const quotes = (rest: Partial<SiteOptions> = {}) => site({ level: "quotes", ...rest });
+  const id = (fragment: string) => db.prepare("SELECT id FROM quotes WHERE text LIKE ? OR comment LIKE ?").pluck().get(`%${fragment}%`, `%${fragment}%`) as number;
+
+  it("gives each quote a page with its source, concepts, and how to cite it", () => {
+    const html = renderSite(db, quotes(), `/quotes/${id("emotional assault")}`)!;
+    expect(html).toContain("<blockquote>Mobbing is an emotional assault.</blockquote>");
+    expect(html).toContain(`<a href="/works/${workId("Mobbing")}"><cite>Mobbing: emotional abuse in the American workplace</cite></a> (1999), p. 40`);
+    expect(html).toContain('href="/concepts/mobbing"');
+    expect(html).toContain("<code>[@davenport1999mobbing, p. 40]</code>");
+    expect(html).toContain("@book{davenport1999mobbing,");
+    const unfiled = renderSite(db, quotes(), `/quotes/${id("deserves dignity")}`)!;
+    expect(unfiled).toContain("isn't filed in Zotero");
+    expect(unfiled).toContain("@book{work-");
+  });
+
+  it("lists quotes on concept, set, and work pages, and the newest on the front page", () => {
+    expect(renderSite(db, quotes(), "/concepts/abuse")).toMatch(/Mobbing is an emotional assault[\s\S]*Abuse at work rarely|Abuse at work rarely[\s\S]*Mobbing is an emotional assault/);
+    expect(renderSite(db, quotes(), "/sets/harm")).toContain("Abuse at work rarely");
+    const work = renderSite(db, quotes(), `/works/${workId("Mobbing")}`)!;
+    expect(work.indexOf("Abuse at work rarely")).toBeLessThan(work.indexOf("Mobbing is an emotional assault"));
+    expect(work).toContain("Cite as <code>[@davenport1999mobbing]</code>");
+    const front = renderSite(db, quotes(), "/")!;
+    expect(front).toContain("<h2>Recently added</h2>");
+    expect(front).toContain('action="/search"');
+  });
+
+  it("searches what quotes say, a page at a time", () => {
+    const html = renderSite(db, quotes(), "/search", new URLSearchParams("q=assault"))!;
+    expect(html).toContain("<mark>assault</mark>");
+    expect(html).toContain("1–1 of 1 quote");
+    expect(renderSite(db, quotes(), "/search", new URLSearchParams("q=forty-five"))).toContain("None yet.");
+    expect(renderSite(db, quotes(), "/search", new URLSearchParams('q="'))).toContain("no words to look for");
+    expect(renderSite(db, quotes(), "/search")).not.toContain('class="quotes"');
+  });
+
+  it("keeps notes private unless they're shared, and private-tagged notes always", () => {
+    const shared = id(SHARED_NOTE), hidden = id(PRIVATE_NOTE);
+    expect(() => renderSite(db, quotes(), `/quotes/${shared}`)).toThrow();
+    expect(renderSite(db, quotes({ notes: true }), `/quotes/${shared}`)).toContain(SHARED_NOTE);
+    expect(() => renderSite(db, quotes({ notes: true }), `/quotes/${hidden}`)).toThrow();
+    expect(renderSite(db, quotes({ notes: true }), "/search", new URLSearchParams("q=forty-five"))).toContain("1–1 of 1 quote or note");
+    expect(renderSite(db, quotes({ notes: true }), "/search", new URLSearchParams("q=harsh"))).toContain("None yet.");
+    for (const p of [...pages(), "/search?q=her"]) {
+      const [path, query] = p.split("?");
+      for (const notes of [false, true]) {
+        const html = renderSite(db, quotes({ notes }), path, new URLSearchParams(query))!;
+        expect(html, p).not.toContain(PRIVATE_NOTE);
+        if (!notes) expect(html, p).not.toContain(SHARED_NOTE);
+      }
+    }
+  });
+
+  it("serves the map's quotes on the public port as public records, with public counts", async () => {
+    const { pub } = await start({ level: "quotes" });
+    const body = await (await fetch(`${pub}/api/concepts/mobbing/quotes`)).json();
+    expect(body.total).toBe(1);
+    expect(Object.keys(body.quotes[0]).sort()).toEqual(["attribution", "chapter_author", "concepts", "id", "kind", "locator", "text", "work"]);
+    expect(body.quotes[0].work).toEqual({ id: workId("Mobbing"), title: "Mobbing: emotional abuse in the American workplace", authors: ["Davenport, Noa"], year: "1999", citekey: "davenport1999mobbing" });
+    const concept = await (await fetch(`${pub}/api/concepts/mobbing`)).json();
+    expect(concept).toMatchObject({ quotes: 1, quotes_with_narrower: 1 });
+    const graph = await (await fetch(`${pub}/api/graph`)).json();
+    expect(graph.concepts.find((c: { slug: string }) => c.slug === "mobbing").quotes).toBe(1);
+    expect((await fetch(`${pub}/quotes/${id("emotional assault")}`)).status).toBe(200);
+    expect((await fetch(`${pub}/quotes/${id(SHARED_NOTE)}`)).status).toBe(404);
   });
 });

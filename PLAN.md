@@ -491,7 +491,15 @@ server has public pages, off unless they're turned on.
   - Works by author, as a bibliography, and a page per work with its
     quotes.
   - At `quotes`, a page per quote with its work, page, concepts, and a
-    "cite this" box (the Pandoc citation and BibTeX `cite_quote` gives).
+    "cite this" box (the Pandoc citation, BibTeX written from the CSL, and
+    the CSL JSON), search over what quotes say, and the quotes on concept,
+    set, and work pages. A quote's comment counts as your own words, so
+    it's shown and searched only with `QUOTE_PUBLIC_NOTES=all`.
+  - The old site's markup is tidied for display only: `[bib]Key[/bib]`
+    markers (in-text citations of its Biblio records, which the sentence
+    around them already names) are dropped, and paired `*asterisks*` are
+    emphasis. The store keeps the text as imported until phase 2's repair
+    tools can edit it with history.
   - Public pages are cacheable, unlike `/admin`.
 - **Public API.** The map's `/api` routes, cut to public fields: the graph,
   concepts, and sets at `catalogue`, and quotes at `quotes`. On the public
@@ -560,7 +568,9 @@ server has public pages, off unless they're turned on.
    2026-10-28, `src/site.ts`, with collections; the public port answers 404 for
    `/api/concepts/:slug/quotes` until the quotes level cuts it to public
    fields); then the
-   `quotes` level (quote pages, "cite this", search); then `/site.json` and
+   `quotes` level (quote pages, "cite this", search; built 2026-10-28,
+   `src/public.ts` deciding what a record may show, and the public port's
+   map API cut to public records and counts); then `/site.json` and
    the citekey links, once corpus-mcp has its side. The Cloudflare route for
    the public hostname is the user's to set up.
 

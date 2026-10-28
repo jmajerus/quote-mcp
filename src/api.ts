@@ -1,6 +1,7 @@
 import type http from "node:http";
 import type { DB } from "./db.js";
-import { ToolError, conceptGraph, findConcept, getConcept, searchQuotes } from "./queries.js";
+import { NotPublic, type Visibility, publicCount, publicCounts, publicQuotes } from "./public.js";
+import { ToolError, conceptGraph, findConcept, getConcept, searchQuotes, withNarrower } from "./queries.js";
 import { type ConceptSet, listSets, setGraph } from "./sets.js";
 
 /**
@@ -16,6 +17,9 @@ import { type ConceptSet, listSets, setGraph } from "./sets.js";
  *   GET /api/sets                     the concept sets (src/sets.ts), with how many concepts each has
  *   GET /api/sets/:slug               one set as a piece of the graph: /api/graph's shape, with the set's
  *                                     slug, scheme, label, description, definition, and missing slugs
+ *
+ * On the public listener (`pub` given) the same routes answer with only what's public (src/public.ts):
+ * counts of public records, and quotes as public records, or 403 below the quotes level.
  */
 
 class BadRequest extends Error {}
@@ -40,14 +44,21 @@ function slugOf(raw: string): string {
 }
 
 /** Answers an /api request. */
-export function handleApi(db: DB, req: http.IncomingMessage, res: http.ServerResponse, url: URL, sets: ConceptSet[] = []): void {
+/** Concepts with their counts of public records, in place of every record's. */
+function recount<T extends { scheme: string; slug: string; quotes: number }>(db: DB, pub: Visibility, concepts: T[]): T[] {
+  const n = publicCounts(db, pub);
+  return concepts.map((c) => ({ ...c, quotes: n.get(`${c.scheme}:${c.slug}`) ?? 0 }));
+}
+
+export function handleApi(db: DB, req: http.IncomingMessage, res: http.ServerResponse, url: URL, sets: ConceptSet[] = [], pub?: Visibility): void {
   if (req.method !== "GET") {
     send(res, 405, { error: "Method not allowed: the API is read-only." }, { allow: "GET" });
     return;
   }
   try {
     if (url.pathname === "/api/graph") {
-      send(res, 200, conceptGraph(db));
+      const graph = conceptGraph(db);
+      send(res, 200, pub ? { ...graph, concepts: recount(db, pub, graph.concepts) } : graph);
       return;
     }
     if (url.pathname === "/api/sets") {
@@ -56,7 +67,8 @@ export function handleApi(db: DB, req: http.IncomingMessage, res: http.ServerRes
     }
     const set = /^\/api\/sets\/([^/]+)$/.exec(url.pathname);
     if (set) {
-      send(res, 200, setGraph(db, sets, slugOf(set[1])));
+      const graph = setGraph(db, sets, slugOf(set[1]));
+      send(res, 200, pub ? { ...graph, concepts: recount(db, pub, graph.concepts) } : graph);
       return;
     }
     const m = /^\/api\/concepts\/([^/]+)(\/quotes)?$/.exec(url.pathname);
@@ -66,16 +78,23 @@ export function handleApi(db: DB, req: http.IncomingMessage, res: http.ServerRes
     }
     const slug = slugOf(m[1]);
     if (!m[2]) {
-      send(res, 200, getConcept(db, slug));
+      const c = getConcept(db, slug);
+      send(res, 200, pub ? { ...c, quotes: publicCount(db, pub, [c.id]), quotes_with_narrower: publicCount(db, pub, withNarrower(db, c.id)) } : c);
       return;
     }
     const concept = findConcept(db, slug);
     const p = url.searchParams;
+    if (pub) {
+      const ids = p.get("narrower") === "false" ? [concept.id] : withNarrower(db, concept.id);
+      send(res, 200, { concept, ...publicQuotes(db, pub, { conceptIds: ids, limit: integer(p, "limit"), offset: integer(p, "offset") }) });
+      return;
+    }
     const quotes = searchQuotes(db, { concept: `${concept.scheme}:${concept.slug}`, narrower: p.get("narrower") !== "false", limit: integer(p, "limit"), offset: integer(p, "offset") });
     send(res, 200, { concept, ...quotes });
   } catch (error) {
     if (error instanceof ToolError) send(res, 404, { error: error.message });
     else if (error instanceof BadRequest) send(res, 400, { error: error.message });
+    else if (error instanceof NotPublic) send(res, 403, { error: error.message });
     else throw error;
   }
 }

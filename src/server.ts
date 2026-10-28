@@ -20,7 +20,7 @@ import { renderAdmin } from "./web.js";
  * the private hostname, and phase 2's writes will check its token as corpus-mcp does.
  *
  * servePublic is a second listener, for a hostname with no Access in front of it. It routes only the
- * public site, the map, and the API routes the map needs that hold no quoted text, and answers 404 for
+ * public site, the map, and the API routes the map needs, cut to what's public, and answers 404 for
  * everything else, so what's public is decided here, not by the proxy.
  */
 
@@ -35,8 +35,8 @@ export interface ServeOptions {
   site?: SiteOptions;
 }
 
-/** API routes with no quoted text, which the public listener answers. */
-const PUBLIC_API = /^\/api\/(graph|sets|sets\/[^/]+|concepts\/[^/]+)$/;
+/** The API routes the public listener answers, with only what's public (src/public.ts). */
+const PUBLIC_API = /^\/api\/(graph|sets|sets\/[^/]+|concepts\/[^/]+(\/quotes)?)$/;
 
 /** What tools/deploy.mjs last installed (branch, commit, when), written beside the store after the restart, so read per request. */
 function readDeployed(): unknown {
@@ -146,7 +146,7 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
   return listen(server, options.port, options.host, `/mcp, /admin, /api${sets}${options.mapDir ? `, /map/ from ${options.mapDir}` : ""}${site}`);
 }
 
-/** The public listener: the public site, the map, and the API routes with no quoted text; 404 for everything else. */
+/** The public listener: the public site, the map, and the map's API routes cut to what's public; 404 for everything else. */
 export function servePublic(db: DB, options: ServeOptions): Promise<http.Server> {
   if (!options.site || options.site.level === "none") throw new Error("A public port needs QUOTE_PUBLIC (catalogue or quotes).");
   const server = http.createServer(async (req, res) => {
@@ -154,7 +154,7 @@ export function servePublic(db: DB, options: ServeOptions): Promise<http.Server>
     try {
       if (sitePage(db, options, req, res, url)) return;
       if (PUBLIC_API.test(url.pathname)) {
-        handleApi(db, req, res, url, options.sets);
+        handleApi(db, req, res, url, options.sets, options.site);
         return;
       }
       if (url.pathname === "/map" || url.pathname.startsWith("/map/")) {
@@ -167,7 +167,7 @@ export function servePublic(db: DB, options: ServeOptions): Promise<http.Server>
       if (!res.headersSent) res.writeHead(500).end();
     }
   });
-  return listen(server, options.port, options.host, `public: / (${options.site.level})${options.mapDir ? ", /map/" : ""}, /api/graph, /api/concepts, /api/sets`);
+  return listen(server, options.port, options.host, `public: / (${options.site.level}${options.site.notes ? ", with notes" : ""})${options.mapDir ? ", /map/" : ""}, /api/graph, /api/concepts, /api/sets`);
 }
 
 export async function serveStdio(db: DB, sets: ConceptSet[] = []): Promise<void> {

@@ -28,7 +28,7 @@ export interface WorkSummary {
   id: number; title: string; authors: string[]; year: string | null; match: string; zotero_library: string | null; zotero_key: string | null; citekey: string | null;
 }
 
-function workSummary(db: DB, workId: number | null): WorkSummary | null {
+export function workSummary(db: DB, workId: number | null): WorkSummary | null {
   if (workId === null) return null;
   const w = db.prepare("SELECT * FROM works WHERE id = ?").get(workId) as Record<string, unknown> | undefined;
   if (!w) return null;
@@ -46,7 +46,7 @@ function zoteroData(db: DB, library: string | null, key: string | null) {
   return { data, citekey: citekeyOf(data) };
 }
 
-function locatorText(kind: string, value: string | null): string | null {
+export function locatorText(kind: string, value: string | null): string | null {
   if (!value) return null;
   if (kind === "kindle") return `Kindle loc. ${value}`;
   return /[–-]/.test(value) ? `pp. ${value}` : `p. ${value}`;

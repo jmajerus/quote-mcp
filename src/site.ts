@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DB } from "./db.js";
-import { ToolError, getConcept, withNarrower } from "./queries.js";
+import { type Level, type PublicRecord, publicCitation, publicCount, publicQuotes, publicRecord, quoteHtml, visible } from "./public.js";
+import { ToolError, getConcept, withNarrower, workSummary } from "./queries.js";
 import { type ConceptSet, listSets, setGraph } from "./sets.js";
 import { CSS, esc } from "./web.js";
 
@@ -9,17 +10,17 @@ import { CSS, esc } from "./web.js";
  * The public site: a front page at / and pages for collections, concepts, sets, and works, off unless
  * QUOTE_PUBLIC is set. A collection is a concept scheme as readers see it (the human side of work, say):
  * its concepts decide what's in it, so a work quoted in two collections is in both, and each has an
- * introduction in vocab/collections/<scheme>.md. With one collection the front page shows it inline. It has its own queries, which return only what a level makes public, rather than the admin pages
- * with parts hidden, so a field added there can't leak here.
+ * introduction in vocab/collections/<scheme>.md. With one collection the front page shows it inline.
  *
  *   catalogue   concepts, sets, maps, works by title and author, and counts; no quoted text
- *   quotes      the catalogue and quote text with citations (and notes, with QUOTE_PUBLIC_NOTES=all,
- *               except those tagged private)
+ *   quotes      the catalogue, plus a page per quote with how to cite it, search, and the quotes on each
+ *               concept's, set's, and work's page (and notes, with QUOTE_PUBLIC_NOTES=all)
  *
- * Unparsed quotes, flags, OCR suspects, worklists, and history are never public.
+ * What a record may show is decided in src/public.ts, not here, and these pages use only its queries
+ * for quotes, never the admin pages', so a field added there can't leak here.
  */
 
-export type Level = "none" | "catalogue" | "quotes";
+export type { Level } from "./public.js";
 export const LEVELS: readonly Level[] = ["none", "catalogue", "quotes"];
 
 export interface SiteOptions {
@@ -79,13 +80,6 @@ export function loadCollections(dir: string): Record<string, Intro> {
 }
 
 // --- Public queries ------------------------------------------------------------------------------
-
-/** The records a level makes public, as a condition on quotes q. */
-function visible(site: SiteOptions): string {
-  const notes = site.level === "quotes" && site.notes
-    ? " OR (q.kind = 'note' AND NOT EXISTS (SELECT 1 FROM quote_tags p WHERE p.quote_id = q.id AND p.tag = 'private' COLLATE NOCASE))" : "";
-  return `(q.status != 'unparsed' AND (q.kind = 'quote'${notes}))`;
-}
 
 interface PublicWork { id: number; title: string; authors: string[]; year: string | null; quotes: number }
 
@@ -173,7 +167,7 @@ function readMaps(site: SiteOptions): MapEntry[] {
 
 // --- Pages ---------------------------------------------------------------------------------------
 
-type Section = "home" | "concepts" | "works" | "maps";
+type Section = "home" | "concepts" | "works" | "maps" | "search";
 
 const SITE_CSS = `
 .intro { max-width: 46rem; font-size: 1.02rem; }
@@ -189,11 +183,21 @@ a.card:hover { border-color: var(--accent); }
 .az li, .plain-list li { break-inside: avoid; padding: 2px 0; }
 .count { color: var(--muted); font-size: 0.85rem; }
 .works li { padding: 4px 0; }
+.quotes { list-style: none; padding: 0; margin: 0; }
+.quotes > li { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
+.quotes blockquote, .quote-page blockquote { margin: 0 0 8px; }
+.quote-page blockquote { font-size: 1.08rem; }
+.source { color: var(--muted); font-size: 0.9rem; margin: 0 0 4px; }
+.permalink { color: var(--muted); font-size: 0.82rem; text-decoration: none; float: right; margin-left: 8px; }
+form.search { display: flex; gap: 8px; margin: 14px 0; max-width: 40rem; }
+form.search input { flex: 1; font: inherit; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); min-width: 0; }
+.cite pre { white-space: pre-wrap; }
 `;
 
 function page(site: SiteOptions, title: string | null, section: Section, body: string): string {
   const nav: [Section, string, string][] = [["home", "Home", "/"], ["concepts", "Concepts", "/concepts"], ["works", "Works", "/works"]];
   if (site.mapDir) nav.push(["maps", "Maps", "/map/"]);
+  if (site.level === "quotes") nav.push(["search", "Search", "/search"]);
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title ? `${esc(title)} · ` : ""}${esc(site.intro.title)}</title><style>${CSS}${SITE_CSS}</style></head><body>
 <header class="topbar"><div class="topbar-inner"><a class="brand" href="/" style="color:inherit;text-decoration:none">${esc(site.intro.title)}</a><nav class="nav">
@@ -218,6 +222,93 @@ function card(href: string, title: string, text: string | null | undefined): str
   return `<a class="card" href="${esc(href)}"><h3>${esc(title)}</h3>${text ? `<p>${esc(text)}</p>` : ""}</a>`;
 }
 
+// --- Quotes, at the quotes level -------------------------------------------------------------------
+
+const quoting = (site: SiteOptions) => site.level === "quotes";
+const PAGE = 20;
+
+function qs(params: Record<string, unknown>): string {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== "" && v !== 0) p.set(k, String(v));
+  const s = p.toString();
+  return s ? `?${s}` : "";
+}
+
+function offsetOf(params: URLSearchParams): number {
+  const n = Number(params.get("offset") ?? 0);
+  return Number.isInteger(n) && n > 0 ? n : 0;
+}
+
+/** Where a record comes from: chapter author, authors, the work (linked), year, and place. */
+function source(r: PublicRecord): string {
+  const w = r.work;
+  const who = w ? authorsOf(w.authors) : "";
+  return `<p class="source">${r.chapter_author ? `${esc(r.chapter_author)}, in ` : ""}${who ? `${esc(who)}, ` : ""}${w ? `<a href="/works/${w.id}"><cite>${esc(w.title)}</cite></a>` : ""}${w?.year ? ` (${esc(w.year)})` : ""}${r.locator ? `${w ? ", " : ""}${esc(r.locator)}` : ""}${r.attribution ? ` — ${esc(r.attribution)}` : ""}</p>`;
+}
+
+function conceptChips(r: PublicRecord): string {
+  return r.concepts.length ? `<p>${r.concepts.map((c) => `<a class="chip" href="${conceptHref(c.slug)}">${esc(c.label)}</a>`).join("")}</p>` : "";
+}
+
+function words(r: PublicRecord): string {
+  if (r.kind === "note") return `<div class="words"><span class="kind">note</span>${esc(r.note ?? "")}</div>`;
+  return `<blockquote>${quoteHtml(r.text)}</blockquote>`;
+}
+
+function quoteItem(r: PublicRecord): string {
+  const text = r.snippet ? `<p>${esc(r.snippet).replace(/«/g, "<mark>").replace(/»/g, "</mark>")}</p>` : words(r);
+  return `<li><a class="permalink" href="/quotes/${r.id}" title="This ${r.kind}'s page, with how to cite it">#${r.id}</a>${text}${source(r)}${conceptChips(r)}</li>`;
+}
+
+/** A page of records, with links to the pages before and after it. */
+function quoteList(site: SiteOptions, result: ReturnType<typeof publicQuotes>, base: string, params: Record<string, unknown>): string {
+  if (!result.total) return '<p class="note">None yet.</p>';
+  const { total, offset, limit } = result;
+  const prev = offset > 0 ? `<a href="${base}${qs({ ...params, offset: Math.max(0, offset - limit) })}">← Previous</a>` : "";
+  const next = offset + limit < total ? `<a href="${base}${qs({ ...params, offset: offset + limit })}">Next →</a>` : "";
+  return `<ol class="quotes">${result.quotes.map(quoteItem).join("")}</ol>
+<div class="pager">${prev}${next}<span class="note">${offset + 1}–${Math.min(total, offset + limit)} of ${records(site, total)}</span></div>`;
+}
+
+function searchForm(query: string, collection: string | null): string {
+  return `<form class="search" method="get" action="/search" role="search"><input type="search" name="q" value="${esc(query)}" placeholder="Words or &quot;a phrase&quot;" aria-label="Search the quotes">
+${collection ? `<input type="hidden" name="collection" value="${esc(collection)}">` : ""}<button>Search</button></form>`;
+}
+
+function searchPage(db: DB, site: SiteOptions, params: URLSearchParams): string {
+  const query = (params.get("q") ?? "").trim();
+  const c = chosen(db, site, params);
+  let body = "";
+  if (query) {
+    try {
+      const result = publicQuotes(db, site, { query, conceptIds: c?.conceptIds, limit: PAGE, offset: offsetOf(params) });
+      body = quoteList(site, result, "/search", { q: query, collection: c?.scheme });
+    } catch (error) {
+      if (!(error instanceof ToolError)) throw error;
+      body = `<p class="note">${esc(error.message)}</p>`;
+    }
+  }
+  return page(site, query ? `“${query}”` : "Search", "search", `<h1>Search</h1>
+<p class="sub">Words are looked for in what the quotes say; "a phrase" is kept together, and a trailing * matches the start of a word${within(db, site, c)}.</p>
+${searchForm(query, c?.scheme ?? null)}${body}`);
+}
+
+function quotePage(db: DB, site: SiteOptions, id: number): string {
+  const r = publicRecord(db, site, id);
+  const c = publicCitation(db, site, id);
+  const name = r.kind === "note" ? "A note" : "A quote";
+  const title = r.work ? `${name} from ${r.work.title}` : name;
+  return page(site, title, "works", `<div class="quote-page"><h1>${esc(title)}</h1>
+${words(r)}${source(r)}${conceptChips(r)}
+${r.comment ? `<h2>Comment</h2><p>${esc(r.comment)}</p>` : ""}
+<h2>Cite this</h2><div class="cite">
+${c.pandoc ? `<p>Pandoc: <code>${esc(c.pandoc)}</code></p>` : ""}
+${c.bibtex ? `<details${c.pandoc ? "" : " open"}><summary>BibTeX</summary><pre>${esc(c.bibtex)}</pre></details>` : ""}
+${c.csl ? `<details><summary>CSL JSON</summary><pre>${esc(JSON.stringify(c.csl, null, 2))}</pre></details>` : '<p class="note">There\'s no work recorded to cite.</p>'}
+${r.work && !r.work.citekey ? '<p class="note">This work isn\'t filed in Zotero with a citekey yet, so there\'s no Pandoc citation; the BibTeX and CSL come from its old catalogue record.</p>' : ""}
+</div></div>`);
+}
+
 /** A collection's maps and starting points (concept sets), or every collection's. */
 function waysIn(db: DB, site: SiteOptions, scheme: string | null): string {
   const maps = readMaps(site).filter((m) => !scheme || (m.scheme ?? m.name) === scheme);
@@ -238,25 +329,26 @@ function stats(site: SiteOptions, n: { quotes: number; works: number; concepts: 
 function frontPage(db: DB, site: SiteOptions): string {
   const n = counts(db, site);
   const all = collections(db, site);
-  const head = `<h1>${esc(site.intro.title)}</h1>\n<div class="intro">${site.intro.html}</div>\n${stats(site, n)}`;
+  const head = `<h1>${esc(site.intro.title)}</h1>\n<div class="intro">${site.intro.html}</div>\n${stats(site, n)}${quoting(site) ? searchForm("", null) : ""}`;
+  const recent = quoting(site) ? `<h2>Recently added</h2><ol class="quotes">${publicQuotes(db, site, { newest: true, limit: 5 }).quotes.map(quoteItem).join("")}</ol>` : "";
   if (all.length <= 1) {
     // One collection: shown inline, under its own heading when it has an introduction of its own.
     const c = all[0];
     const own = c && site.collections[c.scheme] ? `<h2>${esc(c.intro.title)}</h2><div class="intro">${c.intro.html}</div>` : "";
-    return page(site, null, "home", `${head}${own}${waysIn(db, site, null)}${browse(site, n, null)}`);
+    return page(site, null, "home", `${head}${own}${waysIn(db, site, null)}${browse(site, n, null)}${recent}`);
   }
   const loose = untagged(db, site);
   return page(site, null, "home", `${head}
 <h2>Collections</h2><div class="grid">${all.map((c) => `<a class="card" href="/collections/${encodeURIComponent(c.scheme)}"><h3>${esc(c.intro.title)}</h3>
 ${c.intro.summary ? `<p>${esc(c.intro.summary)}</p>` : ""}<p class="count">${records(site, c.quotes)} · ${plural(c.works, "work")} · ${plural(c.concepts, "concept")}</p></a>`).join("")}</div>
 ${loose ? `<p class="note">${records(site, loose)} not yet tagged with a concept, so in no collection; they're under Works.</p>` : ""}
-${waysIn(db, site, null)}${browse(site, n, null)}`);
+${waysIn(db, site, null)}${browse(site, n, null)}${recent}`);
 }
 
 function collectionPage(db: DB, site: SiteOptions, scheme: string): string {
   const c = findCollection(db, site, scheme);
   return page(site, c.intro.title, "home", `<h1>${esc(c.intro.title)}</h1>
-<div class="intro">${c.intro.html}</div>${stats(site, c)}${waysIn(db, site, c.scheme)}${browse(site, c, c.scheme)}`);
+<div class="intro">${c.intro.html}</div>${stats(site, c)}${quoting(site) ? searchForm("", c.scheme) : ""}${waysIn(db, site, c.scheme)}${browse(site, c, c.scheme)}`);
 }
 
 /** The collection a ?collection= asks for, or null for all; a ToolError for one that isn't there. */
@@ -283,11 +375,16 @@ function conceptsPage(db: DB, site: SiteOptions, params: URLSearchParams): strin
 <div class="az">${[...groups].map(([l, cs]) => `<h2 id="${l === "#" ? "other" : l}">${l}</h2><ul>${cs.map((c) => `<li><a href="${conceptHref(c.slug)}">${esc(c.label)}</a> <span class="count">${c.quotes}</span></li>`).join("")}</ul>`).join("")}</div>`);
 }
 
-function conceptPage(db: DB, site: SiteOptions, slug: string): string {
+function conceptPage(db: DB, site: SiteOptions, slug: string, params: URLSearchParams): string {
   const c = getConcept(db, slug);
   const ids = withNarrower(db, c.id);
   const quoted = publicWorks(db, site, ids);
-  const total = (db.prepare(`SELECT COUNT(DISTINCT q.id) FROM quotes q JOIN quote_tags t ON t.quote_id = q.id WHERE t.concept_id IN (${ids.join(",")}) AND ${visible(site)}`).pluck().get() as number);
+  const total = publicCount(db, site, ids);
+  const worksList = quoted.length ? `<ul class="plain-list works">${quoted.map((w) => workItem(w, site)).join("")}</ul>` : '<p class="note">None yet.</p>';
+  const listed = quoting(site)
+    ? `<h2>Quotes</h2>${quoteList(site, publicQuotes(db, site, { conceptIds: ids, limit: PAGE, offset: offsetOf(params) }), conceptHref(c.slug), {})}
+<details><summary>Works quoted (${quoted.length})</summary>${worksList}</details>`
+    : `<h2>Works quoted</h2>${worksList}`;
   const relations = Object.entries(c.relations).map(([type, list]) =>
     `<tr><th>${esc(type)}</th><td>${list.map((r) => `<a class="chip" href="${conceptHref(r.slug)}">${esc(r.label)}</a>`).join("")}</td></tr>`).join("");
   const inSets = listSets(db, site.sets).filter((s) => s.scheme === c.scheme && setGraph(db, site.sets, s.slug).concepts.some((m) => m.slug === c.slug));
@@ -299,10 +396,10 @@ function conceptPage(db: DB, site: SiteOptions, slug: string): string {
 ${c.definition ? `<p>${esc(c.definition)}</p>` : ""}
 ${c.alt_labels.length || relations ? `<div class="scroll"><table>${c.alt_labels.length ? `<tr><th>Also</th><td>${c.alt_labels.map(esc).join(", ")}</td></tr>` : ""}${relations}</table></div>` : ""}
 ${inSets.length ? `<p class="meta">In ${inSets.map((s) => `<a href="/sets/${s.slug}">${esc(s.label)}</a>`).join(", ")}</p>` : ""}
-<h2>Works quoted</h2>${quoted.length ? `<ul class="plain-list works">${quoted.map((w) => workItem(w, site)).join("")}</ul>` : '<p class="note">None yet.</p>'}`);
+${listed}`);
 }
 
-function setPage(db: DB, site: SiteOptions, slug: string): string {
+function setPage(db: DB, site: SiteOptions, slug: string, params: URLSearchParams): string {
   const set = setGraph(db, site.sets, slug);
   const n = conceptCounts(db, site);
   const ids = new Map((db.prepare("SELECT c.slug, c.id FROM concepts c JOIN schemes s ON s.id = c.scheme_id WHERE s.slug = ?").all(set.scheme) as { slug: string; id: number }[]).map((r) => [r.slug, r.id]));
@@ -310,7 +407,8 @@ function setPage(db: DB, site: SiteOptions, slug: string): string {
   return page(site, set.label, "concepts", `<h1>${esc(set.label)}</h1>
 ${set.description ? `<p class="intro">${esc(set.description)}</p>` : ""}
 <p class="sub">${plural(set.concepts.length, "concept")}${maps.map((m) => ` · <a href="/map/${m.name}/">${esc(m.title ?? m.name)}</a>`).join("")}</p>
-<ul class="plain-list">${set.concepts.map((c) => `<li><a href="${conceptHref(c.slug)}">${esc(c.label)}</a> <span class="count">${n.get(ids.get(c.slug) ?? -1) ?? 0}</span></li>`).join("")}</ul>`);
+<ul class="plain-list">${set.concepts.map((c) => `<li><a href="${conceptHref(c.slug)}">${esc(c.label)}</a> <span class="count">${n.get(ids.get(c.slug) ?? -1) ?? 0}</span></li>`).join("")}</ul>
+${quoting(site) ? `<h2>Quotes</h2>${quoteList(site, publicQuotes(db, site, { conceptIds: set.concepts.map((c) => ids.get(c.slug)!), limit: PAGE, offset: offsetOf(params) }), `/sets/${set.slug}`, {})}` : ""}`);
 }
 
 function worksPage(db: DB, site: SiteOptions, params: URLSearchParams): string {
@@ -320,16 +418,18 @@ function worksPage(db: DB, site: SiteOptions, params: URLSearchParams): string {
 <ul class="plain-list works" style="columns:auto">${list.map((w) => workItem(w, site)).join("")}</ul>`);
 }
 
-function workPage(db: DB, site: SiteOptions, id: number): string {
+function workPage(db: DB, site: SiteOptions, id: number, params: URLSearchParams): string {
   const w = publicWork(db, site, id);
+  const citekey = workSummary(db, id)?.citekey ?? null;
   return page(site, w.title, "works", `<h1><cite>${esc(w.title)}</cite></h1>
 <p class="sub">${w.authors.length ? `${esc(authorsOf(w.authors))} · ` : ""}${w.year ? `${esc(w.year)} · ` : ""}${records(site, w.quotes)}</p>
-<h2>Concepts</h2>${w.concepts.length ? `<p>${w.concepts.map((c) => `<a class="chip" href="${conceptHref(c.slug)}">${esc(c.label)} <span class="count">${c.quotes}</span></a>`).join("")}</p>` : '<p class="note">None tagged.</p>'}`);
+<h2>Concepts</h2>${w.concepts.length ? `<p>${w.concepts.map((c) => `<a class="chip" href="${conceptHref(c.slug)}">${esc(c.label)} <span class="count">${c.quotes}</span></a>`).join("")}</p>` : '<p class="note">None tagged.</p>'}
+${quoting(site) ? `<h2>Quotes</h2>${quoteList(site, publicQuotes(db, site, { work: id, limit: 50, offset: offsetOf(params) }), `/works/${id}`, {})}${citekey ? `<p class="meta">Cite as <code>[@${esc(citekey)}]</code>, with the page.</p>` : ""}` : ""}`);
 }
 
 /** The paths the public site answers, so the server can route them. */
 export function isSitePath(pathname: string): boolean {
-  return pathname === "/" || /^\/(collections|concepts|works|sets)(\/|$)/.test(pathname);
+  return pathname === "/" || /^\/(collections|concepts|works|sets|quotes|search)(\/|$)/.test(pathname);
 }
 
 function decoded(part: string): string {
@@ -349,10 +449,14 @@ export function renderSite(db: DB, site: SiteOptions, pathname: string, params =
   let m = /^\/collections\/([^/]+)$/.exec(pathname);
   if (m) return collectionPage(db, site, decoded(m[1]));
   m = /^\/concepts\/([^/]+)$/.exec(pathname);
-  if (m) return conceptPage(db, site, decoded(m[1]));
+  if (m) return conceptPage(db, site, decoded(m[1]), params);
   m = /^\/sets\/([^/]+)$/.exec(pathname);
-  if (m) return setPage(db, site, decoded(m[1]));
+  if (m) return setPage(db, site, decoded(m[1]), params);
   m = /^\/works\/(\d+)$/.exec(pathname);
-  if (m) return workPage(db, site, Number(m[1]));
+  if (m) return workPage(db, site, Number(m[1]), params);
+  if (!quoting(site)) return null;
+  if (pathname === "/search") return searchPage(db, site, params);
+  m = /^\/quotes\/(\d+)$/.exec(pathname);
+  if (m) return quotePage(db, site, Number(m[1]));
   return null;
 }
