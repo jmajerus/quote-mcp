@@ -19,8 +19,10 @@ const USAGE = `Usage: npm run deploy -- [--provision | --env | --import-drupal] 
                    (the server's /health reports it); the first deploy also runs the first import,
                    the old site included
   --provision      one-time setup of the LXC (Node 22, build tools, word list, quote user, directories)
-  --env            copy QUOTE_ZOTERO_LIBRARY, QUOTE_ZOTERO_API_KEY, QUOTE_ZOTERO_SOURCES, and
-                   QUOTE_DRUPAL_URL from .env into the server's /etc/quote-mcp/env (mode 0640)
+  --env            copy the server's settings from .env into its /etc/quote-mcp/env (mode 0640) and
+                   restart: QUOTE_ZOTERO_LIBRARY, QUOTE_ZOTERO_API_KEY, QUOTE_ZOTERO_SOURCES,
+                   QUOTE_DRUPAL_URL, QUOTE_D1_PROXY_URL, and QUOTE_D1_PROXY_TOKEN. Only those set
+                   in .env are replaced; the server's others are left as they are
   --import-drupal  run an import on the server with the old site included (the timer leaves it out)
   --skip-tests     deploy without running the test suite first
 
@@ -62,12 +64,20 @@ async function provision() {
   console.log("\nProvisioned. Next: npm run deploy -- --env, then npm run deploy");
 }
 
-/** Sets the server's Zotero and old-site settings from this machine's .env, so keys never pass through a chat or a command line. */
+/**
+ * Sets the server's settings from this machine's .env, so keys never pass through a chat or a command
+ * line: the Zotero and old-site settings, and the D1 proxy the public replica ships through. Only the
+ * ones set in .env are replaced, so one left out (or left empty, as a second, empty line in .env makes
+ * it) never deletes the server's.
+ */
 async function pushEnv() {
-  const names = ["QUOTE_ZOTERO_LIBRARY", "QUOTE_ZOTERO_API_KEY", "QUOTE_ZOTERO_SOURCES", "QUOTE_DRUPAL_URL"];
+  const all = ["QUOTE_ZOTERO_LIBRARY", "QUOTE_ZOTERO_API_KEY", "QUOTE_ZOTERO_SOURCES", "QUOTE_DRUPAL_URL", "QUOTE_D1_PROXY_URL", "QUOTE_D1_PROXY_TOKEN"];
   const library = process.env.QUOTE_ZOTERO_LIBRARY ?? "";
-  if (!/^(users|groups)\/\d+$/.test(library)) throw new Error(`QUOTE_ZOTERO_LIBRARY should be "users/<user id>" or "groups/<group id>", not "${library}".`);
-  const lines = names.filter((n) => process.env[n]).map((n) => `${n}=${process.env[n]}`).join("\n");
+  if (library && !/^(users|groups)\/\d+$/.test(library)) throw new Error(`QUOTE_ZOTERO_LIBRARY should be "users/<user id>" or "groups/<group id>", not "${library}".`);
+  const names = all.filter((n) => process.env[n]?.trim());
+  if (!names.length) throw new Error(`None of ${all.join(", ")} is set in .env.`);
+  console.log(`Setting ${names.join(", ")} on the server; leaving ${all.filter((n) => !names.includes(n)).join(", ") || "nothing else"} as it is.`);
+  const lines = names.map((n) => `${n}=${process.env[n].trim()}`).join("\n");
   const encoded = Buffer.from(`${lines}\n`).toString("base64");
   await runAsRoot(`
 set -euo pipefail
