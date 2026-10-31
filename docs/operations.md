@@ -92,7 +92,7 @@ Two items in VS Code's status bar, from the vscode-status-probe extension (set u
 | Item | What it shows |
 |---|---|
 | `$(quote) main` | The branch the server runs, `↓N` when it's behind origin, and `*` for uncommitted changes deployed. Refreshes every 5 minutes and after a deploy; opens the admin pages. |
-| `$(cloud)` | The public replica: in step (`$(cloud)`), rows waiting (`$(cloud-upload) N`), no drain reported (`$(cloud) —`), the drain off for want of D1 settings (`$(cloud) off`), a failed drain (`$(cloud) !`), or a site that doesn't answer as published (`$(cloud) ?`). Refreshes every minute; opens quotes.majerus.us. |
+| `$(cloud)` | The public replica: in step (`$(cloud)`), rows waiting (`$(cloud-upload) N`), no drain reported (`$(cloud) —`), the drain off for want of D1 settings (`$(cloud) off`), a failed drain (`$(cloud) !`), or a site that doesn't answer as published (`$(cloud) ?`). Refreshes every five minutes, with a conditional HEAD so an unchanged site costs D1 only its meta; opens quotes.majerus.us. |
 
 Hover over an item for the details, including when it last checked.
 

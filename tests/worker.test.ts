@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { DB } from "../src/db.js";
 import { readIntro } from "../src/intro.js";
 import { openSnapshot } from "../src/published-sqlite.js";
@@ -48,6 +48,8 @@ beforeAll(() => {
 });
 
 afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("the replica", () => {
   it("has the snapshot's schema, as the D1 migration creates it", () => {
@@ -99,6 +101,36 @@ describe("the Worker", () => {
     expect(etag).toMatch(/^W\/"[0-9a-f]{20}"$/);
     expect((await get(env, "/concepts", { headers: { "if-none-match": etag } })).status).toBe(304);
     expect((await get(publish({ intro: readIntro("# Changed") }).env, "/", { headers: { "if-none-match": etag } })).status).toBe(200);
+  });
+
+  it("keeps pages in the colo's cache under the snapshot's hash, so a second view reads only the meta", async () => {
+    const kept = new Map<string, Response>();
+    vi.stubGlobal("caches", { default: { match: async (r: Request) => kept.get(r.url)?.clone(), put: async (r: Request, res: Response) => { kept.set(r.url, res); } } });
+    const { env, replica } = publish();
+    const pending: Promise<unknown>[] = [];
+    const ctx = { waitUntil: (w: Promise<unknown>) => { pending.push(w); } };
+    const first = await (await handle(new Request("https://quotes.example/concepts"), env, ctx)).text();
+    await Promise.all(pending);
+    expect([...kept.values()][0].headers.get("cache-control")).toBe("public, max-age=86400");
+    const read: string[] = [];
+    const counting = { DB: { prepare: (sql: string) => { read.push(sql); return env.DB.prepare(sql); } } } as Env;
+    const second = await handle(new Request("https://quotes.example/concepts"), counting, ctx);
+    expect(await second.text()).toBe(first);
+    expect(second.headers.get("cache-control")).toBe("public, max-age=60");
+    expect(read).toEqual(["SELECT key, value FROM meta"]);
+    expect(await (await handle(new Request("https://quotes.example/concepts", { method: "HEAD" }), counting, ctx)).text()).toBe("");
+    replica.prepare("UPDATE meta SET value = 'another' WHERE key = 'hash'").run();
+    await handle(new Request("https://quotes.example/concepts"), counting, ctx);
+    expect(read.length).toBeGreaterThan(3);
+    expect((await handle(new Request("https://quotes.example/concepts/nothing"), env, ctx)).status).toBe(404);
+    await Promise.all(pending);
+    expect(kept.size).toBe(2);
+  });
+
+  it("asks crawlers to leave search and the API alone", async () => {
+    const res = await get({ DB: fakeD1(new Database(":memory:")) }, "/robots.txt");
+    expect(res.status).toBe(200);
+    expect(await res.text()).toMatch(/^Disallow: \/search$/m);
   });
 
   it("serves the maps' API from D1, and 403 for quotes below the quotes level", async () => {

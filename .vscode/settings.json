@@ -53,7 +53,7 @@
     {
       "id": "quote-replica",
       "command": "node tools/replica-status.mjs",
-      "intervalSeconds": 60,
+      "intervalSeconds": 300,
       "alignment": "left",
       "priority": -102,
       "refreshOnTasks": [
