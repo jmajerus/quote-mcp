@@ -22,8 +22,7 @@ import { renderAdmin } from "./web.js";
  * Streamable HTTP at /mcp (stateless: a fresh server per request, JSON responses), the admin pages at
  * /admin, a read-only JSON API at /api (src/api.ts), the concept map's static files at /map/ when
  * QUOTE_MAP_DIR is set (src/map.ts), a preview of the public site at / when QUOTE_PUBLIC is set
- * (src/site.ts, read from the public snapshot), and /health. Everything is read-only for now, so nothing
- * here used to rely solely on the edge. Proxied/public-host requests now require a verified Access JWT
+ * (src/site.ts, read from the public snapshot), and /health. Proxied/public-host requests now require a verified Access JWT
  * for the MCP or admin audience; direct LAN access and the separate public snapshot listener remain available.
  *
  * servePublic is a second listener, for a hostname with no Access in front of it, for those who don't
