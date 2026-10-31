@@ -61,6 +61,10 @@ when the LAN is down.
   ([worker/proxy.ts](../worker/proxy.ts), behind a token). One tick ships at a time. A failure leaves rows
   queued for the next tick, and the "published" marker is written last, so readers never see half a
   publication. `npm run quotes -- publish` runs one tick by hand; `publish --status` shows the queue.
+- **Caching.** D1's free tier allows five million rows read a day, and a page reads thousands, so the Worker
+  keeps each page and API answer in Cloudflare's cache under the snapshot's hash. Past a page's first view in a
+  data centre, a request reads only the snapshot's `meta`; a new publication is a new hash, so nothing goes
+  stale. `/robots.txt` asks crawlers to leave `/search` and `/api/` alone, since every search is new.
 - **Settings.** The server needs `QUOTE_D1_PROXY_URL` and `QUOTE_D1_PROXY_TOKEN` (see
   [Operations](operations.md#settings)).
 - **Deploying the Worker.** Deploy Quotes → Deploy the public Worker (`npm run worker:deploy`). A deploy of
@@ -85,6 +89,7 @@ Without Cloudflare, `QUOTE_PUBLIC_PORT` gives a second port that serves only the
 | `/works`, `/works/<id>` | Works by first author; a work's concepts and, at `quotes`, its quotes in page order. `?collection=` narrows the list. |
 | `/quotes/<id>` | At `quotes`: a quote, its source and concepts, and how to cite it. |
 | `/search?q=` | At `quotes`: search over what quotes say; `collection` narrows it. |
+| `/robots.txt` | Keeps crawlers off `/search` and `/api/`. |
 | `/favicon.png` | The tab icon (see [assets/favicon.svg](../assets/favicon.svg)). |
 
 ## The API, for the maps

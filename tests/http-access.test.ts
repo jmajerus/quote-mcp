@@ -5,7 +5,7 @@ import { generateKeyPair, SignJWT, createLocalJWKSet, exportJWK } from 'jose';
 import { authorizeRequest, type RequestAccessConfig } from '../src/http-access.js';
 
 const issuer = 'https://example.cloudflareaccess.com';
-const config: RequestAccessConfig = { teamDomain: issuer, mcpAudience: 'mcp-aud', adminAudience: 'admin-aud', lanHosts: ['terminology-mcp.localdomain'] };
+const config: RequestAccessConfig = { teamDomain: issuer, lanHosts: ['terminology-mcp.localdomain'] };
 const { privateKey, publicKey } = await generateKeyPair('RS256');
 const keys = createLocalJWKSet({ keys: [{ ...await exportJWK(publicKey), kid: 'test', alg: 'RS256' }] });
 async function token(aud = 'mcp-aud', overrides: Record<string, unknown> = {}, key = privateKey) {
@@ -17,15 +17,12 @@ const request = (headers: Record<string, string> = {}, peer = '127.0.0.1') => ({
   headers: { host: 'public.example', ...headers }, socket: { remoteAddress: peer },
 }) as IncomingMessage;
 
-test('Access enforces distinct MCP and administration audiences, including APIs and assets', async () => {
+test('Access accepts a token from any application in the team, on every route', async () => {
   const mcp = request({ 'cf-access-jwt-assertion': await token() });
   const admin = request({ 'cf-access-jwt-assertion': await token('admin-aud') });
-  assert.equal((await authorizeRequest(mcp, '/mcp', config, keys)).via, 'access');
-  for (const path of ['/admin', '/', '/api/state', '/app.js']) {
-    assert.equal((await authorizeRequest(admin, path, config, keys)).via, 'access');
-    await assert.rejects(authorizeRequest(mcp, path, config, keys), { status: 403 });
-  }
-  await assert.rejects(authorizeRequest(admin, '/mcp', config, keys), { status: 403 });
+  const recreated = request({ 'cf-access-jwt-assertion': await token('a-recreated-application') });
+  for (const path of ['/mcp', '/admin', '/', '/api/state', '/app.js'])
+    for (const req of [mcp, admin, recreated]) assert.equal((await authorizeRequest(req, path, config, keys)).via, 'access');
 });
 
 test('Access rejects expired, premature, wrong-issuer, forged and incomplete JWTs', async () => {
@@ -46,6 +43,6 @@ test('only direct private peers naming a LAN host can bypass Access; proxy heade
     await assert.rejects(authorizeRequest(request(headers), '/mcp', config, keys), { status: 401 });
   await assert.rejects(authorizeRequest(request({host:'localhost'}, '203.0.113.1'), '/mcp', config, keys), {status:401});
   await assert.rejects(authorizeRequest(request({host:'evil.example@localhost'}), '/mcp', config, keys), {status:400});
-  await assert.rejects(authorizeRequest(request({'cf-access-jwt-assertion':await token()}), '/mcp', {...config,mcpAudience:undefined}, keys), {status:503});
+  await assert.rejects(authorizeRequest(request({'cf-access-jwt-assertion':await token()}), '/mcp', {...config,teamDomain:undefined}, keys), {status:503});
 });
 

@@ -352,20 +352,21 @@ describe("the map at /map/", () => {
 });
 
 
-it("requires the route-specific Access audience for public-host private API and MCP requests", async () => {
+it("requires a team-signed Access token, from any application, for public-host private API and MCP requests", async () => {
   const {publicKey,privateKey}=await generateKeyPair("RS256");
   const team="https://example.cloudflareaccess.com";
   const keys=createLocalJWKSet({keys:[{...await exportJWK(publicKey),kid:"test",alg:"RS256"}]});
-  const sign=(aud:string)=>new SignJWT({}).setSubject("user").setIssuer(team).setAudience(aud).setIssuedAt().setExpirationTime("5m").setProtectedHeader({alg:"RS256",kid:"test"}).sign(privateKey);
-  const mcp=await sign("mcp"),admin=await sign("admin");
-  const guarded=await serveHttp(db,{host:"127.0.0.1",port:0,access:{teamDomain:team,mcpAudience:"mcp",adminAudience:"admin",lanHosts:[]},accessKeys:keys});
+  const sign=(aud:string,key=privateKey)=>new SignJWT({}).setSubject("user").setIssuer(team).setAudience(aud).setIssuedAt().setExpirationTime("5m").setProtectedHeader({alg:"RS256",kid:"test"}).sign(key);
+  const mcp=await sign("mcp"),admin=await sign("admin"),forged=await sign("mcp",(await generateKeyPair("RS256")).privateKey);
+  const guarded=await serveHttp(db,{host:"127.0.0.1",port:0,access:{teamDomain:team,lanHosts:[]},accessKeys:keys});
   const address=guarded.address() as import("node:net").AddressInfo;
   const send=(url:string,assertion?:string)=>fetch(`http://127.0.0.1:${address.port}`+url,{headers:{Host:"public.example","cf-ray":"test",...(assertion?{"cf-access-jwt-assertion":assertion}:{})}});
   try {
     expect((await send("/api/concepts/abuse")).status).toBe(401);
-    expect((await send("/api/concepts/abuse",mcp)).status).toBe(403);
+    expect((await send("/api/concepts/abuse",forged)).status).toBe(403);
+    expect((await send("/api/concepts/abuse",mcp)).status).toBe(200);
     expect((await send("/api/concepts/abuse",admin)).status).toBe(200);
-    expect((await send("/mcp",admin)).status).toBe(403);
-    expect((await send("/mcp",mcp)).status).toBe(405);
+    expect((await send("/mcp",forged)).status).toBe(403);
+    expect((await send("/mcp",admin)).status).toBe(405);
   } finally {await new Promise<void>(resolve=>guarded.close(()=>resolve()));}
 });

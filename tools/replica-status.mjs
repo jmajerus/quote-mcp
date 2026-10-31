@@ -7,11 +7,16 @@
 // site is none, or an older build), the drain off (no D1 settings on the server) or failing, or the public
 // site not published: a warning or an error, with the reason in the tooltip. Status items show state, not
 // actions: noun glyphs, no verbs.
+//
+// Every uncached page the Worker renders reads thousands of D1 rows, and D1's free tier allows five million
+// a day across the account, so the site check is a HEAD with the last ETag it saw (kept in
+// node_modules/.cache): while nothing new is published, the Worker answers 304 after reading only its meta.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const SEEN = path.join(root, "node_modules", ".cache", "replica-status-etag");
 const BASE = process.env.QUOTE_STATUS_URL ?? "http://quote-mcp.localdomain:8000";
 
 /** The public hostname: the custom domain in the public Worker's wrangler config. */
@@ -57,8 +62,17 @@ try {
 let published = "unknown";
 if (site) {
   try {
-    const res = await fetch(site, { signal: AbortSignal.timeout(10000), redirect: "manual" });
-    published = res.status === 200 ? "yes" : res.status === 503 ? "not yet" : `HTTP ${res.status}`;
+    let seen = "";
+    try {
+      seen = fs.readFileSync(SEEN, "utf8").trim();
+    } catch {}
+    const res = await fetch(site, { method: "HEAD", headers: seen ? { "if-none-match": seen } : {}, signal: AbortSignal.timeout(10000), redirect: "manual" });
+    published = res.status === 200 || res.status === 304 ? "yes" : res.status === 503 ? "not yet" : `HTTP ${res.status}`;
+    const etag = res.headers.get("etag");
+    if (res.status === 200 && etag && etag !== seen) {
+      fs.mkdirSync(path.dirname(SEEN), { recursive: true });
+      fs.writeFileSync(SEEN, etag);
+    }
   } catch (error) {
     published = `unreachable (${error.message})`;
   }
