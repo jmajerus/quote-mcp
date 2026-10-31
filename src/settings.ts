@@ -32,6 +32,7 @@ export const SETTINGS: Setting[] = [
   { name: "QUOTE_DB", group: "Service", about: "the quote store", fallback: "data/quotes.db" },
   { name: "QUOTE_HOST", group: "Service", about: "the address to listen on", fallback: "0.0.0.0" },
   { name: "QUOTE_PORT", group: "Service", about: "the port for MCP, the admin pages, and the API", fallback: "8010" },
+  { name: "ACCESS_TEAM_DOMAIN", group: "Service", about: "the Cloudflare Access team whose tokens proxied requests need (https://<team>.cloudflareaccess.com); unset, they are refused" },
   { name: "QUOTE_SETS", group: "Service", about: "the concept sets", fallback: "vocab/sets.json" },
   { name: "QUOTE_MAP_DIR", group: "Maps", about: "quote-atlas's built maps, served at /map/" },
   { name: "QUOTE_PUBLIC", group: "Public site", about: "none, catalogue (no quoted text), or quotes", fallback: "none", site: "public" },
