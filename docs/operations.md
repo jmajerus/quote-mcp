@@ -95,3 +95,26 @@ Two items in VS Code's status bar, from the vscode-status-probe extension (set u
 | `$(cloud)` | The public replica: in step (`$(cloud)`), rows waiting (`$(cloud-upload) N`), no drain reported (`$(cloud) —`), the drain off for want of D1 settings (`$(cloud) off`), a failed drain (`$(cloud) !`), or a site that doesn't answer as published (`$(cloud) ?`). Refreshes every minute; opens quotes.majerus.us. |
 
 Hover over an item for the details, including when it last checked.
+
+## Shared authoring Access applications
+
+The private HTTP listener validates Cloudflare Access JWT assertions before
+serving MCP, administration pages or private API reads/writes. Configure the
+following in the server's `/etc/quote-mcp/env`:
+
+```dotenv
+ACCESS_TEAM_DOMAIN=https://your-team.cloudflareaccess.com
+ACCESS_MCP_AUD=<authoring-mcp-access audience>
+ACCESS_ADMIN_AUD=<authoring-admin-access audience>
+```
+
+`/mcp` requires the MCP audience; other private routes, including `/api`,
+require the admin audience. Protect the UI's API and asset routes in the admin
+Access application too. Cloudflare Managed OAuth supplies client authorization
+and forwards `Cf-Access-Jwt-Assertion`; the origin verifies the signature,
+issuer, expiry and subject. An admin token cannot use MCP and an MCP token
+cannot read the private admin API. Missing/invalid tokens fail closed.
+
+Direct requests from a private peer naming the service's LAN hostname/IP,
+without Cloudflare proxy headers, retain their existing LAN behavior. Separate
+public snapshot listeners and Workers are unaffected.

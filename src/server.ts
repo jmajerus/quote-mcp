@@ -1,3 +1,5 @@
+import { AccessError, authorizeRequest, requestAccessConfig, type RequestAccessConfig } from './http-access.js';
+import type { JWTVerifyGetKey } from 'jose';
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
@@ -21,8 +23,8 @@ import { renderAdmin } from "./web.js";
  * /admin, a read-only JSON API at /api (src/api.ts), the concept map's static files at /map/ when
  * QUOTE_MAP_DIR is set (src/map.ts), a preview of the public site at / when QUOTE_PUBLIC is set
  * (src/site.ts, read from the public snapshot), and /health. Everything is read-only for now, so nothing
- * here needs an identity; Cloudflare Access guards the private hostname, and phase 2's writes will check
- * its token as corpus-mcp does.
+ * here used to rely solely on the edge. Proxied/public-host requests now require a verified Access JWT
+ * for the MCP or admin audience; direct LAN access and the separate public snapshot listener remain available.
  *
  * servePublic is a second listener, for a hostname with no Access in front of it, for those who don't
  * publish to a Worker. It serves the public snapshot and the map and nothing else: no store, so it can
@@ -30,6 +32,8 @@ import { renderAdmin } from "./web.js";
  */
 
 export interface ServeOptions {
+  access?: RequestAccessConfig;
+  accessKeys?: JWTVerifyGetKey;
   host: string;
   port: number;
   /** The concept map's built files, served at /map/; without it /map/ is 404. */
@@ -95,9 +99,11 @@ function listen(server: http.Server, port: number, host: string, what: string): 
 }
 
 export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
+  const access = options.access ?? requestAccessConfig(process.env, ["quote-mcp", "quote-mcp.localdomain"]);
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     try {
+      await authorizeRequest(req, url.pathname, access, options.accessKeys);
       if (url.pathname === "/health") {
         const { quotes, notes } = overview(db);
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, quotes, notes, deployed: readDeployed(), ...(options.replica ? { replica: options.replica() } : {}) }));
@@ -158,6 +164,10 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
       await mcp.connect(transport);
       await transport.handleRequest(req, res);
     } catch (error) {
+      if (error instanceof AccessError) {
+        if (!res.headersSent) res.writeHead(error.status, {"content-type":"application/json", "cache-control":"no-store"}).end(JSON.stringify({error:error.message}));
+        return;
+      }
       console.error(error);
       if (!res.headersSent) res.writeHead(500).end();
     }
