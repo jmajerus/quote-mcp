@@ -4,16 +4,13 @@ import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from 'jose';
 
 export interface RequestAccessConfig {
   teamDomain?: string;
-  mcpAudience?: string;
-  adminAudience?: string;
   lanHosts: string[];
 }
 export class AccessError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
 }
 export function requestAccessConfig(env: NodeJS.ProcessEnv, lanHosts: string[]): RequestAccessConfig {
-  return { teamDomain: env.ACCESS_TEAM_DOMAIN, mcpAudience: env.ACCESS_MCP_AUD,
-    adminAudience: env.ACCESS_ADMIN_AUD, lanHosts };
+  return { teamDomain: env.ACCESS_TEAM_DOMAIN, lanHosts };
 }
 function privatePeer(address = '') {
   const a = address.toLowerCase().replace(/^::ffff:/, '');
@@ -41,8 +38,9 @@ export async function authorizeRequest(req: IncomingMessage, pathname: string, c
   const localHost = host === 'localhost' || privatePeer(host) || config.lanHosts.some(h => h.toLowerCase() === host);
   if (!proxied && localHost && privatePeer(req.socket.remoteAddress)) return { via: 'lan' as const };
   if (typeof token !== 'string' || !token) throw new AccessError(401, 'Cloudflare Access authentication is required.');
-  const audience = /^\/mcp(?:\/|$)/.test(pathname) ? config.mcpAudience : config.adminAudience;
-  if (!config.teamDomain || !audience) throw new AccessError(503, 'Cloudflare Access is not configured for this route.');
+  // The audience (which Access application issued the token) is not checked: every application in the team
+  // admits only the owner, and a pinned audience tag broke sign-in whenever an application was recreated.
+  if (!config.teamDomain) throw new AccessError(503, 'Cloudflare Access is not configured.');
   try {
     const issuer = new URL(config.teamDomain);
     if (issuer.protocol !== 'https:' || issuer.username || issuer.password || issuer.pathname !== '/' || issuer.search || issuer.hash)
@@ -50,7 +48,7 @@ export async function authorizeRequest(req: IncomingMessage, pathname: string, c
     if (!keys && !remoteKeys.has(issuer.origin))
       remoteKeys.set(issuer.origin, createRemoteJWKSet(new URL('/cdn-cgi/access/certs', issuer), { timeoutDuration: 5000 }));
     const { payload } = await jwtVerify(token, keys ?? remoteKeys.get(issuer.origin)!, {
-      issuer: issuer.origin, audience, algorithms: ['RS256'], requiredClaims: ['sub', 'exp', 'iat'],
+      issuer: issuer.origin, algorithms: ['RS256'], requiredClaims: ['sub', 'exp', 'iat'],
     });
     if (typeof payload.sub !== 'string' || !payload.sub.trim()) throw new Error();
     return { via: 'access' as const, subject: payload.sub, ...(typeof payload.email === 'string' ? { email: payload.email } : {}) };

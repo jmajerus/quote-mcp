@@ -104,16 +104,15 @@ following in the server's `/etc/quote-mcp/env`:
 
 ```dotenv
 ACCESS_TEAM_DOMAIN=https://your-team.cloudflareaccess.com
-ACCESS_MCP_AUD=<authoring-mcp-access audience>
-ACCESS_ADMIN_AUD=<authoring-admin-access audience>
 ```
 
-`/mcp` requires the MCP audience; other private routes, including `/api`,
-require the admin audience. Protect the UI's API and asset routes in the admin
-Access application too. Cloudflare Managed OAuth supplies client authorization
-and forwards `Cf-Access-Jwt-Assertion`; the origin verifies the signature,
-issuer, expiry and subject. An admin token cannot use MCP and an MCP token
-cannot read the private admin API. Missing/invalid tokens fail closed.
+Cloudflare Managed OAuth supplies client authorization and forwards
+`Cf-Access-Jwt-Assertion`; the origin verifies the signature, issuer, expiry
+and subject. It does not check the audience (which Access application issued
+the token): every application in the team admits only the owner, so
+recreating or merging applications needs no change here. Protect the UI's API
+and asset routes in an Access application too. Missing/invalid tokens fail
+closed.
 
 Direct requests from a private peer naming the service's LAN hostname/IP,
 without Cloudflare proxy headers, retain their existing LAN behavior. Separate
