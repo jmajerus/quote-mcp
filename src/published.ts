@@ -132,14 +132,15 @@ export class Published {
     return rows.map((c) => ({ ...c, quotes: n.get(c.id) ?? 0 }));
   }
 
-  /** A concept by slug, label, alternative label, or scheme:slug. */
+  /** A concept by slug, label, alternative label, or scheme:slug, and then by a slug it had before. */
   async findConcept(name: string): Promise<{ id: number; scheme: string; slug: string; label: string }> {
     const [scheme, slug] = name.includes(":") ? name.split(":", 2) : [null, name];
     const n = slug.trim().toLowerCase();
-    const rows = await this.store.all<{ id: number; scheme: string; slug: string; label: string; alt_labels: string }>(
-      `SELECT c.id, s.slug AS scheme, c.slug, c.label, c.alt_labels FROM concepts c JOIN schemes s ON s.id = c.scheme_id
-      WHERE (? IS NULL OR s.slug = ?) AND (c.slug = ? OR lower(c.label) = ? OR instr(lower(c.alt_labels), ?) > 0)`, [scheme, scheme, n, n, n]);
-    const hit = rows.find((c) => c.slug === n || c.label.toLowerCase() === n) ?? rows.find((c) => json<string[]>(c.alt_labels, []).some((a) => a.toLowerCase() === n));
+    const rows = await this.store.all<{ id: number; scheme: string; slug: string; label: string; alt_labels: string; former_slugs: string }>(
+      `SELECT c.id, s.slug AS scheme, c.slug, c.label, c.alt_labels, c.former_slugs FROM concepts c JOIN schemes s ON s.id = c.scheme_id
+      WHERE (? IS NULL OR s.slug = ?) AND (c.slug = ? OR lower(c.label) = ? OR instr(lower(c.alt_labels), ?) > 0 OR instr(c.former_slugs, ?) > 0)`, [scheme, scheme, n, n, n, n]);
+    const hit = rows.find((c) => c.slug === n || c.label.toLowerCase() === n) ?? rows.find((c) => json<string[]>(c.alt_labels, []).some((a) => a.toLowerCase() === n))
+      ?? rows.find((c) => json<string[]>(c.former_slugs, []).includes(n));
     if (!hit) throw new ToolError(`No concept "${name}".`);
     return { id: hit.id, scheme: hit.scheme, slug: hit.slug, label: hit.label };
   }

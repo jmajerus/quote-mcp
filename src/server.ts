@@ -12,6 +12,7 @@ import { faviconBytes } from "./favicon.js";
 import { serveMap } from "./map.js";
 import type { DrainStatus } from "./drain.js";
 import type { Published } from "./published.js";
+import type { TermSyncStatus } from "./terminology.js";
 import type { ConceptSet } from "./sets.js";
 import { isSitePath, renderSite } from "./site.js";
 import { VERSION, createServer } from "./mcp.js";
@@ -43,6 +44,8 @@ export interface ServeOptions {
   snapshot?: () => Promise<Published | null>;
   /** The drain that keeps the snapshot's replica in D1 in step (src/drain.ts), for /health. */
   replica?: () => DrainStatus;
+  /** The subscriber that follows terminology-mcp's human-work scheme (src/terminology.ts), for /health. */
+  terms?: () => TermSyncStatus;
 }
 
 
@@ -105,7 +108,7 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
       await authorizeRequest(req, url.pathname, access, options.accessKeys);
       if (url.pathname === "/health") {
         const { quotes, notes } = overview(db);
-        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, quotes, notes, deployed: readDeployed(), ...(options.replica ? { replica: options.replica() } : {}) }));
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, quotes, notes, deployed: readDeployed(), ...(options.replica ? { replica: options.replica() } : {}), ...(options.terms ? { terms: options.terms() } : {}) }));
         return;
       }
       if (favicon(req, res, url)) return;

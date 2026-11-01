@@ -12,7 +12,9 @@ import { buildSnapshot } from "../src/snapshot.js";
 import { type ProxyEnv, handleProxy } from "../worker/proxy.js";
 import { makeStore } from "./fixture.js";
 
-const MIGRATION = path.join(import.meta.dirname, "..", "worker", "migrations", "0001_snapshot.sql");
+const MIGRATIONS = path.join(import.meta.dirname, "..", "worker", "migrations");
+/** Every D1 migration in order, as `wrangler d1 migrations apply` runs them. */
+const MIGRATION = fs.readdirSync(MIGRATIONS).filter((f) => f.endsWith(".sql")).sort().map((f) => fs.readFileSync(path.join(MIGRATIONS, f), "utf8")).join("\n");
 const TOKEN = "test-token";
 
 /** A stand-in for a D1 binding on better-sqlite3, with batch() as one transaction, as D1's is. */
@@ -46,7 +48,7 @@ function setup() {
   const build = () => buildSnapshot(store, { level: "quotes", notes: false, intro: readIntro("# Work quotes"), collections: {}, sets: [], maps: [] }, file);
   build();
   const replica = new Database(":memory:");
-  replica.exec(fs.readFileSync(MIGRATION, "utf8"));
+  replica.exec(MIGRATION);
   const env: ProxyEnv = { DB: binding(replica), D1_PROXY_TOKEN: TOKEN };
   const calls: { statements: number; sql: { sql: string; params?: unknown[] }[] }[] = [];
   // fail: the request never reaches D1; lose: D1 commits the batch but the response is lost; hold: the

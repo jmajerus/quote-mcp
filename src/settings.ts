@@ -34,6 +34,8 @@ export const SETTINGS: Setting[] = [
   { name: "QUOTE_PORT", group: "Service", about: "the port for MCP, the admin pages, and the API", fallback: "8010" },
   { name: "ACCESS_TEAM_DOMAIN", group: "Service", about: "the Cloudflare Access team whose tokens proxied requests need (https://<team>.cloudflareaccess.com); unset, they are refused" },
   { name: "QUOTE_SETS", group: "Service", about: "the concept sets", fallback: "vocab/sets.json" },
+  { name: "QUOTE_TERMS_SYNC", group: "Concepts from terminology-mcp", about: "on: the server follows terminology-mcp's human-work scheme every minute", fallback: "off" },
+  { name: "TERMINOLOGY_BASE", group: "Concepts from terminology-mcp", about: "terminology-mcp on the LAN, where progress reports name the caller; off turns following off", fallback: "http://terminology-mcp.localdomain:8000" },
   { name: "QUOTE_MAP_DIR", group: "Maps", about: "quote-atlas's built maps, served at /map/" },
   { name: "QUOTE_PUBLIC", group: "Public site", about: "none, catalogue (no quoted text), or quotes", fallback: "none", site: "public" },
   { name: "QUOTE_PUBLIC_NOTES", group: "Public site", about: "notes on the public site: none or all", fallback: "none", site: "notes" },
@@ -86,9 +88,12 @@ function features(env: NodeJS.ProcessEnv, site: Record<string, string>, wrangler
   }
   const zotero = missing(["QUOTE_ZOTERO_LIBRARY", "QUOTE_ZOTERO_API_KEY"]);
   const mapDir = env.QUOTE_MAP_DIR?.trim();
+  const terminology = env.TERMINOLOGY_BASE?.trim().toLowerCase() === "off";
+  const following = env.QUOTE_TERMS_SYNC?.trim().toLowerCase() === "on";
   return [
     { name: "Import from Zotero", on: !zotero.length, note: zotero.length ? `needs ${zotero.join(" and ")}` : "" },
     { name: "Import from the old site", on: has("QUOTE_DRUPAL_URL"), note: has("QUOTE_DRUPAL_URL") ? "" : "off without QUOTE_DRUPAL_URL" },
+    { name: "Concepts from terminology-mcp", on: following && !terminology, note: !following ? "off; the store's concepts change only by hand (`quote-mcp terms`) until QUOTE_TERMS_SYNC=on" : terminology ? "off: TERMINOLOGY_BASE is off" : "" },
     { name: "Maps at /map/", on: !!mapDir && fs.existsSync(mapDir), note: !mapDir ? "off without QUOTE_MAP_DIR" : fs.existsSync(mapDir) ? "" : `${mapDir} doesn't exist here` },
     { name: "Public site", on: level !== "none", note: level === "none" ? "off; set public: in vocab/site.md, or QUOTE_PUBLIC" : `level ${level}` },
     { name: "Public-only port", on: level !== "none" && has("QUOTE_PUBLIC_PORT"), note: has("QUOTE_PUBLIC_PORT") ? "" : "off without QUOTE_PUBLIC_PORT" },

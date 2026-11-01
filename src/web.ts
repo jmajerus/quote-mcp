@@ -166,7 +166,8 @@ ${works.map((w) => `<tr><td><a href="/admin/quotes${qs({ work: w.title })}"><cit
 <td>${queue === "ambiguous_works" ? w.candidates.map((c) => `<a href="zotero://select/library/items/${esc(c.key)}">${esc(c.key)}</a> ${esc((c.date ?? "").slice(0, 4))}${c.citekey ? ` <code>${esc(c.citekey)}</code>` : ""}`).join("<br>") : esc(w.isbn)}</td></tr>`).join("")}</table></div>`;
   } else if ("tags" in r) {
     const tags = r.tags as { tag: string; quotes: number }[];
-    body = `<div class="scroll"><table><tr><th>Tag</th><th>Quotes</th></tr>${tags.map((t) => `<tr><td><a href="/admin/quotes${qs({ tag: t.tag, status: "any" })}">${esc(t.tag)}</a></td><td>${t.quotes}</td></tr>`).join("")}</table></div>`;
+    body = `<p>terminology-mcp holds the concepts. To make a tag one, propose it there with a quote as evidence; the quote's tag stays as it is, and resolves once the concept arrives.</p>
+<div class="scroll"><table><tr><th>Tag</th><th>Quotes</th><th>Propose</th></tr>${tags.map((t) => `<tr><td><a href="/admin/quotes${qs({ tag: t.tag, status: "any" })}">${esc(t.tag)}</a></td><td>${t.quotes}</td><td><code>quote-mcp propose ${esc(JSON.stringify(t.tag))}</code></td></tr>`).join("")}</table></div>`;
   } else {
     body = (r.quotes as Listed[]).map(quoteCard).join("");
   }

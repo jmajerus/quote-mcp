@@ -56,13 +56,17 @@ export function locatorText(kind: string, value: string | null): string | null {
 
 export interface ConceptRow { id: number; scheme: string; slug: string; label: string }
 
-/** A concept by slug ("job-loss"), label ("job loss"), alternative label, or scheme:slug ("human-work:job-loss"). */
+/**
+ * A concept by slug ("job-loss"), label ("job loss"), alternative label, or scheme:slug ("human-work:job-loss"),
+ * and then by a slug it had before, so links made before a slug change still resolve.
+ */
 export function findConcept(db: DB, name: string): ConceptRow {
   const [scheme, slug] = name.includes(":") ? name.split(":", 2) : [null, name];
-  const rows = db.prepare(`SELECT c.id, s.slug AS scheme, c.slug, c.label, c.alt_labels FROM concepts c JOIN schemes s ON s.id = c.scheme_id
-    WHERE (? IS NULL OR s.slug = ?) AND c.status != 'retired'`).all(scheme, scheme) as (ConceptRow & { alt_labels: string })[];
+  const rows = db.prepare(`SELECT c.id, s.slug AS scheme, c.slug, c.label, c.alt_labels, c.former_slugs FROM concepts c JOIN schemes s ON s.id = c.scheme_id
+    WHERE (? IS NULL OR s.slug = ?) AND c.status != 'retired'`).all(scheme, scheme) as (ConceptRow & { alt_labels: string; former_slugs: string })[];
   const n = slug.trim().toLowerCase();
-  const hit = rows.find((c) => c.slug === n || c.label.toLowerCase() === n) ?? rows.find((c) => json<string[]>(c.alt_labels, []).some((a) => a.toLowerCase() === n));
+  const hit = rows.find((c) => c.slug === n || c.label.toLowerCase() === n) ?? rows.find((c) => json<string[]>(c.alt_labels, []).some((a) => a.toLowerCase() === n))
+    ?? rows.find((c) => json<string[]>(c.former_slugs, []).includes(n));
   if (!hit) throw new ToolError(`No concept "${name}". list_concepts shows them.`);
   return { id: hit.id, scheme: hit.scheme, slug: hit.slug, label: hit.label };
 }
