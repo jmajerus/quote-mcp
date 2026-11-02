@@ -7,8 +7,11 @@ concepts with definitions, alternative labels, WordNet links, and broader, narro
 relations. A quote's concepts come from its tags. Searching by a concept includes its narrower concepts
 unless asked not to.
 
-Nothing is removed or renamed without a person approving it; a concept retired later drops out of search,
-the maps, and the public site.
+terminology-mcp holds the scheme: it's where concepts are added, renamed, merged, and retired, and the store
+follows its changelog ([dev-brief](dev-briefs/human-work-from-terminology-mcp.md)). A quote's tags never change;
+a merged concept's tags are re-pointed to the concept that replaced it, with history. A concept retired later
+drops out of search, the maps, and the public site, and an old slug keeps resolving after a slug change. A tag
+that isn't a concept is proposed to terminology-mcp from the worklist, with the quote as evidence.
 
 ## Collections
 

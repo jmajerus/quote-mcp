@@ -80,7 +80,9 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
     // --- Concepts ---------------------------------------------------------------------------------
     db.prepare("INSERT OR IGNORE INTO schemes (slug, label, description, created_at) VALUES (?, ?, ?, ?)").run(SCHEME.slug, SCHEME.label, SCHEME.description, stamp);
     const schemeId = (db.prepare("SELECT id FROM schemes WHERE slug = ?").get(SCHEME.slug) as { id: number }).id;
-    if (opts.drupal) {
+    // Once terminology-mcp holds the scheme (src/terminology.ts), its concepts come only from there.
+    const followed = db.prepare("SELECT 1 FROM concepts WHERE scheme_id = ? AND term_id IS NOT NULL LIMIT 1").get(schemeId);
+    if (opts.drupal && !followed) {
       const addConcept = db.prepare(`INSERT OR IGNORE INTO concepts (scheme_id, slug, label, alt_labels, definition, close_match, source, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
       for (const c of opts.drupal.concepts) {

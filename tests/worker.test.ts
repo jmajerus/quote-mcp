@@ -13,7 +13,9 @@ import type { D1Database, D1PreparedStatement } from "../worker/d1.js";
 import { type Env, handle } from "../worker/index.js";
 import { makeStore } from "./fixture.js";
 
-const MIGRATION = path.join(import.meta.dirname, "..", "worker", "migrations", "0001_snapshot.sql");
+const MIGRATIONS = path.join(import.meta.dirname, "..", "worker", "migrations");
+/** Every D1 migration in order, as `wrangler d1 migrations apply` runs them. */
+const MIGRATION = fs.readdirSync(MIGRATIONS).filter((f) => f.endsWith(".sql")).sort().map((f) => fs.readFileSync(path.join(MIGRATIONS, f), "utf8")).join("\n");
 
 /** A stand-in for the D1 binding, on better-sqlite3: the calls the Worker makes, with D1's shapes. */
 function fakeD1(db: Database.Database): D1Database {
@@ -35,7 +37,7 @@ function publish(rest: Partial<SnapshotOptions> = {}) {
   buildSnapshot(store, { level: "quotes", notes: false, intro: readIntro("# Work quotes\n\nQuotes about work."), collections: {}, sets: [{ slug: "harm", scheme: "human-work", label: "Harm", narrower: ["abuse"] }], maps: [], ...rest }, file);
   const snap = new Database(file, { readonly: true });
   const replica = new Database(":memory:");
-  replica.exec(fs.readFileSync(MIGRATION, "utf8"));
+  replica.exec(MIGRATION);
   replica.exec(replicaScript(snap));
   return { file, snap, replica, env: { DB: fakeD1(replica) } as Env };
 }
@@ -52,9 +54,14 @@ afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
 afterEach(() => vi.unstubAllGlobals());
 
 describe("the replica", () => {
-  it("has the snapshot's schema, as the D1 migration creates it", () => {
-    const strip = (sql: string) => sql.replace(/^--.*$/gm, "").replace(/\s+/g, " ").trim();
-    expect(strip(fs.readFileSync(MIGRATION, "utf8"))).toBe(strip(SNAPSHOT_SCHEMA));
+  it("has the snapshot's schema, as the D1 migrations create it", () => {
+    const shape = (sql: string) => {
+      const db = new Database(":memory:");
+      db.exec(sql);
+      const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type IN ('table', 'index') AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'records_fts_%' ORDER BY name").pluck().all() as string[];
+      return Object.fromEntries(tables.map((t) => [t, db.prepare(`PRAGMA table_xinfo(${t})`).all()]));
+    };
+    expect(shape(MIGRATION)).toEqual(shape(SNAPSHOT_SCHEMA));
   });
 
   it("holds every row of the snapshot once loaded from the SQL file", () => {
@@ -169,7 +176,7 @@ describe("the Worker", () => {
   it("says the site isn't published yet when D1 is empty", async () => {
     const empty = new Database(":memory:");
     expect((await get({ DB: fakeD1(empty) }, "/")).status).toBe(503);
-    empty.exec(fs.readFileSync(MIGRATION, "utf8"));
+    empty.exec(MIGRATION);
     const res = await get({ DB: fakeD1(empty) }, "/");
     expect(res.status).toBe(503);
     expect(await res.text()).toMatch(/hasn't been published/);

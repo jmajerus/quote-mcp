@@ -21,7 +21,7 @@ their home from then on.
 | Source of truth | Quote MCP's database, for every quote. Zotero stays the authority for *books*: item metadata, citekeys, and citations. |
 | Why not Zotero notes | Zotero has no quote type. Only a note's tags are structured; the page, chapter author, status, and the quote's own boundaries are conventions in HTML, which nothing validates and which Zotero 7's note editor can rewrite on any edit. Zotero's structured kind, the annotation, needs an attached file, which paper books don't have. |
 | Import | One pass from the old site's database dump (the main source), then the Zotero notes, which add about 15 quotes the site doesn't have; a quote found in both is imported once with both origins. A watch then picks up new quote notes typed into Zotero. The import never writes to the dump or to Zotero. |
-| Concepts | The old site's vocabulary is imported as a named concept scheme, `human-work` ("the human side of work"; the name is tentative and can change, since concepts are keyed by internal ids). It sits beside corpus-mcp's subject vocabulary, not inside it: subjects say what a book is about, concepts name themes in a passage. When the master taxonomy server exists, it holds both schemes and the links between them. The scheme has 221 concepts with definitions, alternative labels, WordNet links, and 782 broader, narrower, related, and inverse relations. A quote's concepts are imported exactly as they appear (the span's `title`, the note's Zotero tags). Nothing is removed or renamed without a person approving it. |
+| Concepts | The old site's vocabulary is imported as a named concept scheme, `human-work` ("the human side of work"; the name is tentative and can change, since concepts are keyed by internal ids). It sits beside corpus-mcp's subject vocabulary, not inside it: subjects say what a book is about, concepts name themes in a passage. terminology-mcp, the master taxonomy server, holds the scheme (decided 2026-11-01): its concepts, labels, slugs, definitions, and relations. The store's concepts are a replica that follows terminology-mcp's changelog, and new concepts are proposed there with a quote as evidence ([dev-brief](docs/dev-briefs/human-work-from-terminology-mcp.md)). The scheme has 221 concepts with definitions, alternative labels, WordNet links, and 782 broader, narrower, related, and inverse relations. A quote's concepts are imported exactly as they appear (the span's `title`, the note's Zotero tags). Nothing is removed or renamed without a person approving it. |
 | Works | A quote cites a Zotero item. About 300 of the 495 old-site works with quotes match a Zotero item by title; the rest are filed into Zotero's staging collection from their Biblio record before or during the import, so every quote ends up citable. |
 | Quoted text is protected | People edit quotes directly. Agents add quotes and change tags and comments, but changes to an existing quote's text or locator are proposals that a person approves. |
 | Zotero copies | Optional and later: Quote MCP can write a read-only copy of each book's quotes into Zotero as child notes. A copy is never read back as data; an edit made to one becomes a proposal. |
@@ -376,9 +376,13 @@ highlighting quotes from the anchors.
 - A tag report lists counts and likely duplicates (case, plurals, hyphens)
   as merge proposals.
 - Searches combine tags with authors, books, and book-level subjects.
-- Later: map tags to living-taxonomy term ids in `quote_tags`, without
-  renaming them. This joins quotes to the same keys as Calibre tags and
-  Concept Clusters subcategories (see PLAN.md, *Living taxonomy*).
+- Tags map to terminology-mcp term ids through their concepts
+  (`concepts.term_id`), without renaming them (built 2026-11-01; see the
+  [dev-brief](docs/dev-briefs/human-work-from-terminology-mcp.md)). This joins
+  quotes to the same keys as Calibre tags and Concept Clusters
+  subcategories (see PLAN.md, *Living taxonomy*).
+- A tag that isn't a concept is proposed to terminology-mcp from the
+  worklist (`quote-mcp propose`), with the quote as evidence.
 
 ## The concept map
 
@@ -746,10 +750,10 @@ serves and never writes.
 - **Libraries.** Most group quotes duplicate the personal library's. Cite
   from the personal library only, and treat the group as a source of quotes
   and tags?
-- **Concepts and the living taxonomy.** The old site's 221 concepts are a
-  scheme of their own, finer than corpus-mcp's subject vocabulary. Keep them
-  separate and map between the two later, or fold them into the master
-  taxonomy when that server exists?
+- **Concepts and the living taxonomy.** Settled 2026-11-01: terminology-mcp
+  holds `human-work` as a scheme of its own, beside the subject
+  vocabularies, and Quote MCP follows it. Links between the schemes are
+  terminology-mcp's to make.
 - **Kindle locations.** Keep them as a locator kind, and re-locate them when
   the book reaches Calibre? They can't be converted to pages reliably.
 - **Ebook annotations.** Which source holds the Kindle highlights and

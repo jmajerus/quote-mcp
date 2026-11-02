@@ -16,6 +16,8 @@ How quote-mcp is run, configured, and deployed.
 | `npm run quotes -- publish --dry-run` | Builds the public snapshot (see [the public site](public-site.md#the-snapshot)). |
 | `npm run quotes -- publish` | Builds it and ships what changed to the replica in D1, as the drain does; `--status` shows the queue. |
 | `npm run quotes -- publish --sql <file>` | The snapshot as a SQL file that loads a D1 replica from scratch. |
+| `npm run terms` | Follows terminology-mcp's `human-work` scheme: a dry run of what the next pass would apply and where it would stop. `-- --apply` applies it, `-- --accept <n> [--repoint <slug>]` passes a held change a person has handled, `-- --status` shows the cursor (see [the dev-brief](dev-briefs/human-work-from-terminology-mcp.md)). |
+| `npm run quotes -- propose <tag>` | Proposes a tag that isn't a concept to terminology-mcp, with a quote that uses it as evidence; `--send` sends it. |
 | `npm run quotes -- export --out quotes.json` | Everything as JSON. |
 | `npm run quotes -- backup` | A SQLite backup in `data/backups`, keeping 14. |
 | `npm run survey` | Phase 0's read-only survey of the sources (`-- --source drupal` for the old site). |
@@ -40,6 +42,8 @@ Only `QUOTE_ZOTERO_LIBRARY` and `QUOTE_ZOTERO_API_KEY` are needed. The public si
 | `QUOTE_ZOTERO_SOURCES` | none | Other Zotero libraries to import quote notes from, comma-separated. |
 | `QUOTE_DRUPAL_URL` | none | The old Drupal site's database (`mysql://…`), read-only. |
 | `QUOTE_MAP_DIR` | none | quote-atlas's built maps, served at `/map/`. |
+| `QUOTE_TERMS_SYNC` | `off` | `on`: the server follows terminology-mcp's `human-work` scheme every minute. Set it in `/etc/quote-mcp/env` only; a second follower would fight the server's cursor. |
+| `TERMINOLOGY_BASE` | `http://terminology-mcp.localdomain:8000` | terminology-mcp on the LAN, where progress reports name the caller; `off` turns following off. |
 | `QUOTE_D1_PROXY_URL`, `QUOTE_D1_PROXY_TOKEN` | none | The D1 proxy and its token, for the public replica's drain. |
 | `QUOTE_PUBLIC`, `QUOTE_PUBLIC_NOTES` | `public:` and `notes:` in `vocab/site.md` | Override the public site's choices on one machine. |
 | `QUOTE_PUBLIC_PORT` | none | A port serving only the public site, for a hostname with no login. |
@@ -67,7 +71,8 @@ quote-mcp runs on a Debian LXC, quote-mcp.localdomain, on port 8000.
 - **Access.** On the LAN, `http://quote-mcp.localdomain:8000`. From outside, `https://quote-mcp.majerus.us`,
   behind Cloudflare Access (Claude's connector and the admin pages). The public site is separate, at
   quotes.majerus.us.
-- **`/health`** gives the version, counts, what the last deploy installed, and the replica's drain.
+- **`/health`** gives the version, counts, what the last deploy installed, the replica's drain, and how far
+  the concepts follow terminology-mcp (`terms`: through, head, and any hold).
 
 ## Deploying
 
@@ -80,6 +85,10 @@ The **Deploy Quotes** button in VS Code's status bar runs the deploys, as `npm r
 | Push the server's settings | `npm run deploy -- --env` | Copies the server's settings from `.env` into `/etc/quote-mcp/env` and restarts, waiting until the server answers: the Zotero and old-site settings and the D1 proxy's. Only those set in `.env` are replaced. |
 | Deploy the public Worker | `npm run worker:deploy` | Tests, then deploys the public Worker with `CLOUDFLARE_API_TOKEN` from `.env`. |
 | Import with the old site | `npm run deploy -- --import-drupal` | Runs an import on the server with the old site included. |
+
+A release that adds a migration under `worker/migrations` needs it in D1 before the server's drain ships rows
+with the new columns: `npx wrangler d1 migrations apply DB --remote -c worker/wrangler.jsonc`, then the
+deploy and `npm run worker:deploy`. Until then the drain fails and retries, leaving the rows queued.
 
 `npm run deploy -- --provision` sets up a new server once: Node, build tools, the word list, the `quote` user,
 and the folders.

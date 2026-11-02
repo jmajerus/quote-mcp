@@ -9,12 +9,14 @@ import Database from "better-sqlite3";
  * as its comment, with no quoted text); both share works, locators, tags, and history.
  * Works are what quotes cite, linked to a Zotero item where there is one. Concepts belong to named
  * schemes and are keyed by internal ids, so a scheme or concept can be renamed without touching quotes.
+ * A scheme followed from terminology-mcp (src/terminology.ts) is its replica: each concept carries its
+ * term's stable id, and the slugs it had before, so old links still resolve.
  * zotero_items mirrors the Zotero libraries the import reads, so a re-run fetches only what changed.
  */
 
 export type DB = Database.Database;
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -26,7 +28,7 @@ CREATE TABLE IF NOT EXISTS concepts (
   id INTEGER PRIMARY KEY, scheme_id INTEGER NOT NULL REFERENCES schemes(id), slug TEXT NOT NULL, label TEXT NOT NULL,
   alt_labels TEXT NOT NULL DEFAULT '[]', definition TEXT, close_match TEXT,
   status TEXT NOT NULL DEFAULT 'confirmed' CHECK (status IN ('provisional', 'confirmed', 'retired')),
-  source TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (scheme_id, slug)
+  source TEXT, term_id TEXT, former_slugs TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (scheme_id, slug)
 );
 CREATE TABLE IF NOT EXISTS concept_relations (
   from_id INTEGER NOT NULL REFERENCES concepts(id), to_id INTEGER NOT NULL REFERENCES concepts(id),
@@ -102,6 +104,11 @@ function migrate(db: DB): void {
   const columns = (table: string) => new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name));
   // 2: notes beside quotes.
   if (!columns("quotes").has("kind")) db.exec("ALTER TABLE quotes ADD COLUMN kind TEXT NOT NULL DEFAULT 'quote' CHECK (kind IN ('quote', 'note'))");
+  // 3: concepts followed from terminology-mcp.
+  const concepts = columns("concepts");
+  if (!concepts.has("term_id")) db.exec("ALTER TABLE concepts ADD COLUMN term_id TEXT");
+  if (!concepts.has("former_slugs")) db.exec("ALTER TABLE concepts ADD COLUMN former_slugs TEXT NOT NULL DEFAULT '[]'");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS concepts_term ON concepts (term_id)");
 }
 
 export function getMeta(db: DB, key: string): string | undefined {
