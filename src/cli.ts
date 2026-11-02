@@ -210,7 +210,13 @@ async function serveCommand() {
   // The concepts changed: rebuild the public snapshot, which the drain then ships.
   const rebuild = () => {
     const publish = snapshotOptions();
-    if (publish) console.error(snapshotLine(buildSnapshot(openReadOnly(), publish, snapshotFile())));
+    if (!publish) return;
+    const store = openReadOnly();
+    try {
+      console.error(snapshotLine(buildSnapshot(store, publish, snapshotFile())));
+    } finally {
+      store.close();
+    }
   };
   const terms = startTermSync({ file: process.env.QUOTE_DB ?? "data/quotes.db", sets: conceptSets, onApplied: rebuild });
   const options = { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010), mapDir: process.env.QUOTE_MAP_DIR || undefined, sets: conceptSets, snapshot, replica, terms };

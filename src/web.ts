@@ -155,6 +155,11 @@ ${c.wordnet ? `<tr><th>WordNet</th><td><a href="${esc(c.wordnet)}">${esc(c.wordn
 <h2>Quotes, with narrower concepts</h2>${quotes.quotes.map(quoteCard).join("")}${pager(`/admin/concepts/${encodeURIComponent(c.slug)}`, {}, quotes.total, quotes.offset, quotes.limit)}`);
 }
 
+/** A word for a POSIX shell, in single quotes, so a tag copied from the worklist runs nothing. */
+function shellWord(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
 function worklistPage(db: DB, queue: Queue, p: URLSearchParams): string {
   const offset = Number(p.get("offset") ?? 0);
   const r = worklist(db, queue, { offset, limit: 50 }) as Record<string, unknown> & { total: number; offset: number; limit: number };
@@ -167,7 +172,7 @@ ${works.map((w) => `<tr><td><a href="/admin/quotes${qs({ work: w.title })}"><cit
   } else if ("tags" in r) {
     const tags = r.tags as { tag: string; quotes: number }[];
     body = `<p>terminology-mcp holds the concepts. To make a tag one, propose it there with a quote as evidence; the quote's tag stays as it is, and resolves once the concept arrives.</p>
-<div class="scroll"><table><tr><th>Tag</th><th>Quotes</th><th>Propose</th></tr>${tags.map((t) => `<tr><td><a href="/admin/quotes${qs({ tag: t.tag, status: "any" })}">${esc(t.tag)}</a></td><td>${t.quotes}</td><td><code>quote-mcp propose ${esc(JSON.stringify(t.tag))}</code></td></tr>`).join("")}</table></div>`;
+<div class="scroll"><table><tr><th>Tag</th><th>Quotes</th><th>Propose</th></tr>${tags.map((t) => `<tr><td><a href="/admin/quotes${qs({ tag: t.tag, status: "any" })}">${esc(t.tag)}</a></td><td>${t.quotes}</td><td><code>quote-mcp propose ${esc(shellWord(t.tag))}</code></td></tr>`).join("")}</table></div>`;
   } else {
     body = (r.quotes as Listed[]).map(quoteCard).join("");
   }

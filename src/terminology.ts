@@ -521,8 +521,12 @@ export function startTermSync({ file, sets, env = process.env, onApplied, client
  * one is named. Retries with the same tag return the term already proposed.
  */
 export function proposal(db: DB, tag: string, o: { quote?: number; label?: string; broader?: string; note?: string; altLabels?: string[] } = {}): Record<string, unknown> {
-  const quote = (o.quote ?? db.prepare("SELECT quote_id FROM quote_tags WHERE tag = ? COLLATE NOCASE AND concept_id IS NULL ORDER BY quote_id LIMIT 1").pluck().get(tag)) as number | undefined;
-  if (quote === undefined) throw new Error(`No quote has the tag "${tag}" without a concept; quote_worklist unresolved_tags lists them.`);
+  const quote = db.prepare("SELECT quote_id FROM quote_tags WHERE tag = ? COLLATE NOCASE AND concept_id IS NULL AND (? IS NULL OR quote_id = ?) ORDER BY quote_id LIMIT 1")
+    .pluck().get(tag, o.quote ?? null, o.quote ?? null) as number | undefined;
+  if (quote === undefined) {
+    throw new Error(o.quote === undefined ? `No quote has the tag "${tag}" without a concept; quote_worklist unresolved_tags lists them.`
+      : `Quote ${o.quote} doesn't have the tag "${tag}" without a concept.`);
+  }
   const q = db.prepare("SELECT kind, text, comment FROM quotes WHERE id = ?").get(quote) as { kind: string; text: string; comment: string | null } | undefined;
   if (!q) throw new Error(`No quote ${quote}.`);
   const words = (q.kind === "note" ? q.comment : q.text) ?? "";

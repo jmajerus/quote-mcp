@@ -216,5 +216,7 @@ describe("proposals", () => {
     });
     expect((body.evidence as { text: string }).text.length).toBeGreaterThan(0);
     expect(() => proposal(db, "no such tag")).toThrow(/No quote has the tag/);
+    expect(() => proposal(db, "conspiracy theory", { quote: 2 })).toThrow(/Quote 2 doesn't have the tag/);
+    expect(proposal(db, "conspiracy theory", { quote: 1 })).toMatchObject({ evidence: { quote: 1 } });
   });
 });
