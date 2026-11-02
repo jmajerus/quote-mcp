@@ -19,6 +19,7 @@ import { type ConceptSet, listSets, loadSets } from "./sets.js";
 import { configReport, siteSetting } from "./settings.js";
 import { type SnapshotOptions, buildSnapshot, readMapsFile } from "./snapshot.js";
 import { syncLibrary } from "./sync.js";
+import { acceptHeldChange, clearCursor, proposal, readCursor, reportProgress, runTermSync, startTermSync, terminologyClient, terminologyConfig } from "./terminology.js";
 import { ZoteroClient, zoteroConfig } from "./zotero.js";
 
 /**
@@ -39,6 +40,14 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *   quote-mcp publish --sql <file>     The same, and a SQL file that loads it into a local D1 for the Worker.
  *   quote-mcp publish                  Builds it and ships what changed to its replica in D1 (as the server's
  *                                       drain does every 15 seconds); --status shows the queue.
+ *   quote-mcp terms                     Follows terminology-mcp's human-work scheme (TERMINOLOGY_BASE): a dry run of what
+ *                                       the next pass would apply and where it would stop. --apply applies it and reports
+ *                                       progress (the server does this every minute when QUOTE_TERMS_SYNC=on);
+ *                                       --accept <n> [--repoint <slug>] marks held change n as handled by hand;
+ *                                       --rebootstrap forgets the cursor; --status shows it.
+ *   quote-mcp propose <tag> [--quote <id>] [--label …] [--broader <slug>] [--note …] [--alt a,b] [--send]
+ *                                       Proposes a tag that isn't a concept to terminology-mcp, with a quote as evidence;
+ *                                       without --send it prints the proposal.
  *   quote-mcp stdio                     MCP over stdio, for local clients and tests.
  */
 
@@ -198,7 +207,19 @@ async function serveCommand() {
   const conceptSets = sets();
   const snapshot = level() === "none" ? undefined : snapshotReader(snapshotFile());
   const replica = snapshot ? startDrain(snapshotFile(), replicaStateFile(), process.env, wranglerFile()) : undefined;
-  const options = { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010), mapDir: process.env.QUOTE_MAP_DIR || undefined, sets: conceptSets, snapshot, replica };
+  // The concepts changed: rebuild the public snapshot, which the drain then ships.
+  const rebuild = () => {
+    const publish = snapshotOptions();
+    if (!publish) return;
+    const store = openReadOnly();
+    try {
+      console.error(snapshotLine(buildSnapshot(store, publish, snapshotFile())));
+    } finally {
+      store.close();
+    }
+  };
+  const terms = startTermSync({ file: process.env.QUOTE_DB ?? "data/quotes.db", sets: conceptSets, onApplied: rebuild });
+  const options = { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010), mapDir: process.env.QUOTE_MAP_DIR || undefined, sets: conceptSets, snapshot, replica, terms };
   await serveHttp(openReadOnly(), options);
   if (process.env.QUOTE_PUBLIC_PORT) await servePublic({ ...options, port: Number(process.env.QUOTE_PUBLIC_PORT) });
 }
@@ -211,12 +232,76 @@ function setsCommand() {
   if (missing.length) throw new Error(`Concepts not in their scheme: ${missing.map((s) => `${s.slug} (${s.missing.join(", ")})`).join("; ")}.`);
 }
 
+function termsClient() {
+  const config = terminologyConfig();
+  if (!config) throw new Error("TERMINOLOGY_BASE is off; there's nothing to follow.");
+  return terminologyClient(config);
+}
+
+/** Follows terminology-mcp's human-work scheme by hand; see the usage above. */
+async function termsCommand() {
+  const db = openDb();
+  if (flag("--status")) {
+    console.log(JSON.stringify(readCursor(db), null, 2));
+    return;
+  }
+  if (flag("--rebootstrap")) {
+    clearCursor(db);
+    console.log("Cursor cleared; the next pass bootstraps from terminology-mcp's state.");
+    return;
+  }
+  const client = termsClient();
+  const print = (label: string, lines: string[] | undefined) => {
+    if (lines?.length) console.log(`${label}\n${lines.map((l) => `  ${l}`).join("\n")}`);
+  };
+  const accept = option("--accept");
+  if (accept !== undefined) {
+    const n = Number(accept);
+    if (!Number.isInteger(n)) throw new Error("--accept needs a change number.");
+    const result = await acceptHeldChange({ db, client, n, repointTo: option("--repoint") });
+    await reportProgress(client, result);
+    print("Applied:", result.lines);
+    console.log(`Accepted change ${n} (${result.change.kind}); the cursor is at ${n}, and the next pass continues after it.`);
+    return;
+  }
+  const apply = flag("--apply");
+  const result = await runTermSync({ db, client, sets: sets(), apply });
+  console.log(`Concepts from terminology-mcp ${apply ? "" : "(dry run) "}${result.outcome} against ${client.baseUrl}: through ${result.through}, head ${result.head ?? "?"}.`);
+  print(apply ? "Applied:" : "Would apply:", result.lines);
+  print("Problems (reported, not applied):", result.problems?.map((p) => `${p.code}: ${p.reason}`));
+  if (result.blocked) console.log(`Held at change ${result.blocked.at} (${result.blocked.code}): ${result.blocked.reason}`);
+  if (result.outcome === "bootstrap-held") console.log("The bootstrap is held: nothing was written. Resolve the slug problems above first.");
+  if (apply && !["rebuilt", "bootstrap-held"].includes(result.outcome)) await reportProgress(client, result);
+  if (apply && ["applied", "bootstrapped", "held"].includes(result.outcome)) {
+    const publish = snapshotOptions();
+    if (publish) console.log(snapshotLine(buildSnapshot(db, publish, snapshotFile())));
+  }
+}
+
+/** Proposes a tag that isn't a concept to terminology-mcp, with a quote as evidence. */
+async function proposeCommand() {
+  const tag = argv[0];
+  if (!tag || tag.startsWith("--")) throw new Error("Name the tag: quote-mcp propose <tag> [--quote <id>] [--label …] [--broader <slug>] [--note …] [--alt a,b] [--send]");
+  const quote = option("--quote");
+  const body = proposal(openReadOnly(), tag, {
+    quote: quote === undefined ? undefined : Number(quote), label: option("--label"), broader: option("--broader"), note: option("--note"),
+    altLabels: option("--alt")?.split(",").map((a) => a.trim()).filter(Boolean),
+  });
+  if (!flag("--send")) {
+    console.log(`${JSON.stringify(body, null, 2)}\n(not sent; add --send to propose it)`);
+    return;
+  }
+  const answer = await termsClient().propose(body);
+  console.log(`Proposed "${body.label}" as ${String(answer.slug)} (${String(answer.id)}, ${String(answer.status)}), change ${String(answer.change)}. The subscriber adds it as a provisional concept; the next import resolves the tag.`);
+}
+
 function migrateCommand() {
   console.log(`The store is at schema ${openDb().pragma("user_version", { simple: true })}.`);
 }
 
 const commands: Record<string, () => unknown> = {
   import: importCommand, migrate: migrateCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, sets: setsCommand, publish: publishCommand, config: configCommand, serve: serveCommand,
+  terms: termsCommand, propose: proposeCommand,
   stdio: () => serveStdio(openReadOnly(), sets()),
 };
 const command = commands[process.argv[2] ?? ""];

@@ -1,0 +1,11 @@
+#!/bin/bash
+# quote-mcp's CLI on its server, for the authoring login: `quote-mcp terms`, `quote-mcp export --out
+# /tmp/quotes.json`, and so on, from any folder. It runs the CLI as the quote user with the server's
+# settings, as the services do; sudo asks for authoring's password. npm run deploy installs it in
+# /usr/local/bin. It runs in the current release, so give files it writes a path the quote user can
+# write, such as /tmp.
+set -euo pipefail
+if [ "$(id -un)" != quote ]; then exec sudo runuser -u quote -- "$0" "$@"; fi
+set -a; . /etc/quote-mcp/env; set +a
+cd /opt/quote-mcp/current
+exec node dist/cli.js "$@"

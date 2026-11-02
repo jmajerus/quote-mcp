@@ -7,6 +7,7 @@
     "quotes": "tsx --env-file-if-exists=.env src/cli.ts",
     "import": "tsx --env-file-if-exists=.env src/cli.ts import",
     "serve": "tsx --env-file-if-exists=.env src/cli.ts serve",
+    "terms": "tsx --env-file-if-exists=.env src/cli.ts terms",
     "build": "tsc -p tsconfig.build.json",
     "deploy": "node --env-file-if-exists=.env tools/deploy.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",

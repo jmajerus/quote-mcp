@@ -18,7 +18,7 @@ import type { Intro } from "./intro.js";
  * attribution), only their kind, work, and concepts, so the pages can count them.
  */
 
-export const SNAPSHOT_VERSION = 1;
+export const SNAPSHOT_VERSION = 2;
 
 export const SNAPSHOT_SCHEMA = `
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -26,7 +26,7 @@ CREATE TABLE intros (key TEXT PRIMARY KEY, title TEXT NOT NULL, html TEXT NOT NU
 CREATE TABLE schemes (id INTEGER PRIMARY KEY, slug TEXT NOT NULL UNIQUE, label TEXT NOT NULL, description TEXT);
 CREATE TABLE concepts (
   id INTEGER PRIMARY KEY, scheme_id INTEGER NOT NULL, slug TEXT NOT NULL, label TEXT NOT NULL, alt_labels TEXT NOT NULL,
-  definition TEXT, wordnet TEXT, status TEXT NOT NULL, source TEXT, UNIQUE (scheme_id, slug)
+  definition TEXT, wordnet TEXT, status TEXT NOT NULL, source TEXT, former_slugs TEXT NOT NULL DEFAULT '[]', UNIQUE (scheme_id, slug)
 );
 CREATE TABLE relations (from_id INTEGER NOT NULL, to_id INTEGER NOT NULL, type TEXT NOT NULL, PRIMARY KEY (from_id, to_id, type));
 CREATE TABLE works (
@@ -90,7 +90,7 @@ function fill(store: DB, snap: Database.Database, o: SnapshotOptions): void {
   // Concepts that aren't retired, and the relations between them.
   const schemes = store.prepare("SELECT id, slug, label, description FROM schemes").all() as Row[];
   for (const s of schemes) insert("schemes", s);
-  const concepts = store.prepare(`SELECT c.id, c.scheme_id, c.slug, c.label, c.alt_labels, c.definition, c.close_match AS wordnet, c.status, c.source
+  const concepts = store.prepare(`SELECT c.id, c.scheme_id, c.slug, c.label, c.alt_labels, c.definition, c.close_match AS wordnet, c.status, c.source, c.former_slugs
     FROM concepts c WHERE c.status != 'retired'`).all() as Row[];
   for (const c of concepts) insert("concepts", c);
   const kept = new Set(concepts.map((c) => c.id as number));

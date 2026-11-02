@@ -97,7 +97,7 @@ export function createServer(db: DB, sets: ConceptSet[] = []): McpServer {
 
   server.registerTool("quote_worklist", {
     title: "Quote worklist",
-    description: "What needs a person: unparsed quotes to split, works whose Zotero edition is ambiguous or that aren't in Zotero yet, tags that aren't concepts, and quotes by flag (no_locator, ocr_suspect, …). Call with no queue for the counts.",
+    description: "What needs a person: unparsed quotes to split, works whose Zotero edition is ambiguous or that aren't in Zotero yet, tags that aren't concepts, and quotes by flag (no_locator, ocr_suspect, …). Call with no queue for the counts. terminology-mcp holds the concepts: to make an unresolved tag one, call its propose_term with scheme \"human-work\", a label, and evidence {quote: <id>, tag}, and leave the quote's tags alone.",
     inputSchema: {
       queue: z.enum(QUEUES).optional(),
       work: z.string().optional().describe("Limit a quote queue to one work (title, item key, or citekey)"),
