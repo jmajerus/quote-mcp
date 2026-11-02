@@ -124,6 +124,7 @@ cd "$release"
 npm ci --omit=dev --no-audit --no-fund --loglevel=error
 install -m 0644 deploy/quote-mcp.service deploy/quote-import.service deploy/quote-import.timer \\
   deploy/quote-backup.service deploy/quote-backup.timer /etc/systemd/system/
+install -m 0755 deploy/quote-mcp /usr/local/bin/quote-mcp
 previous=$(readlink /opt/quote-mcp/current || true)
 echo "previous=$previous"
 ln -sfn "$release" /opt/quote-mcp/current.new && mv -T /opt/quote-mcp/current.new /opt/quote-mcp/current

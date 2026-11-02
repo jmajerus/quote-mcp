@@ -162,17 +162,13 @@ alternative label; whether to add one is terminology-mcp's call.
    deploy the server (`npm run deploy`, which migrates the store to schema
    3), and deploy the Worker (`npm run worker:deploy`).
 3. Export the store for terminology-mcp's import of human-work. On the
-   server, run each command as the `quote` user with the server's settings
-   (as `npm run deploy` does), or it looks for a store in the release folder:
-
-   ```sh
-   q() { sudo runuser -u quote -- bash -c "set -a; . /etc/quote-mcp/env; set +a; cd /opt/quote-mcp/current && node dist/cli.js $*"; }
-   q export --out /tmp/human-work.json
-   ```
-4. `q terms` (the dry run). It should match all 221 concepts and report
-   only the 20 `close_match` values of `NA` that the old site used for "no
-   WordNet synset", which become null.
-5. `q terms --apply`, then set `QUOTE_TERMS_SYNC=on` in
+   server, as `authoring`, the `quote-mcp` command (which deploy installs)
+   runs the CLI as the service does, with the server's settings:
+   `quote-mcp export --out /tmp/human-work.json`.
+4. `quote-mcp terms` (the dry run). It should match all 221 concepts and
+   report only the 20 `close_match` values of `NA` that the old site used
+   for "no WordNet synset", which become null.
+5. `quote-mcp terms --apply`, then set `QUOTE_TERMS_SYNC=on` in
    `/etc/quote-mcp/env` and restart `quote-mcp.service`.
 
 ## Tested

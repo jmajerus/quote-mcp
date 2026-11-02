@@ -71,6 +71,10 @@ quote-mcp runs on a Debian LXC, quote-mcp.localdomain, on port 8000.
 - **Access.** On the LAN, `http://quote-mcp.localdomain:8000`. From outside, `https://quote-mcp.majerus.us`,
   behind Cloudflare Access (Claude's connector and the admin pages). The public site is separate, at
   quotes.majerus.us.
+- **Commands.** Log in as `authoring` and run `quote-mcp <command>` (`quote-mcp terms`, `quote-mcp stats`,
+  `quote-mcp export --out /tmp/quotes.json`): it runs the CLI as the `quote` user with `/etc/quote-mcp/env`,
+  asking for `authoring`'s password. Deploy installs it in `/usr/local/bin`. Running `node dist/cli.js`
+  yourself misses the settings and looks for a store in the release folder.
 - **`/health`** gives the version, counts, what the last deploy installed, the replica's drain, and how far
   the concepts follow terminology-mcp (`terms`: through, head, and any hold).
 
