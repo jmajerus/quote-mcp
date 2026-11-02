@@ -324,7 +324,12 @@ export interface SyncResult {
 }
 
 async function bootstrap(db: DB, client: TerminologyClient, apply: boolean): Promise<SyncResult> {
-  const state = await client.state();
+  const state = await client.state().catch((error: unknown) => {
+    if (error instanceof TerminologyError && error.status === 404) {
+      throw new TerminologyError(404, `terminology-mcp has no ${SCHEME_ID} scheme yet: import a quote-mcp export there first (docs/dev-briefs/human-work-from-terminology-mcp.md, Deploying it).`, error.body);
+    }
+    throw error;
+  });
   const terms = state.terms.filter(inScheme);
   const plan = planBootstrap(db, terms);
   const base = { log: state.log, through: state.version, head: state.head ?? state.version, problems: plan.problems };
