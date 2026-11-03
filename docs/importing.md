@@ -4,7 +4,7 @@ Where quote-mcp's records come from, and how they're read. The design, and what 
 found, are in [PLAN.md](../PLAN.md) (its Survey, Import, and Notes sections).
 
 `npm run import` syncs the Zotero mirror, reads the old site, and imports. It's safe to run again: an
-unchanged note changes nothing, and a quote edited in quote-mcp is left alone. On the server a timer runs it
+unchanged note changes nothing, and a quote edited in quote-mcp, or checked against its Calibre book, is left alone. On the server a timer runs it
 every 30 minutes without the old site (`import --no-drupal`); Deploy Quotes → Import with the old site runs it
 with the old site.
 

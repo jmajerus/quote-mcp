@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:
 import Database from "better-sqlite3";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { corpusClient, corpusConfig, importCorpusQuotes, retryAnchors, storeWriter } from "./capture.js";
+import { corpusClient, corpusConfig, followAnchors, importCorpusQuotes, retryAnchors, storeWriter } from "./capture.js";
 import { SCHEMA_VERSION, openDb } from "./db.js";
 import { openReadOnly } from "./queries.js";
 import { servePublic, serveHttp, serveStdio } from "./server.js";
@@ -85,7 +85,7 @@ async function importCommand() {
   const counts = db.prepare("SELECT kind, status, COUNT(*) AS n FROM quotes GROUP BY kind, status ORDER BY kind DESC, status").all() as { kind: string; status: string; n: number }[];
   console.log([
     `Concepts: ${s.concepts.added} added, ${s.concepts.relations} relations added.`,
-    `Quotes: ${s.quotes.added} added, ${s.quotes.merged} merged from a second source, ${s.quotes.updated} re-imported, ${s.quotes.unchanged} unchanged, ${s.quotes.keptEdited} edited and left alone.`,
+    `Quotes: ${s.quotes.added} added, ${s.quotes.merged} merged from a second source, ${s.quotes.updated} re-imported, ${s.quotes.unchanged} unchanged, ${s.quotes.keptEdited} edited or checked against a book and left alone.`,
     `In the store: ${counts.map((c) => (c.kind === "note" ? `${c.n} notes` : `${c.n} ${c.status}`)).join(", ")}; ${s.ocrSuspects} with suspect words.`,
     `Works with quotes: ${Object.entries(s.works).map(([k, n]) => `${n} ${k}`).join(", ")}.`,
     `Skipped: ${Object.entries(s.skipped).map(([k, n]) => `${n} ${k}`).join(", ") || "nothing"}.`,
@@ -94,10 +94,13 @@ async function importCommand() {
   const corpus = corpusConfig();
   if (corpus) {
     try {
-      const a = await retryAnchors(db, corpusClient(corpus));
+      const client = corpusClient(corpus);
+      const a = await retryAnchors(db, client);
       if (a.tried) console.log(`Anchors posted again to corpus-mcp: ${a.stored} of ${a.tried}.`);
+      const f = await followAnchors(db, client);
+      if (f.read) console.log(`Anchor changes from corpus-mcp: ${f.read} (changes ${f.from}–${f.to}); ${f.lost} no longer found, ${f.found} found again, ${f.updated} anchors updated.`);
     } catch (error) {
-      say(`Anchors not posted again: ${(error as Error).message}\n`);
+      say(`Anchors not followed: ${(error as Error).message}\n`);
     }
   }
   const publish = snapshotOptions();

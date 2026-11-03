@@ -324,6 +324,7 @@ export function citeQuote(db: DB, id: number) {
   if (q.kind === "note") warnings.push("This is a note (your own words), not a quote: there's no quoted text to cite, only the work and the place.");
   else if (!q.locator) warnings.push("The quote has no page or location.");
   if (q.status === "unparsed") warnings.push("This quote hasn't been split from its note yet; check its text before using it.");
+  if (q.flags.includes("anchor_lost")) warnings.push("The Calibre book's file has changed and corpus-mcp no longer finds these words in it. The quote was checked when saved; check it against the current edition before quoting.");
   if (q.flags.includes("ocr_suspect")) warnings.push("Some words may be OCR errors; check them against the book (see suspect_words in get_quote).");
   const kindle = q.locator?.startsWith("Kindle");
   const locator = q.locator && !kindle ? { label: "page", locator: q.locator.replace(/^pp?\. /, "") } : null;
@@ -340,7 +341,7 @@ export function citeQuote(db: DB, id: number) {
 
 // --- Worklists -----------------------------------------------------------------------------------
 
-export const QUEUES = ["unparsed", "ambiguous_works", "unmatched_works", "unresolved_tags", "no_locator", "ocr_suspect", "unbalanced_quotes", "commentary_mixed", "chapter_author", "kindle_locator", "title_tag_only", "compound_tag"] as const;
+export const QUEUES = ["unparsed", "ambiguous_works", "unmatched_works", "unresolved_tags", "no_locator", "ocr_suspect", "unbalanced_quotes", "commentary_mixed", "chapter_author", "kindle_locator", "title_tag_only", "compound_tag", "anchor_lost", "anchor_missing"] as const;
 export type Queue = (typeof QUEUES)[number];
 
 export function worklist(db: DB, queue: Queue, args: { work?: string; limit?: number; offset?: number } = {}) {

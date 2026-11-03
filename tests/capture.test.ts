@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { type Book, type CorpusClient, CorpusError, type CorpusQuote, type Verified, addQuote, importCorpusQuotes, retryAnchors } from "../src/capture.js";
+import { type AnchorChange, type Book, type CorpusClient, CorpusError, type CorpusQuote, type Verified, addQuote, followAnchors, importCorpusQuotes, retryAnchors } from "../src/capture.js";
 import { ToolError } from "../src/common.js";
 import type { DB } from "../src/db.js";
 import { holdingsCounts } from "../src/holdings.js";
 import { runImport } from "../src/import.js";
-import { citeQuote, searchQuotes } from "../src/queries.js";
+import { citeQuote, searchQuotes, worklist } from "../src/queries.js";
 import { drupal, makeStore } from "./fixture.js";
 
 const PRIMARY = "users/1";
@@ -52,6 +52,14 @@ class FakeCorpus implements CorpusClient {
     if (error) throw error;
     this.anchors.set(quoteId, anchor);
     return { quote_id: quoteId, status: "verified", anchor };
+  }
+
+  log = "log-1";
+  changes: AnchorChange[] = [];
+  /** Two changes a page, so following them takes several. */
+  async anchorChanges(since: number) {
+    const after = this.changes.filter((c) => c.seq > since);
+    return { log: this.log, changes: after.slice(0, 2), last: (after.slice(0, 2).at(-1) ?? this.changes.at(-1))?.seq ?? 0 };
   }
 
   async quotes(): Promise<CorpusQuote[]> {
@@ -275,5 +283,67 @@ describe("taking over corpus-mcp's quotes", () => {
     expect(r.every((x) => x.skipped?.startsWith("dry run"))).toBe(true);
     expect(db.prepare("SELECT COUNT(*) FROM quotes").pluck().get()).toBe(before);
     expect(corpus.verified).toEqual([]);
+  });
+});
+
+describe("following corpus-mcp's anchor changes", () => {
+  const change = (seq: number, quote_id: number, kind: AnchorChange["kind"], anchor: Record<string, unknown> | null = null): AnchorChange =>
+    ({ seq, quote_id, kind, status: kind === "orphaned" ? "orphaned" : "verified", anchor, at: "2026-11-03T00:00:00Z" });
+  const flags = (id: number) => JSON.parse(db.prepare("SELECT flags FROM quotes WHERE id = ?").pluck().get(id) as string) as string[];
+  const kept = (id: number) => JSON.parse(db.prepare("SELECT raw FROM quote_origins WHERE quote_id = ? AND kind = 'agent'").pluck().get(id) as string).anchor;
+
+  it("flags a quote whose anchor is orphaned, keeps it verified, and clears the flag when it's found again", async () => {
+    const id = saved(await addQuote(db, { work: "main:42", text: "It begins when an individual becomes the target" }, options())).id;
+    const moved = { calibre_uuid: mobbingBook.calibre_uuid, sha256: "new", start_page: 41, start_offset: 3, text: "x" };
+    corpus.changes = [change(1, id, "stored", kept(id)), change(2, 9999, "orphaned"), change(3, id, "orphaned", kept(id))];
+    expect(await followAnchors(db, corpus)).toMatchObject({ read: 3, lost: 1, found: 0, from: 0, to: 3 });
+    expect(flags(id)).toEqual(["anchor_lost"]);
+    expect(db.prepare("SELECT status FROM quotes WHERE id = ?").pluck().get(id)).toBe("verified");
+    expect((worklist(db, "anchor_lost") as { quotes: { id: number }[] }).quotes.map((q) => q.id)).toEqual([id]);
+    expect((citeQuote(db, id).warnings as string[]).join(" ")).toMatch(/no longer finds these words/);
+
+    corpus.changes.push(change(4, id, "found", moved));
+    expect(await followAnchors(db, corpus)).toMatchObject({ read: 1, lost: 0, found: 1, updated: 1, from: 3, to: 4 });
+    expect(flags(id)).toEqual([]);
+    expect(kept(id)).toEqual(moved);
+    expect(db.prepare("SELECT kind FROM history WHERE quote_id = ? ORDER BY id").pluck().all(id)).toEqual(["added", "anchor_lost", "anchor_found"]);
+    expect(await followAnchors(db, corpus)).toMatchObject({ read: 0, from: 4, to: 4 });
+  });
+
+  it("starts a new, empty log at 0, so its first change isn't skipped", async () => {
+    const id = saved(await addQuote(db, { work: "main:42", text: "It begins when an individual becomes the target" }, options())).id;
+    corpus.changes = [change(1, id, "stored", kept(id)), change(2, id, "stored", kept(id)), change(3, id, "stored", kept(id))];
+    await followAnchors(db, corpus);
+    corpus.log = "log-2";
+    corpus.changes = [];
+    expect(await followAnchors(db, corpus)).toMatchObject({ read: 0, from: 0, to: 0 });
+    corpus.changes = [change(1, id, "orphaned")];
+    expect(await followAnchors(db, corpus)).toMatchObject({ read: 1, lost: 1 });
+  });
+
+  it("keeps a verified quote's words, status, and anchor flags when its Zotero note or old-site record changes", () => {
+    runImport(db, { drupal, primary: PRIMARY, sources: [PRIMARY], dictionary: new Set(["mobbing"]) });
+    const { quote_id: id, kind } = db.prepare("SELECT quote_id, kind FROM quote_origins WHERE kind IN ('drupal', 'zotero') LIMIT 1").get() as { quote_id: number; kind: string };
+    db.prepare("UPDATE quotes SET status = 'verified', text = 'The book’s own words.', flags = '[\"anchor_lost\"]' WHERE id = ?").run(id);
+    db.prepare("UPDATE quote_origins SET raw = 'an older version' WHERE quote_id = ? AND kind = ?").run(id, kind);
+    runImport(db, { drupal, primary: PRIMARY, sources: [PRIMARY], dictionary: new Set(["mobbing"]) });
+    expect(db.prepare("SELECT status, text, flags FROM quotes WHERE id = ?").get(id)).toEqual({ status: "verified", text: "The book’s own words.", flags: '["anchor_lost"]' });
+    expect(db.prepare("SELECT reason FROM history WHERE quote_id = ? AND kind = 'source_changed'").pluck().get(id)).toMatch(/checked against its book/);
+  });
+
+  it("stops rather than reading the same page forever when corpus-mcp ignores since", async () => {
+    corpus.changes = [change(1, 9999, "stored")];
+    corpus.anchorChanges = async () => ({ log: "log-1", changes: [change(1, 9999, "stored")], last: 1 });
+    await expect(followAnchors(db, corpus)).rejects.toThrow(/stopped following/);
+  });
+
+  it("reads from the start again when corpus-mcp's change log is a new one", async () => {
+    const id = saved(await addQuote(db, { work: "main:42", text: "It begins when an individual becomes the target" }, options())).id;
+    corpus.changes = [change(1, id, "orphaned")];
+    await followAnchors(db, corpus);
+    corpus.log = "log-2";
+    corpus.changes = [change(1, id, "found", kept(id))];
+    expect(await followAnchors(db, corpus)).toMatchObject({ read: 1, found: 1, from: 0, to: 1 });
+    expect(flags(id)).toEqual([]);
   });
 });

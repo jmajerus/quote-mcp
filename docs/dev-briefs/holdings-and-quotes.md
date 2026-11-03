@@ -144,6 +144,17 @@ new quotes landing in corpus-mcp soonest:
    reports re-anchored, orphaned, and found-again quotes. An orphaned anchor
    keeps the quote `verified` (it was checked) and adds a flag, proposed
    `anchor_lost`, to the worklist; a person decides.
+
+   As built: each import, after posting missing anchors again, reads the
+   changes after the change number kept in `meta` (`corpus_anchor_seq`,
+   with the `log` id it belongs to; a new log id reads from 0, which is
+   safe since a change applied twice changes nothing). `orphaned` flags the
+   quote `anchor_lost` (worklist queue `anchor_lost`; `cite_quote` warns);
+   `found`, `stored`, `replaced` or `reanchored` clears it. Each anchor
+   corpus-mcp sends replaces the one kept with the quote's origin.
+   `deleted` changes nothing here, and changes for quotes this store
+   doesn't have are passed over. History records `anchor_lost` and
+   `anchor_found`. `anchor_missing` has a worklist queue too.
 5. **Writes from agents beyond `add_quote`.** corpus-mcp's `update_quote`
    (note and tags) and `delete_quote` retire, so their equivalents land
    here with the rest of phase 2's editing: tag and comment changes by

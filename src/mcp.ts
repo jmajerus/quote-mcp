@@ -60,7 +60,7 @@ export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture)
       tag: z.string().optional().describe("An exact tag, including tags that aren't concepts"),
       author: z.string().optional().describe("Part of an author's name, a chapter author, or an attribution"),
       work: z.string().optional().describe("Part of a work's title, its Zotero item key, its citekey, or a key from holdings-mcp's find_work (quote:<id> or zotero:<library>/<key>)"),
-      flag: z.enum(["no_locator", "kindle_locator", "chapter_author", "unbalanced_quotes", "list_quote", "title_tag_only", "compound_tag", "commentary_mixed", "long", "ocr_suspect"]).optional(),
+      flag: z.enum(["no_locator", "kindle_locator", "chapter_author", "unbalanced_quotes", "list_quote", "title_tag_only", "compound_tag", "commentary_mixed", "long", "ocr_suspect", "anchor_lost", "anchor_missing"]).optional(),
       status: z.enum(["transcribed", "verified", "unparsed", "any"]).optional().describe("Default: everything except unparsed"),
       kind: z.enum(["quote", "note", "any"]).optional().describe("Quotes, notes (your own words, no quoted text), or both (the default)"),
       limit: z.number().int().min(1).max(100).optional().describe("Default 20"),
@@ -110,7 +110,7 @@ export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture)
 
   server.registerTool("quote_worklist", {
     title: "Quote worklist",
-    description: "What needs a person: unparsed quotes to split, works whose Zotero edition is ambiguous or that aren't in Zotero yet, tags that aren't concepts, and quotes by flag (no_locator, ocr_suspect, …). Call with no queue for the counts. terminology-mcp holds the concepts: to make an unresolved tag one, call its propose_term with scheme \"human-work\", a label, and evidence {quote: <id>, tag}, and leave the quote's tags alone.",
+    description: "What needs a person: unparsed quotes to split, works whose Zotero edition is ambiguous or that aren't in Zotero yet, tags that aren't concepts, and quotes by flag (no_locator, ocr_suspect, anchor_lost: a verified quote its Calibre book's new file no longer has, …). Call with no queue for the counts. terminology-mcp holds the concepts: to make an unresolved tag one, call its propose_term with scheme \"human-work\", a label, and evidence {quote: <id>, tag}, and leave the quote's tags alone.",
     inputSchema: {
       queue: z.enum(QUEUES).optional(),
       work: z.string().optional().describe("Limit a quote queue to one work (title, item key, or citekey)"),

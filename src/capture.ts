@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import { ToolError } from "./common.js";
-import { type DB, now } from "./db.js";
+import { type DB, getMeta, now, setMeta } from "./db.js";
 import { creators } from "./import.js";
 import { citekeyOf } from "./csl.js";
 import { calibreSource, getQuote } from "./queries.js";
@@ -23,6 +23,7 @@ export const DEFAULT_CORPUS_BASE = "http://corpus-mcp.localdomain:8000";
 export const MAX_QUOTE = 2000;
 const ORIGIN = "agent";
 const ANCHOR_MISSING = "anchor_missing";
+const ANCHOR_LOST = "anchor_lost";
 
 /** One entry of corpus-mcp's /api/holdings/books feed. */
 export interface Book {
@@ -48,6 +49,8 @@ export interface CorpusClient {
   verify(request: { book: string; text: string; page?: number }): Promise<Verified>;
   anchor(quoteId: number, anchor: Record<string, unknown>): Promise<unknown>;
   dropAnchor(quoteId: number): Promise<void>;
+  /** Changes to the anchors corpus-mcp keeps for quotes here, after change number `since` (GET /api/anchors/changes). */
+  anchorChanges(since: number): Promise<AnchorChanges>;
   /** corpus-mcp's own saved quotes (GET /api/quotes), for taking them over. */
   quotes(): Promise<CorpusQuote[]>;
 }
@@ -77,6 +80,7 @@ export function corpusClient({ baseUrl, timeoutMs = 20_000, fetchImpl = fetch }:
     baseUrl,
     verify: (r) => request("POST", "/api/verify", r),
     anchor: (quoteId, anchor) => request("POST", "/api/anchors", { quote_id: quoteId, anchor }),
+    anchorChanges: (since) => request("GET", `/api/anchors/changes?since=${since}`),
     // corpus-mcp gives at most 200 a page; read on until total.
     quotes: async () => {
       const all: CorpusQuote[] = [];
@@ -464,4 +468,83 @@ export async function importCorpusQuotes(db: DB, corpus: CorpusClient, quotes: C
     }
   }
   return results;
+}
+
+// --- Following the anchors -----------------------------------------------------------------------
+
+export interface AnchorChange {
+  seq: number; quote_id: number; kind: "stored" | "replaced" | "reanchored" | "orphaned" | "found" | "deleted";
+  status: string | null; anchor: Record<string, unknown> | null; at: string;
+}
+export interface AnchorChanges { log: string; changes: AnchorChange[]; last: number }
+
+/**
+ * Follows corpus-mcp's anchor changes (docs/dev-briefs/holdings-and-quotes.md §2.4), from the change number
+ * kept in meta with the log id it belongs to; a new log id (corpus-mcp's change log was started again) means
+ * reading from the start, which is safe, since applying a change twice changes nothing. An orphaned anchor
+ * (the book's new file no longer has the words) keeps the quote verified, since it was checked, and flags it
+ * anchor_lost for a person; found again, or stored again, clears the flag. Each anchor corpus-mcp now has
+ * replaces the one kept with the quote's origin. A deleted anchor changes nothing here. Changes for quotes
+ * this store doesn't have are passed over.
+ */
+export async function followAnchors(db: DB, corpus: CorpusClient): Promise<{ read: number; lost: number; found: number; updated: number; from: number; to: number }> {
+  let log = getMeta(db, "corpus_anchor_log");
+  let since = Number(getMeta(db, "corpus_anchor_seq") ?? 0);
+  const counts = { read: 0, lost: 0, found: 0, updated: 0, from: since, to: since };
+  const flagged = (id: number, flag: string) =>
+    db.prepare("SELECT 1 FROM quotes q WHERE id = ? AND EXISTS (SELECT 1 FROM json_each(q.flags) WHERE value = ?)").pluck().get(id, flag) !== undefined;
+  const setFlag = (id: number, flag: string, on: boolean, stamp: string) => {
+    if (flagged(id, flag) === on) return false;
+    db.prepare(`UPDATE quotes SET flags = ${on ? "json_insert(flags, '$[#]', ?)" : "(SELECT json_group_array(value) FROM json_each(flags) WHERE value != ?)"},
+      updated_at = ?, updated_by = 'corpus-mcp' WHERE id = ?`).run(flag, stamp, id);
+    return true;
+  };
+  for (;;) {
+    let page = await corpus.anchorChanges(since);
+    if (page.log !== log) {
+      if (since !== 0) page = await corpus.anchorChanges((since = 0));
+      log = page.log;
+      counts.from = 0;
+    }
+    if (!page.changes.length) break;
+    // A page that doesn't move past `since` would be read again forever.
+    if (page.changes.at(-1)!.seq <= since) throw new Error(`corpus-mcp's anchor changes after ${since} ended at ${page.changes.at(-1)!.seq}; stopped following them.`);
+    db.transaction(() => {
+      for (const c of page.changes) {
+        counts.read++;
+        const origin = db.prepare(`SELECT o.rowid, o.raw FROM quote_origins o JOIN quotes q ON q.id = o.quote_id WHERE o.quote_id = ? AND o.kind IN ('agent', 'corpus')
+          AND json_extract(o.raw, '$.anchor') IS NOT NULL ORDER BY o.imported_at DESC LIMIT 1`).get(c.quote_id) as { rowid: number; raw: string } | undefined;
+        if (!origin || c.kind === "deleted") continue;
+        const stamp = now();
+        if (c.anchor) {
+          const raw = JSON.parse(origin.raw) as Record<string, unknown>;
+          if (JSON.stringify(raw.anchor) !== JSON.stringify(c.anchor)) {
+            db.prepare("UPDATE quote_origins SET raw = ? WHERE rowid = ?").run(JSON.stringify({ ...raw, anchor: c.anchor }), origin.rowid);
+            counts.updated++;
+          }
+        }
+        if (c.kind === "orphaned") {
+          if (setFlag(c.quote_id, ANCHOR_LOST, true, stamp)) {
+            counts.lost++;
+            db.prepare("INSERT INTO history (quote_id, at, kind, before, after, actor, reason) VALUES (?, ?, 'anchor_lost', NULL, NULL, 'corpus-mcp', ?)")
+              .run(c.quote_id, stamp, `corpus-mcp change ${c.seq}: the book's file changed and no longer has these words`);
+          }
+        } else if (setFlag(c.quote_id, ANCHOR_LOST, false, stamp)) {
+          counts.found++;
+          db.prepare("INSERT INTO history (quote_id, at, kind, before, after, actor, reason) VALUES (?, ?, 'anchor_found', NULL, NULL, 'corpus-mcp', ?)")
+            .run(c.quote_id, stamp, `corpus-mcp change ${c.seq}: ${c.kind === "found" ? "found in the book again" : "anchored again"}`);
+        }
+      }
+      since = page.changes.at(-1)!.seq;
+      setMeta(db, "corpus_anchor_log", log!);
+      setMeta(db, "corpus_anchor_seq", String(since));
+    })();
+  }
+  // Kept even when no change was read, so a new, empty log's 0 replaces the old log's change number.
+  if (log !== undefined) {
+    setMeta(db, "corpus_anchor_log", log);
+    setMeta(db, "corpus_anchor_seq", String(since));
+  }
+  counts.to = since;
+  return counts;
 }
