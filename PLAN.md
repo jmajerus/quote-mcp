@@ -258,6 +258,7 @@ flag as "sic, as printed", which stops it from being re-flagged.
 | A Calibre book | `add_quote` with the Calibre book; Quote MCP asks corpus-mcp to check it | `verified` |
 | A PDF or EPUB attached in Zotero | A highlight annotation with tags, imported with its page label | `transcribed` |
 | A book not yet in Zotero | Filed first into `Corpus MCP/Staging`, the way the cited-article skill files books, then the quote is added | as above |
+| Marked pages of a paper book | Scan the tabbed pages on any scanner or phone; an agent reads the pencil-marked passages and a person checks each against its image ([dev-brief](docs/dev-briefs/page-scans.md), proposed) | `transcribed` |
 
 New tags reuse an existing tag's spelling, ignoring case, the same rule
 corpus-mcp's quotes use, so one concept keeps one name.
