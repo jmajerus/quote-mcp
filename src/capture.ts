@@ -484,7 +484,7 @@ export interface AnchorChanges { log: string; changes: AnchorChange[]; last: num
  * reading from the start, which is safe, since applying a change twice changes nothing. An orphaned anchor
  * (the book's new file no longer has the words) keeps the quote verified, since it was checked, and flags it
  * anchor_lost for a person; found again, or stored again, clears the flag. Each anchor corpus-mcp now has
- * replaces the one kept with the quote's origin. A deleted anchor changes nothing here. Changes for quotes
+ * replaces the one kept with the quote's origin, except an orphaned one's. A deleted anchor changes nothing here. Changes for quotes
  * this store doesn't have are passed over.
  */
 export async function followAnchors(db: DB, corpus: CorpusClient): Promise<{ read: number; lost: number; found: number; updated: number; from: number; to: number }> {
@@ -516,7 +516,8 @@ export async function followAnchors(db: DB, corpus: CorpusClient): Promise<{ rea
           AND json_extract(o.raw, '$.anchor') IS NOT NULL ORDER BY o.imported_at DESC LIMIT 1`).get(c.quote_id) as { rowid: number; raw: string } | undefined;
         if (!origin || c.kind === "deleted") continue;
         const stamp = now();
-        if (c.anchor) {
+        // An orphaned change carries the last anchor with sha256 null; the one kept stays the last good one.
+        if (c.anchor && c.kind !== "orphaned") {
           const raw = JSON.parse(origin.raw) as Record<string, unknown>;
           if (JSON.stringify(raw.anchor) !== JSON.stringify(c.anchor)) {
             db.prepare("UPDATE quote_origins SET raw = ? WHERE rowid = ?").run(JSON.stringify({ ...raw, anchor: c.anchor }), origin.rowid);

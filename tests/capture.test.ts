@@ -295,8 +295,10 @@ describe("following corpus-mcp's anchor changes", () => {
   it("flags a quote whose anchor is orphaned, keeps it verified, and clears the flag when it's found again", async () => {
     const id = saved(await addQuote(db, { work: "main:42", text: "It begins when an individual becomes the target" }, options())).id;
     const moved = { calibre_uuid: mobbingBook.calibre_uuid, sha256: "new", start_page: 41, start_offset: 3, text: "x" };
-    corpus.changes = [change(1, id, "stored", kept(id)), change(2, 9999, "orphaned"), change(3, id, "orphaned", kept(id))];
-    expect(await followAnchors(db, corpus)).toMatchObject({ read: 3, lost: 1, found: 0, from: 0, to: 3 });
+    const good = kept(id);
+    corpus.changes = [change(1, id, "stored", good), change(2, 9999, "orphaned"), change(3, id, "orphaned", { ...good, sha256: null })];
+    expect(await followAnchors(db, corpus)).toMatchObject({ read: 3, lost: 1, found: 0, updated: 0, from: 0, to: 3 });
+    expect(kept(id)).toEqual(good);
     expect(flags(id)).toEqual(["anchor_lost"]);
     expect(db.prepare("SELECT status FROM quotes WHERE id = ?").pluck().get(id)).toBe("verified");
     expect((worklist(db, "anchor_lost") as { quotes: { id: number }[] }).quotes.map((q) => q.id)).toEqual([id]);
