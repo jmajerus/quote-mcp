@@ -38,7 +38,11 @@ const EMPHASIS = /(^|[\s(“"'‘—–-])\*(?=\S)([^*\n]+?)(?<=\S)\*(?=$|[\s).,
 
 /** Quote text as HTML: escaped, with the old site's emphasis as <em>. */
 export function quoteHtml(text: string): string {
-  const t = plainText(text);
+  return emphasisHtml(plainText(text));
+}
+
+/** Text as HTML, escaped, with *emphasis* as <em>; the admin pages use it as it is, [bib] markers and all. */
+export function emphasisHtml(t: string): string {
   let html = "";
   let last = 0;
   for (const m of t.matchAll(EMPHASIS)) {

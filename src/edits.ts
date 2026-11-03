@@ -152,13 +152,50 @@ function applyFields(db: DB, q: Record<string, unknown>, c: Fields & { comment?:
   refreshFts(db, id);
 }
 
+/** Text compared loosely: spacing collapsed, and *emphasis* asterisks dropped, since they're a reader's mark. */
+const plain = (t: string) => t.replace(/\*/g, "").replace(/\s+/g, " ").trim();
+/** An omission: …, ..., or either in brackets. */
+const ELLIPSIS = /\s*(?:\[\s*(?:…|\.\s?\.\s?\.)\s*\]|…|\.\s?\.\s?\.)\s*/g;
+
+/**
+ * Whether a verified quote's text, as a person edited it, is still the book's words with only their own marks: [any
+ * bracketed text] (a clarification, [sic], [emphasis added]), *asterisks* for emphasis, and an ellipsis for words left
+ * out. Taking out the brackets and asterisks must leave the book's text, exactly, or with an ellipsis, its words in
+ * order with the omitted ones between. Spacing and line breaks don't count.
+ */
+export function fromBook(text: string, book: string): boolean {
+  const parts = text.replace(ELLIPSIS, "\u0000").replace(/\s*\[[^\]]*\]/g, "").split("\u0000").map(plain);
+  const whole = plain(book);
+  if (parts.length === 1) return parts[0] === whole;
+  let from = 0;
+  for (const part of parts.filter(Boolean)) {
+    const at = whole.indexOf(part, from);
+    if (at < 0) return false;
+    from = at + part.length;
+  }
+  return parts.some(Boolean);
+}
+
+/**
+ * A verified quote's text as the book has it: the passage corpus-mcp matched when it was saved (kept with its
+ * anchor), so an edit is checked against the book, not against an earlier edit that left words out.
+ */
+function bookText(db: DB, id: number, current: string): string {
+  const raw = db.prepare(`SELECT raw FROM quote_origins WHERE quote_id = ? AND kind IN ('agent', 'corpus')
+    AND json_extract(raw, '$.anchor.text') IS NOT NULL ORDER BY imported_at LIMIT 1`).pluck().get(id) as string | undefined;
+  const anchored = raw ? (JSON.parse(raw) as { anchor: { text: string } }).anchor.text : undefined;
+  if (anchored) return anchored;
+  const added = db.prepare("SELECT after FROM history WHERE quote_id = ? AND kind = 'added' ORDER BY id LIMIT 1").pluck().get(id) as string | null | undefined;
+  return added ?? current;
+}
+
 export interface EditArgs { id: number; text?: string; locator?: string | null; chapter_author?: string | null; comment?: string | null; reason?: string; updated_at?: string }
 
 /**
  * A person's edit from the admin pages: fixing a typo, a page, a chapter author, or the comment. Only the fields that
- * changed are written. A verified quote's words are the book's and stay; only their spacing and line breaks change,
- * and a misprint can be marked [sic]. updated_at, when given, is the quote's as the
- * form showed it; a quote changed since is refused, so one edit doesn't undo another.
+ * changed are written. A verified quote's words are the book's and stay (fromBook says which marks a person may
+ * add). updated_at, when given, is the quote's as the form showed it; a quote changed since is refused, so one edit
+ * doesn't undo another.
  */
 export function editQuote(db: DB, args: EditArgs, editor: string) {
   return db.transaction(() => {
@@ -173,11 +210,8 @@ export function editQuote(db: DB, args: EditArgs, editor: string) {
       if (!text) throw new ToolError("The text can't be empty.");
       if (text.length > MAX_TEXT) throw new ToolError(`The text is ${text.length} characters; the limit is ${MAX_TEXT}.`);
       if (text !== now_.text) {
-        // A verified quote's words are the book's. A person may tidy its spacing and line breaks (an EPUB's line ends,
-        // say) and mark a misprint with [sic], or take a [sic] out again: without any [sic], the words must be the same.
-        const words = (t: string) => t.replace(/\s*\[sic\]/gi, "").replace(/\s+/g, " ").trim();
-        if (q.status === "verified" && words(text) !== words(now_.text)) {
-          throw new ToolError(`Quote ${args.id} was checked against its Calibre book, so its words are the book's: only its spacing and line breaks can change, and a misprint can be marked [sic].`);
+        if (q.status === "verified" && !fromBook(text, bookText(db, args.id, now_.text))) {
+          throw new ToolError(`Quote ${args.id} was checked against its Calibre book, so its words are the book's. Your own marks can be added: [brackets], *emphasis*, and … for words left out; spacing and line breaks can change. Anything else that changes the words is refused.`);
         }
         change.text = text;
       }
