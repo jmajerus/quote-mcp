@@ -349,12 +349,19 @@ type Fields = ProposalFields;
 export interface Proposal {
   id: number; quote_id: number; change: Fields; before: Fields; rationale: string; evidence: string | null; proposer: string;
   status: "pending" | "accepted" | "rejected"; reviewer: string | null; review_note: string | null; created_at: string; reviewed_at: string | null;
+  /** The proposed fields as the quote has them now; stale when one differs from before, so accepting it would be refused. */
+  current: Fields; stale: boolean;
 }
 
 export function proposal(db: DB, id: number): Proposal {
-  const p = db.prepare("SELECT * FROM proposals WHERE id = ?").get(id) as (Omit<Proposal, "change" | "before"> & { change: string; before: string }) | undefined;
+  const p = db.prepare("SELECT * FROM proposals WHERE id = ?").get(id) as (Omit<Proposal, "change" | "before" | "current" | "stale"> & { change: string; before: string }) | undefined;
   if (!p) throw new ToolError(`No proposal ${id}.`);
-  return { ...p, change: JSON.parse(p.change) as Fields, before: JSON.parse(p.before) as Fields };
+  const before = JSON.parse(p.before) as Fields;
+  const q = db.prepare("SELECT text, locator_kind, locator, chapter_author FROM quotes WHERE id = ?").get(p.quote_id) as { text: string; locator_kind: string; locator: string | null; chapter_author: string | null };
+  const all: Required<Fields> = { text: q.text, locator: locatorText(q.locator_kind, q.locator), chapter_author: q.chapter_author ?? null };
+  const current = Object.fromEntries(Object.keys(before).map((k) => [k, all[k as keyof Fields]])) as Fields;
+  const stale = Object.keys(before).some((k) => current[k as keyof Fields] !== before[k as keyof Fields]);
+  return { ...p, change: JSON.parse(p.change) as Fields, before, current, stale };
 }
 
 /** Pending proposals (or those with another status), newest last, each with its quote's current text and work. */

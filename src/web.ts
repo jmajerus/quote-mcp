@@ -113,9 +113,13 @@ ${params.tag ? `<p class="note">Tag: ${esc(params.tag)} · <a href="/admin/quote
 /** One proposal as a before-and-after table, with its reason and the command that accepts it. */
 function proposalBlock(x: Proposal): string {
   const label: Record<string, string> = { text: "Text", locator: "Page or location", chapter_author: "Chapter author" };
-  return `<div class="scroll"><table><tr><th>Proposal ${x.id}</th><th>Now</th><th>Proposed</th></tr>
-${Object.keys(x.change).map((k) => `<tr><th>${label[k] ?? esc(k)}</th><td>${esc(x.before[k as keyof typeof x.before] ?? "—")}</td><td>${esc(x.change[k as keyof typeof x.change] ?? "—")}</td></tr>`).join("")}</table></div>
-<p class="note">${esc(x.proposer)}: ${esc(x.rationale)}${x.evidence ? ` · Evidence: ${esc(x.evidence)}` : ""} · <code>quote-mcp proposals --accept ${x.id}</code></p>`;
+  // "When proposed" is what the proposal saw; when the quote has changed since, "Now" shows it, and accepting is refused.
+  const cell = (v: string | null | undefined) => `<td>${esc(v ?? "—")}</td>`;
+  return `<div class="scroll"><table><tr><th>Proposal ${x.id}</th><th>When proposed</th>${x.stale ? "<th>Now</th>" : ""}<th>Proposed</th></tr>
+${(Object.keys(x.change) as (keyof typeof x.change)[]).map((k) => `<tr><th>${label[k] ?? esc(k)}</th>${cell(x.before[k])}${x.stale ? cell(x.current[k]) : ""}${cell(x.change[k])}</tr>`).join("")}</table></div>
+<p class="note">${esc(x.proposer)}: ${esc(x.rationale)}${x.evidence ? ` · Evidence: ${esc(x.evidence)}` : ""} · ${x.stale
+    ? `The quote has changed since: reject it with <code>quote-mcp proposals --reject ${x.id}</code>.`
+    : `<code>quote-mcp proposals --accept ${x.id}</code>`}</p>`;
 }
 
 function quotePage(db: DB, id: number): string {

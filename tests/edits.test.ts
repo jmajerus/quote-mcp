@@ -74,6 +74,42 @@ describe("proposals", () => {
     expect(getQuote(db, id).text).toBe("Everyone deserves dignity at work.");
   });
 
+  it("refuses a text change to a quote verified since, and keeps the locator and chapter-author flags right", () => {
+    const id = byText("Everyone deserves dignity");
+    const text = proposeFix(db, { id, text: "Everyone deserves dignity, always.", rationale: "x" }, "agent").proposal;
+    db.prepare("UPDATE quotes SET status = 'verified' WHERE id = ?").run(id);
+    fails(() => reviewProposal(db, text.id, "accept", "authoring"), /checked against its Calibre book after proposal/);
+    db.prepare("UPDATE quotes SET status = 'transcribed' WHERE id = ?").run(id);
+    reviewProposal(db, text.id, "reject", "authoring");
+
+    const flags = () => getQuote(db, id).flags;
+    expect(flags()).toContain("no_locator");
+    reviewProposal(db, proposeFix(db, { id, locator: "Kindle loc. 208", rationale: "Kindle" }, "agent").proposal.id, "accept", "authoring");
+    expect(flags()).toEqual(expect.arrayContaining(["kindle_locator"]));
+    expect(flags()).not.toContain("no_locator");
+    reviewProposal(db, proposeFix(db, { id, locator: "7", rationale: "the page" }, "agent").proposal.id, "accept", "authoring");
+    expect(flags()).not.toContain("kindle_locator");
+    expect(flags()).not.toContain("no_locator");
+    reviewProposal(db, proposeFix(db, { id, locator: null, rationale: "no page after all" }, "agent").proposal.id, "accept", "authoring");
+    expect(flags()).toContain("no_locator");
+
+    db.prepare(`UPDATE quotes SET flags = json_insert(flags, '$[#]', 'chapter_author') WHERE id = ?`).run(id);
+    reviewProposal(db, proposeFix(db, { id, chapter_author: "Roe, Richard", rationale: "the volume's contents page" }, "agent").proposal.id, "accept", "authoring");
+    expect(getQuote(db, id)).toMatchObject({ chapter_author: "Roe, Richard" });
+    expect(flags()).not.toContain("chapter_author");
+  });
+
+  it("shows what the quote has now beside a stale proposal", () => {
+    const id = byText("Abuse at work rarely");
+    const { proposal } = proposeFix(db, { id, locator: "13", rationale: "off by one" }, "agent");
+    db.prepare("UPDATE quotes SET locator = '14' WHERE id = ?").run(id);
+    expect(getQuote(db, id).proposals[0]).toMatchObject({ stale: true, before: { locator: "p. 12" }, current: { locator: "p. 14" } });
+    const html = renderAdmin(db, `/admin/quotes/${id}`, new URLSearchParams())!;
+    expect(html).toContain("<th>Now</th>");
+    expect(html).toContain("p. 14");
+    expect(html).toContain(`quote-mcp proposals --reject ${proposal.id}`);
+  });
+
   it("shows on the admin pages, with the command that accepts it", () => {
     const id = byText("Everyone deserves dignity");
     const { proposal } = proposeFix(db, { id, locator: "7", rationale: "Checked <the> book" }, "agent");
@@ -134,6 +170,21 @@ describe("delete_quote", () => {
     const fresh = byText("Everyone deserves dignity");
     expect(fresh).toBeGreaterThan(top);
     expect(db.prepare("SELECT kind FROM history WHERE quote_id = ?").pluck().all(top)).toEqual(["deleted"]);
+  });
+
+  it("keeps a quote an import reached while its anchor was being dropped, flagged for the anchor to go back", async () => {
+    const work = db.prepare("SELECT work_id FROM quotes LIMIT 1").pluck().get() as number;
+    const id = db.prepare(`INSERT INTO quotes (kind, work_id, text, text_key, status, created_at, updated_at) VALUES ('quote', ?, 'Raced', 'raced', 'verified', 'x', 'x') RETURNING id`).pluck().get(work) as number;
+    db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, raw, imported_at) VALUES ('agent', 'race', ?, '{}', 'x')").run(id);
+    const racing = { dropAnchor: async () => void db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, raw, imported_at) VALUES ('zotero', 'users/1:N1', ?, '', 'x')").run(id) } as unknown as CorpusClient;
+    await expect(deleteQuote(db, racing, id, "racing", "agent")).rejects.toThrow(/came from zotero users\/1:N1/);
+    expect(getQuote(db, id).flags).toContain("anchor_missing");
+    expect(db.prepare("SELECT COUNT(*) FROM history WHERE quote_id = ? AND kind = 'deleted'").pluck().get(id)).toBe(0);
+
+    db.prepare("DELETE FROM quote_origins WHERE kind = 'zotero' AND quote_id = ?").run(id);
+    const editing = { dropAnchor: async () => void db.prepare("UPDATE quotes SET updated_at = 'later' WHERE id = ?").run(id) } as unknown as CorpusClient;
+    await expect(deleteQuote(db, editing, id, "racing", "agent")).rejects.toThrow(/changed while it was being deleted/);
+    expect(db.prepare("SELECT COUNT(*) FROM quotes WHERE id = ?").pluck().get(id)).toBe(1);
   });
 
   it("refuses an imported quote, which its source would bring back", async () => {

@@ -142,16 +142,25 @@ export function reviewProposal(db: DB, id: number, decision: "accept" | "reject"
       const stale = (Object.keys(p.before) as (keyof Fields)[]).filter((k) => current[k] !== p.before[k]);
       if (stale.length) throw new ToolError(`Quote ${p.quote_id}'s ${stale.join(" and ")} changed after proposal ${id} was made; reject it, and propose again from the quote as it is.`);
       const c = p.change;
+      if (c.text !== undefined && q.status === "verified") {
+        throw new ToolError(`Quote ${p.quote_id} was checked against its Calibre book after proposal ${id} was made, so its text is the book's; reject the proposal.`);
+      }
+      let flags = JSON.parse(q.flags as string) as string[];
       if (c.text !== undefined) db.prepare("UPDATE quotes SET text = ?, text_key = ? WHERE id = ?").run(c.text, quoteKey(c.text), p.quote_id);
       if (c.locator !== undefined) {
         const l = parseLocator(c.locator);
         db.prepare("UPDATE quotes SET locator_kind = ?, locator = ? WHERE id = ?").run(l.kind, l.value, p.quote_id);
-        // A page settles no_locator, and kindle_locator (a Kindle location where a page is wanted); none brings no_locator back.
-        let flags = (JSON.parse(q.flags as string) as string[]).filter((f) => f !== "no_locator" && !(f === "kindle_locator" && l.kind === "page"));
-        if (!l.value) flags = [...flags, "no_locator"];
-        db.prepare("UPDATE quotes SET flags = ? WHERE id = ?").run(JSON.stringify(flags), p.quote_id);
+        // The locator flags follow the new locator, as the parser sets them: none is no_locator, a Kindle location kindle_locator.
+        flags = flags.filter((f) => f !== "no_locator" && f !== "kindle_locator");
+        if (!l.value) flags.push("no_locator");
+        else if (l.kind === "kindle") flags.push("kindle_locator");
       }
-      if (c.chapter_author !== undefined) db.prepare("UPDATE quotes SET chapter_author = ? WHERE id = ?").run(c.chapter_author, p.quote_id);
+      if (c.chapter_author !== undefined) {
+        db.prepare("UPDATE quotes SET chapter_author = ? WHERE id = ?").run(c.chapter_author, p.quote_id);
+        // chapter_author asks a person to check the chapter author; accepting this proposal is that check.
+        flags = flags.filter((f) => f !== "chapter_author");
+      }
+      db.prepare("UPDATE quotes SET flags = ? WHERE id = ?").run(JSON.stringify(flags), p.quote_id);
       db.prepare("UPDATE quotes SET edited = 1, updated_at = ?, updated_by = ? WHERE id = ?").run(stamp, reviewer, p.quote_id);
       history(db, p.quote_id, "edited", p.before, c, reviewer, `accepted proposal ${id} by ${p.proposer}: ${p.rationale}${note ? ` (${note})` : ""}`);
       refreshFts(db, p.quote_id);
@@ -172,17 +181,33 @@ export function reviewProposal(db: DB, id: number, decision: "accept" | "reject"
 export async function deleteQuote(db: DB, corpus: CorpusClient | null, id: number, reason: string, actor: string) {
   const why = reason?.trim();
   if (!why) throw new ToolError("Say why: give a reason.");
+  const imported = (quoteId: number) =>
+    db.prepare("SELECT kind || ' ' || ref FROM quote_origins WHERE quote_id = ? AND kind NOT IN ('agent', 'corpus') ORDER BY kind, ref").pluck().all(quoteId) as string[];
+  const refuse = (from: string[]) =>
+    new ToolError(`Quote ${id} came from ${from.join(", ")}, which the import reads again; delete it there (or change its tags and comment here) instead.`);
   const q = getQuote(db, id);
-  const origins = q.origins as { kind: string; ref: string }[];
-  const imported = origins.filter((o) => o.kind !== "agent" && o.kind !== "corpus");
-  if (imported.length) {
-    throw new ToolError(`Quote ${id} came from ${imported.map((o) => `${o.kind} ${o.ref}`).join(", ")}, which the import reads again; delete it there (or change its tags and comment here) instead.`);
-  }
+  if (imported(id).length) throw refuse(imported(id));
   if (corpus) await corpus.dropAnchor(id);
-  db.transaction(() => {
+  // Checked again once corpus-mcp has answered: an import or an edit may have reached the quote meanwhile. Then it
+  // stays, flagged anchor_missing, so the next import posts the anchor kept with it again.
+  const kept = db.transaction((): string[] | "gone" | "changed" | null => {
+    const now_ = db.prepare("SELECT updated_at FROM quotes WHERE id = ?").pluck().get(id) as string | undefined;
+    if (now_ === undefined) return "gone";
+    const from = imported(id);
+    if (from.length) return from;
+    if (now_ !== q.updated_at) return "changed";
     history(db, id, "deleted", q, null, actor, why);
     db.prepare("DELETE FROM quotes_fts WHERE rowid = ?").run(id);
     db.prepare("DELETE FROM quotes WHERE id = ?").run(id);
+    return null;
   })();
+  if (kept === "gone") throw new ToolError(`Quote ${id} was deleted meanwhile.`);
+  if (kept) {
+    if (corpus) {
+      db.prepare(`UPDATE quotes SET flags = json_insert(flags, '$[#]', 'anchor_missing') WHERE id = ?
+        AND NOT EXISTS (SELECT 1 FROM json_each(flags) WHERE value = 'anchor_missing')`).run(id);
+    }
+    throw kept === "changed" ? new ToolError(`Quote ${id} changed while it was being deleted, so it was kept; look at it again before deleting it.`) : refuse(kept);
+  }
   return { deleted: id, anchor_dropped: Boolean(corpus), ...(corpus ? {} : { warning: "corpus-mcp is off here (CORPUS_BASE), so any anchor it keeps for this quote wasn't dropped." }) };
 }
