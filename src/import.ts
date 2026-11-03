@@ -161,9 +161,11 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
         }
       }
       if (existing && existing !== id) {
-        // The work was filed in Zotero since the last import: its quotes move to the Zotero item.
+        // The work was filed in Zotero since the last import: its quotes move to the Zotero item, and its
+        // old id stays an origin of the work, so a key made from it (holdings-mcp's quote:<id>) still resolves.
         db.prepare("UPDATE quotes SET work_id = ? WHERE work_id = ?").run(id, existing);
         db.prepare("UPDATE work_origins SET work_id = ? WHERE work_id = ?").run(id, existing);
+        setOrigin.run("work", String(existing), id);
         db.prepare("DELETE FROM works WHERE id = ? AND match != 'zotero' AND NOT EXISTS (SELECT 1 FROM quotes WHERE work_id = ?)").run(existing, existing);
       }
       setOrigin.run("drupal", String(w.nid), id);

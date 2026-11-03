@@ -46,7 +46,7 @@ export function createServer(db: DB, sets: ConceptSet[] = []): McpServer {
       set: z.string().optional().describe("A concept set's slug: only quotes tagged with one of its concepts; see list_sets"),
       tag: z.string().optional().describe("An exact tag, including tags that aren't concepts"),
       author: z.string().optional().describe("Part of an author's name, a chapter author, or an attribution"),
-      work: z.string().optional().describe("Part of a work's title, its Zotero item key, or its citekey"),
+      work: z.string().optional().describe("Part of a work's title, its Zotero item key, its citekey, or a key from holdings-mcp's find_work (quote:<id> or zotero:<library>/<key>)"),
       flag: z.enum(["no_locator", "kindle_locator", "chapter_author", "unbalanced_quotes", "list_quote", "title_tag_only", "compound_tag", "commentary_mixed", "long", "ocr_suspect"]).optional(),
       status: z.enum(["transcribed", "verified", "unparsed", "any"]).optional().describe("Default: everything except unparsed"),
       kind: z.enum(["quote", "note", "any"]).optional().describe("Quotes, notes (your own words, no quoted text), or both (the default)"),

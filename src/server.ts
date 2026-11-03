@@ -1,3 +1,4 @@
+import { handleHoldingsCounts } from "./holdings.js";
 import { AccessError, authorizeRequest, requestAccessConfig, type RequestAccessConfig } from './http-access.js';
 import type { JWTVerifyGetKey } from 'jose';
 import fs from "node:fs";
@@ -105,7 +106,7 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     try {
-      await authorizeRequest(req, url.pathname, access, options.accessKeys);
+      const via = (await authorizeRequest(req, url.pathname, access, options.accessKeys)).via;
       if (url.pathname === "/health") {
         const { quotes, notes } = overview(db);
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, quotes, notes, deployed: readDeployed(), ...(options.replica ? { replica: options.replica() } : {}), ...(options.terms ? { terms: options.terms() } : {}) }));
@@ -115,6 +116,12 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
       if (await sitePage(options, req, res, url)) return;
       if (url.pathname === "/") {
         res.writeHead(302, { location: "/admin" }).end();
+        return;
+      }
+      if (url.pathname === "/api/holdings/counts") {
+        // A feed for holdings-mcp on the LAN, not for a browser behind Access.
+        if (via !== "lan") res.writeHead(404, { "content-type": "application/json; charset=utf-8" }).end(JSON.stringify({ error: "Not found." }));
+        else handleHoldingsCounts(db, req, res, process.env.QUOTE_ZOTERO_LIBRARY || undefined);
         return;
       }
       if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {

@@ -21,7 +21,7 @@ export function openReadOnly(path = process.env.QUOTE_DB ?? "data/quotes.db"): D
   }
 }
 
-const json = <T>(v: string | null | undefined, fallback: T): T => (v ? (JSON.parse(v) as T) : fallback);
+export const json = <T>(v: string | null | undefined, fallback: T): T => (v ? (JSON.parse(v) as T) : fallback);
 
 
 export interface WorkSummary {
@@ -44,6 +44,14 @@ function zoteroData(db: DB, library: string | null, key: string | null) {
   if (!row) return null;
   const data = JSON.parse(row.data) as ApiItem["data"] & Record<string, unknown>;
   return { data, citekey: citekeyOf(data) };
+}
+
+/** A work key as holdings-mcp gives it: quote:<work id>, or zotero:<library>/<item key>. */
+function workKey(work: string): { id?: number; library?: string; key?: string } | null {
+  const quote = /^quote:(\d+)$/.exec(work.trim());
+  if (quote) return { id: Number(quote[1]) };
+  const zotero = /^zotero:((?:users|groups)\/\d+)\/([A-Z0-9]{8})$/i.exec(work.trim());
+  return zotero ? { library: zotero[1], key: zotero[2].toUpperCase() } : null;
 }
 
 export function locatorText(kind: string, value: string | null): string | null {
@@ -188,7 +196,15 @@ export function searchQuotes(db: DB, args: SearchArgs) {
     where.push("(EXISTS (SELECT 1 FROM works w WHERE w.id = q.work_id AND lower(w.authors) LIKE @author) OR lower(COALESCE(q.attribution, '')) LIKE @author OR lower(COALESCE(q.chapter_author, '')) LIKE @author)");
     params.author = `%${args.author.toLowerCase()}%`;
   }
-  if (args.work) {
+  const key = args.work ? workKey(args.work) : null;
+  if (key) {
+    // A key from holdings-mcp's find_work: quote:<work id> (a work's id now, or one filed into it since) or zotero:<library>/<key>.
+    where.push(key.id !== undefined
+      ? "(q.work_id = @workId OR q.work_id IN (SELECT work_id FROM work_origins WHERE kind = 'work' AND ref = @workRef))"
+      : `(EXISTS (SELECT 1 FROM works w WHERE w.id = q.work_id AND w.zotero_library = @workLibrary AND w.zotero_key = @workKey)
+        OR q.work_id IN (SELECT work_id FROM work_origins WHERE kind = 'zotero' AND ref = @workLibrary || ':' || @workKey))`);
+    Object.assign(params, key.id !== undefined ? { workId: key.id, workRef: String(key.id) } : { workLibrary: key.library, workKey: key.key });
+  } else if (args.work) {
     where.push(`EXISTS (SELECT 1 FROM works w WHERE w.id = q.work_id AND (lower(w.title) LIKE @work OR w.zotero_key = @workExact OR CAST(w.id AS TEXT) = @workExact
       OR EXISTS (SELECT 1 FROM zotero_items z WHERE z.library = w.zotero_library AND z.key = w.zotero_key AND (json_extract(z.data, '$.citationKey') = @workExact OR json_extract(z.data, '$.extra') LIKE @workExtra))))`);
     params.work = `%${args.work.toLowerCase()}%`;
@@ -337,7 +353,7 @@ export function worklist(db: DB, queue: Queue, args: { work?: string; limit?: nu
   return { queue, ...searchQuotes(db, { status, flag: queue === "unparsed" ? undefined : queue, work: args.work, limit, offset }) };
 }
 
-function firstLibrary(db: DB): string | null {
+export function firstLibrary(db: DB): string | null {
   return (db.prepare("SELECT zotero_library FROM works WHERE zotero_library IS NOT NULL GROUP BY zotero_library ORDER BY COUNT(*) DESC LIMIT 1").pluck().get() as string) ?? null;
 }
 
