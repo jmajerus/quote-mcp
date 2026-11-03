@@ -241,7 +241,7 @@ export interface AddQuoteOptions {
 }
 
 /** Tags resolve to concepts by label, then alternative label, then slug, ignoring case, as the import does. */
-function conceptOf(db: DB, tag: string): number | null {
+export function conceptOf(db: DB, tag: string): number | null {
   const t = tag.toLowerCase();
   const rows = db.prepare("SELECT id, slug, label, alt_labels FROM concepts WHERE status != 'retired'").all() as { id: number; slug: string; label: string; alt_labels: string }[];
   return rows.find((c) => c.label.toLowerCase() === t)?.id ?? rows.find((c) => (JSON.parse(c.alt_labels) as string[]).some((a) => a.toLowerCase() === t))?.id

@@ -1,6 +1,6 @@
 import type { DB } from "./db.js";
 import {
-  QUEUES, type Queue, ToolError, type WorkSummary, citeQuote, getConcept, getQuote, listConcepts, overview, searchQuotes, worklist,
+  type Proposal, QUEUES, type Queue, ToolError, type WorkSummary, citeQuote, getConcept, getQuote, listConcepts, overview, searchQuotes, worklist,
 } from "./queries.js";
 import { CSS, esc } from "./style.js";
 
@@ -69,7 +69,7 @@ const QUEUE_LABEL: Record<Queue, string> = {
   unparsed: "Unparsed quotes to split", ambiguous_works: "Works with several Zotero editions", unmatched_works: "Works not in Zotero yet",
   unresolved_tags: "Tags that aren't concepts", no_locator: "No page or location", ocr_suspect: "Possible OCR errors", unbalanced_quotes: "Unbalanced quotation marks",
   commentary_mixed: "Commentary mixed in", chapter_author: "Chapter authors to check", kindle_locator: "Kindle locations", title_tag_only: "Concepts only in the title attribute",
-  compound_tag: "Compound tags", anchor_lost: "Quotes no longer found in their book", anchor_missing: "Anchors not yet stored in corpus-mcp",
+  compound_tag: "Compound tags", anchor_lost: "Quotes no longer found in their book", anchor_missing: "Anchors not yet stored in corpus-mcp", proposals: "Proposed changes to review",
 };
 
 function overviewPage(db: DB): string {
@@ -110,6 +110,14 @@ ${params.tag ? `<input type="hidden" name="tag" value="${esc(params.tag)}">` : "
 ${params.tag ? `<p class="note">Tag: ${esc(params.tag)} · <a href="/admin/quotes">clear</a></p>` : ""}${body}`);
 }
 
+/** One proposal as a before-and-after table, with its reason and the command that accepts it. */
+function proposalBlock(x: Proposal): string {
+  const label: Record<string, string> = { text: "Text", locator: "Page or location", chapter_author: "Chapter author" };
+  return `<div class="scroll"><table><tr><th>Proposal ${x.id}</th><th>Now</th><th>Proposed</th></tr>
+${Object.keys(x.change).map((k) => `<tr><th>${label[k] ?? esc(k)}</th><td>${esc(x.before[k as keyof typeof x.before] ?? "—")}</td><td>${esc(x.change[k as keyof typeof x.change] ?? "—")}</td></tr>`).join("")}</table></div>
+<p class="note">${esc(x.proposer)}: ${esc(x.rationale)}${x.evidence ? ` · Evidence: ${esc(x.evidence)}` : ""} · <code>quote-mcp proposals --accept ${x.id}</code></p>`;
+}
+
 function quotePage(db: DB, id: number): string {
   const q = getQuote(db, id);
   const c = citeQuote(db, id);
@@ -128,6 +136,7 @@ ${note ? (q.note ? `<div class="words">${esc(q.note)}</div>` : '<p class="note">
     ["Suspect words", (q.suspect_words as { token: string; reason: string; suggestion?: string }[]).map((s) => `${esc(s.token)}${s.suggestion ? ` → ${esc(s.suggestion)}` : ` (${esc(s.reason)})`}`).join(", ")],
     ["Came from", (q.origins as { kind: string; ref: string }[]).map((o) => `${esc(o.kind)} ${esc(o.ref)}`).join("<br>")],
   ])}</table></div>
+${(q.proposals as Proposal[]).length ? `<h2>Proposed changes</h2>${(q.proposals as Proposal[]).map(proposalBlock).join("")}` : ""}
 <h2>Citation</h2>${c.pandoc ? `<p><code>${esc(c.pandoc)}</code></p>` : ""}${c.warnings.map((w) => `<p class="note">${esc(w)}</p>`).join("")}
 <details><summary>CSL JSON</summary><pre>${esc(JSON.stringify(c.csl, null, 2))}</pre></details>
 <h2>History</h2><div class="scroll"><table><tr><th>When</th><th>What</th><th>Why</th></tr>
@@ -169,6 +178,9 @@ function worklistPage(db: DB, queue: Queue, p: URLSearchParams): string {
     body = `<div class="scroll"><table><tr><th>Work</th><th>Quotes</th><th>${queue === "ambiguous_works" ? "Zotero candidates" : "ISBN"}</th></tr>
 ${works.map((w) => `<tr><td><a href="/admin/quotes${qs({ work: w.title })}"><cite>${esc(w.title)}</cite></a><div class="note">${esc(w.authors.join("; "))}${w.year ? ` · ${esc(w.year)}` : ""}${w.drupal_nid ? ` · old site node ${esc(w.drupal_nid)}` : ""}</div></td><td>${w.quotes}</td>
 <td>${queue === "ambiguous_works" ? w.candidates.map((c) => `<a href="zotero://select/library/items/${esc(c.key)}">${esc(c.key)}</a> ${esc((c.date ?? "").slice(0, 4))}${c.citekey ? ` <code>${esc(c.citekey)}</code>` : ""}`).join("<br>") : esc(w.isbn)}</td></tr>`).join("")}</table></div>`;
+  } else if ("proposals" in r) {
+    body = `<p>An agent proposed each of these. Accept or reject one on the server with <code>quote-mcp proposals --accept &lt;n&gt;</code> or <code>--reject &lt;n&gt;</code> (add <code>--note "…"</code> to say why).</p>
+${(r.proposals as (Proposal & { quote: { id: number; text: string; work: string | null } })[]).map((x) => `<div class="result"><p class="text"><a href="/admin/quotes/${x.quote.id}">#${x.quote.id}</a> ${x.quote.work ? `<cite>${esc(x.quote.work)}</cite>` : ""}</p>${proposalBlock(x)}</div>`).join("")}`;
   } else if ("tags" in r) {
     const tags = r.tags as { tag: string; quotes: number }[];
     body = `<p>terminology-mcp holds the concepts. To make a tag one, propose it there with a quote as evidence; the quote's tag stays as it is, and resolves once the concept arrives.</p>

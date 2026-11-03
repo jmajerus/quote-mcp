@@ -3,6 +3,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { type AddQuoteOptions, MAX_QUOTE, addQuote } from "./capture.js";
 import type { DB } from "./db.js";
+import { deleteQuote, proposeFix, updateQuote } from "./edits.js";
 import { QUEUES, ToolError, citeQuote, getConcept, getQuote, listConcepts, overview, searchQuotes, worklist } from "./queries.js";
 import { type ConceptSet, listSets, setConcepts } from "./sets.js";
 
@@ -14,7 +15,7 @@ Typical flow: search_quotes (words, a concept, an author, or a work) → get_quo
 Beside quotes are notes: your own words at a page, or about a whole work, with no quoted text (kind "note"; the words are in note). Search finds both unless kind is given; cite_quote on a note gives the work and the place, not a quotation.
 Words in a search are looked for in the quote's text and comment only, so a phrase search finds sources that use the phrase; to find quotes tagged with a concept, use concept (or tag).
 A quote's status is "transcribed" (typed or OCR'd from the book, not checked against a text) or "unparsed" (not yet split from its note; left out of search by default). Flags such as ocr_suspect or no_locator say what to check before quoting. When a work has several editions in Zotero, cite_quote lists them under editions, each with its citekey; cite the one the page number belongs to.
-To save a quote, use add_quote with a work key from holdings-mcp's find_work (or a citekey): when the work has a Calibre book, the words are checked against its text and saved as the book has them (status "verified"); with no match nothing is saved and the closest passages come back. A paper book's quote is saved "transcribed". corpus-mcp's save_quote is retiring: save new quotes here. Its few earlier quotes move here later.`;
+To save a quote, use add_quote with a work key from holdings-mcp's find_work (or a citekey): when the work has a Calibre book, the words are checked against its text and saved as the book has them (status "verified"); with no match nothing is saved and the closest passages come back. A paper book's quote is saved "transcribed". To change a saved quote, update_quote sets its tags and comment; its text, page, or chapter author change only by propose_quote_fix, which a person accepts. delete_quote removes a quote an agent saved. corpus-mcp's save_quote, update_quote, and delete_quote are retired: its quotes are here now.`;
 
 function json(value: unknown): CallToolResult {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
@@ -134,6 +135,40 @@ export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture)
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     }, (args) => runAsync(() => addQuote(capture.writer(), args, { corpus: capture.corpus, primary: capture.primary })));
+
+    server.registerTool("update_quote", {
+      title: "Change a quote's tags or comment",
+      description: "Add or remove tags, or set the comment (empty clears it), on a quote. Changes go into the quote's history. A removed tag stays off even if the quote's Zotero note still has it. A note's words are a person's own and aren't changed here. To change a quote's text, page, or chapter author, use propose_quote_fix.",
+      inputSchema: {
+        id: quoteId,
+        comment: z.string().max(4000).nullable().optional().describe("The new comment; empty or null clears it"),
+        add_tags: z.array(z.string()).optional().describe("Concepts (by label or slug) or other tags to add"),
+        remove_tags: z.array(z.string()).optional().describe("Tags to take off"),
+        reason: z.string().max(500).optional().describe("Why, for the history"),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    }, (args) => run(() => updateQuote(capture.writer(), args, "agent")));
+
+    server.registerTool("propose_quote_fix", {
+      title: "Propose a fix to a quote",
+      description: "Propose a change to a quote's text, page or location, or chapter author, for a person to accept or reject; nothing changes until they do. Say why, and give evidence (where you checked) when there is some. A quote checked against its Calibre book (status verified) keeps the book's text; to quote another passage, use add_quote. Pending proposals show in get_quote and quote_worklist proposals.",
+      inputSchema: {
+        id: quoteId,
+        text: z.string().max(MAX_QUOTE).optional().describe("The corrected words"),
+        locator: z.string().max(100).nullable().optional().describe('The page as printed ("211", "211-212") or "Kindle loc. 208"; empty or null for none'),
+        chapter_author: z.string().max(200).nullable().optional().describe("Who wrote the chapter, in an edited volume; empty or null for none"),
+        rationale: z.string().min(1).max(1000).describe("Why the change is right"),
+        evidence: z.string().max(1000).optional().describe("Where you checked: a book and page, a URL"),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    }, (args) => run(() => proposeFix(capture.writer(), args, "agent")));
+
+    server.registerTool("delete_quote", {
+      title: "Delete a quote",
+      description: "Delete a quote that an agent saved (add_quote) or that came from corpus-mcp, and drop its anchor there. A quote imported from a Zotero note or the old site can't be deleted here, since the next import would bring it back. The quote as it was stays in its history.",
+      inputSchema: { id: quoteId, reason: z.string().min(1).max(500).describe("Why it's deleted, for the history") },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    }, ({ id, reason }) => runAsync(() => deleteQuote(capture.writer(), capture.corpus, id, reason, "agent")));
   }
 
   return server;
