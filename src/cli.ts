@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:
 import Database from "better-sqlite3";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { corpusClient, corpusConfig, retryAnchors, storeWriter } from "./capture.js";
+import { corpusClient, corpusConfig, importCorpusQuotes, retryAnchors, storeWriter } from "./capture.js";
 import { SCHEMA_VERSION, openDb } from "./db.js";
 import { openReadOnly } from "./queries.js";
 import { servePublic, serveHttp, serveStdio } from "./server.js";
@@ -32,6 +32,10 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *                                       with --backup, copies it to <file> first when its schema will change, so
  *                                       a deploy that rolls back can put back a store the previous build opens.
  *   quote-mcp export [--out file]      Everything as JSON (stdout by default).
+ *   quote-mcp take-corpus-quotes [--skip 2,…] [--dry-run]
+ *                                       Takes over corpus-mcp's own saved quotes, once: each is checked against
+ *                                       its book again, saved with origin corpus, and its anchor posted. Prints
+ *                                       corpus-mcp's id and the new one for each; a re-run skips those taken.
  *   quote-mcp backup [--dir data/backups] [--keep 14]
  *   quote-mcp stats
  *   quote-mcp config                    Each setting, where it came from, and what each feature still needs.
@@ -329,9 +333,24 @@ async function migrateCommand() {
   console.log(`The store is at schema ${openDb().pragma("user_version", { simple: true })}.`);
 }
 
+async function takeCorpusQuotesCommand() {
+  const config = corpusConfig();
+  if (!config) throw new Error("CORPUS_BASE is off; there's no corpus-mcp to take quotes from.");
+  const corpus = corpusClient(config);
+  const skip = (option("--skip") ?? "").split(",").map((n) => Number(n.trim())).filter((n) => Number.isInteger(n) && n > 0);
+  const db = openDb();
+  try {
+    const results = await importCorpusQuotes(db, corpus, await corpus.quotes(), { primary: process.env.QUOTE_ZOTERO_LIBRARY || null, skip, dryRun: flag("--dry-run") });
+    console.log(JSON.stringify(results, null, 2));
+    if (results.some((r) => r.error)) process.exitCode = 1;
+  } finally {
+    db.close();
+  }
+}
+
 const commands: Record<string, () => unknown> = {
   import: importCommand, migrate: migrateCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, sets: setsCommand, publish: publishCommand, config: configCommand, serve: serveCommand,
-  terms: termsCommand, propose: proposeCommand,
+  terms: termsCommand, propose: proposeCommand, "take-corpus-quotes": takeCorpusQuotesCommand,
   stdio: () => serveStdio(openReadOnly(), sets(), capture()),
 };
 const command = commands[process.argv[2] ?? ""];

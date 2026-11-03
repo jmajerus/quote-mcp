@@ -115,10 +115,28 @@ new quotes landing in corpus-mcp soonest:
    skill uses from corpus-mcp's: the quote as reflowed prose, and the BibTeX
    for filing a book not yet in Zotero (which comes from corpus-mcp's
    `cite_passage` until it's filed, as this repo's PLAN.md says).
+
+   As agreed with corpus-mcp (2026-11-03): the skill calls `add_quote`,
+   then this repo's `cite_quote` for the quote and its citation, then
+   corpus-mcp's `cite_passage` (by `book.book_id`) for filing data when
+   `zotero` or `citekey` is null. `pin_citekey` stays with corpus-mcp.
+   For a quote checked against a Calibre book, `cite_quote` gives `quote`
+   as prose (corpus-mcp's `reflow`, copied exactly), `book` (verify's book)
+   and `position` (`section`, `page_label`), which the quote's origin
+   keeps. `add_quote`'s answer carries `book` too.
 3. **Import corpus-mcp's five quotes**, origin `corpus`, status `verified`,
    tags exactly as written (`project:on-curiosity`, `test:standalone-article`
    are tags that aren't concepts). The Calibre books behind them may not be
    in Zotero yet; they arrive as `unmatched` works.
+
+   As built: `quote-mcp take-corpus-quotes --skip 2` reads corpus-mcp's
+   `GET /api/quotes`, checks each quote's `text` against its Calibre UUID
+   through `POST /api/verify` (corpus-mcp asked for that over posting its
+   stored anchors), saves it as `add_quote` does with origin `corpus` (ref:
+   its corpus-mcp id, so a re-run skips it; its record kept in the raw),
+   its note as the comment and its labels as tags, and posts the new
+   anchor. It prints the old and new ids for corpus-mcp, which then
+   deletes its rows. `--dry-run` shows what it would take.
 4. **Follow the anchors.** corpus-mcp's `GET /api/anchors/changes?since=N`
    reports re-anchored, orphaned, and found-again quotes. An orphaned anchor
    keeps the quote `verified` (it was checked) and adds a flag, proposed
