@@ -310,6 +310,27 @@ describe("following corpus-mcp's anchor changes", () => {
     expect(await followAnchors(db, corpus)).toMatchObject({ read: 0, from: 4, to: 4 });
   });
 
+  it("starts a new, empty log at 0, so its first change isn't skipped", async () => {
+    const id = saved(await addQuote(db, { work: "main:42", text: "It begins when an individual becomes the target" }, options())).id;
+    corpus.changes = [change(1, id, "stored", kept(id)), change(2, id, "stored", kept(id)), change(3, id, "stored", kept(id))];
+    await followAnchors(db, corpus);
+    corpus.log = "log-2";
+    corpus.changes = [];
+    expect(await followAnchors(db, corpus)).toMatchObject({ read: 0, from: 0, to: 0 });
+    corpus.changes = [change(1, id, "orphaned")];
+    expect(await followAnchors(db, corpus)).toMatchObject({ read: 1, lost: 1 });
+  });
+
+  it("keeps a verified quote's words, status, and anchor flags when its Zotero note or old-site record changes", () => {
+    runImport(db, { drupal, primary: PRIMARY, sources: [PRIMARY], dictionary: new Set(["mobbing"]) });
+    const { quote_id: id, kind } = db.prepare("SELECT quote_id, kind FROM quote_origins WHERE kind IN ('drupal', 'zotero') LIMIT 1").get() as { quote_id: number; kind: string };
+    db.prepare("UPDATE quotes SET status = 'verified', text = 'The book’s own words.', flags = '[\"anchor_lost\"]' WHERE id = ?").run(id);
+    db.prepare("UPDATE quote_origins SET raw = 'an older version' WHERE quote_id = ? AND kind = ?").run(id, kind);
+    runImport(db, { drupal, primary: PRIMARY, sources: [PRIMARY], dictionary: new Set(["mobbing"]) });
+    expect(db.prepare("SELECT status, text, flags FROM quotes WHERE id = ?").get(id)).toEqual({ status: "verified", text: "The book’s own words.", flags: '["anchor_lost"]' });
+    expect(db.prepare("SELECT reason FROM history WHERE quote_id = ? AND kind = 'source_changed'").pluck().get(id)).toMatch(/checked against its book/);
+  });
+
   it("stops rather than reading the same page forever when corpus-mcp ignores since", async () => {
     corpus.changes = [change(1, 9999, "stored")];
     corpus.anchorChanges = async () => ({ log: "log-1", changes: [change(1, 9999, "stored")], last: 1 });

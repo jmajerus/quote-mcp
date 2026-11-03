@@ -9,7 +9,7 @@ import type { ApiItem } from "./zotero.js";
 /**
  * The import: the old site's concepts, works, and quotes, then the quote notes in the Zotero mirror,
  * into the store. Safe to run again: every quote is keyed by its origin, a quote already imported is
- * re-parsed only if its source changed, and a quote a person has edited is never overwritten (the
+ * re-parsed only if its source changed, and a quote a person has edited, or one checked against its book, is never overwritten (the
  * changed source goes into its history instead). A quote whose text arrives from a second source is
  * merged: it gains the origin and the tags, not a duplicate. A Zotero note tagged `margin` is a note,
  * not a quote: your own words, read for concept tags and kept as the record's comment.
@@ -56,7 +56,7 @@ interface Incoming {
   attribution?: string | null;
 }
 
-interface QuoteRow { id: number; work_id: number | null; edited: number; locator: string | null; chapter_author: string | null; comment: string | null }
+interface QuoteRow { id: number; work_id: number | null; edited: number; status: string; locator: string | null; chapter_author: string | null; comment: string | null }
 
 const RELATION = { B: "broader", N: "narrower", R: "related", I: "inverse" } as const;
 
@@ -187,8 +187,8 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
 
     // --- Quotes -----------------------------------------------------------------------------------
     const getOrigin = db.prepare("SELECT quote_id, version, raw FROM quote_origins WHERE kind = ? AND ref = ?");
-    const getQuote = db.prepare("SELECT id, work_id, edited, locator, chapter_author, comment FROM quotes WHERE id = ?");
-    const findDuplicate = db.prepare("SELECT id, work_id, edited, locator, chapter_author, comment FROM quotes WHERE text_key = ? ORDER BY (work_id IS ?) DESC, id LIMIT 1");
+    const getQuote = db.prepare("SELECT id, work_id, edited, status, locator, chapter_author, comment FROM quotes WHERE id = ?");
+    const findDuplicate = db.prepare("SELECT id, work_id, edited, status, locator, chapter_author, comment FROM quotes WHERE text_key = ? ORDER BY (work_id IS ?) DESC, id LIMIT 1");
     const addOrigin = db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, version, raw, imported_at) VALUES (?, ?, ?, ?, ?, ?)");
     const updateOrigin = db.prepare("UPDATE quote_origins SET version = ?, raw = ?, imported_at = ? WHERE kind = ? AND ref = ?");
     const addTag = db.prepare("INSERT OR IGNORE INTO quote_tags (quote_id, tag, concept_id, origin) VALUES (?, ?, ?, ?)");
@@ -224,8 +224,11 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
         const quote = getQuote.get(origin.quote_id) as QuoteRow;
         if (origin.raw === q.raw && origin.version === q.version) {
           stats.quotes.unchanged++;
-        } else if (quote.edited) {
-          addHistory.run(quote.id, stamp, "source_changed", origin.raw, q.raw, actor, `${q.kind} ${q.ref} changed; the quote was edited, so it was left alone`);
+        } else if (quote.edited || quote.status === "verified") {
+          // A quote checked against its book (taken over from corpus-mcp, say) keeps the book's words, its status,
+          // and the anchor flags corpus-mcp's changes set, as an edited one keeps a person's work.
+          addHistory.run(quote.id, stamp, "source_changed", origin.raw, q.raw, actor,
+            `${q.kind} ${q.ref} changed; the quote was ${quote.edited ? "edited" : "checked against its book"}, so it was left alone`);
           updateOrigin.run(q.version, q.raw, stamp, q.kind, q.ref);
           stats.quotes.keptEdited++;
         } else {

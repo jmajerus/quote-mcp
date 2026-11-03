@@ -540,7 +540,11 @@ export async function followAnchors(db: DB, corpus: CorpusClient): Promise<{ rea
       setMeta(db, "corpus_anchor_seq", String(since));
     })();
   }
-  if (log !== undefined) setMeta(db, "corpus_anchor_log", log);
+  // Kept even when no change was read, so a new, empty log's 0 replaces the old log's change number.
+  if (log !== undefined) {
+    setMeta(db, "corpus_anchor_log", log);
+    setMeta(db, "corpus_anchor_seq", String(since));
+  }
   counts.to = since;
   return counts;
 }
