@@ -156,7 +156,8 @@ export interface EditArgs { id: number; text?: string; locator?: string | null; 
 
 /**
  * A person's edit from the admin pages: fixing a typo, a page, a chapter author, or the comment. Only the fields that
- * changed are written. A verified quote's words are the book's and stay; only their spacing and line breaks change. updated_at, when given, is the quote's as the
+ * changed are written. A verified quote's words are the book's and stay; only their spacing and line breaks change,
+ * and a misprint can be marked [sic]. updated_at, when given, is the quote's as the
  * form showed it; a quote changed since is refused, so one edit doesn't undo another.
  */
 export function editQuote(db: DB, args: EditArgs, editor: string) {
@@ -172,10 +173,11 @@ export function editQuote(db: DB, args: EditArgs, editor: string) {
       if (!text) throw new ToolError("The text can't be empty.");
       if (text.length > MAX_TEXT) throw new ToolError(`The text is ${text.length} characters; the limit is ${MAX_TEXT}.`);
       if (text !== now_.text) {
-        // A verified quote's words are the book's; its spacing and line breaks (an EPUB's line ends, say) a person may tidy.
-        const words = (t: string) => t.replace(/\s+/g, " ").trim();
+        // A verified quote's words are the book's. A person may tidy its spacing and line breaks (an EPUB's line ends,
+        // say) and mark a misprint with [sic], or take a [sic] out again: without any [sic], the words must be the same.
+        const words = (t: string) => t.replace(/\s*\[sic\]/gi, "").replace(/\s+/g, " ").trim();
         if (q.status === "verified" && words(text) !== words(now_.text)) {
-          throw new ToolError(`Quote ${args.id} was checked against its Calibre book, so its words are the book's: only its spacing and line breaks can change.`);
+          throw new ToolError(`Quote ${args.id} was checked against its Calibre book, so its words are the book's: only its spacing and line breaks can change, and a misprint can be marked [sic].`);
         }
         change.text = text;
       }

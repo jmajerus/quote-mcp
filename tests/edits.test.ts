@@ -211,6 +211,10 @@ describe("editing on the admin pages", () => {
     db.prepare("UPDATE quotes SET status = 'verified', text = 'Abuse at work\n\nrarely announces\nitself!' WHERE id = ?").run(id);
     fails(() => editQuote(db, { id, text: "Different words" }, "jo@example.org"), /words are the book's/);
     expect(editQuote(db, { id, text: "Abuse at work rarely announces itself!" }, "jo@example.org")).toMatchObject({ changed: ["text"], quote: { text: "Abuse at work rarely announces itself!", status: "verified" } });
+    expect(editQuote(db, { id, text: "Abuse at work rarely [sic] announces itself!" }, "jo@example.org").quote.text).toBe("Abuse at work rarely [sic] announces itself!");
+    fails(() => editQuote(db, { id, text: "Abuse at work [sic] seldom announces itself!" }, "jo@example.org"), /marked \[sic\]/);
+    fails(() => editQuote(db, { id, text: "Abuse at work [usually] announces itself!" }, "jo@example.org"), /marked \[sic\]/);
+    expect(editQuote(db, { id, text: "Abuse at work rarely announces itself!" }, "jo@example.org").quote.text).toBe("Abuse at work rarely announces itself!");
     expect(editQuote(db, { id, text: "Abuse at work rarely announces itself!", locator: "13" }, "jo@example.org").changed).toEqual(["locator"]);
   });
 
