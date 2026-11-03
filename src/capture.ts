@@ -4,7 +4,7 @@ import { ToolError } from "./common.js";
 import { type DB, now } from "./db.js";
 import { creators } from "./import.js";
 import { citekeyOf } from "./csl.js";
-import { getQuote } from "./queries.js";
+import { calibreSource, getQuote } from "./queries.js";
 import { quoteKey, yearOf } from "./text.js";
 import type { ApiItem } from "./zotero.js";
 
@@ -48,6 +48,8 @@ export interface CorpusClient {
   verify(request: { book: string; text: string; page?: number }): Promise<Verified>;
   anchor(quoteId: number, anchor: Record<string, unknown>): Promise<unknown>;
   dropAnchor(quoteId: number): Promise<void>;
+  /** corpus-mcp's own saved quotes (GET /api/quotes), for taking them over. */
+  quotes(): Promise<CorpusQuote[]>;
 }
 
 /** corpus-mcp's base URL from CORPUS_BASE, or null when it's "off". */
@@ -75,6 +77,15 @@ export function corpusClient({ baseUrl, timeoutMs = 20_000, fetchImpl = fetch }:
     baseUrl,
     verify: (r) => request("POST", "/api/verify", r),
     anchor: (quoteId, anchor) => request("POST", "/api/anchors", { quote_id: quoteId, anchor }),
+    // corpus-mcp gives at most 200 a page; read on until total.
+    quotes: async () => {
+      const all: CorpusQuote[] = [];
+      for (;;) {
+        const page = (await request("GET", `/api/quotes?limit=200&offset=${all.length}`)) as { total: number; quotes: CorpusQuote[] };
+        all.push(...page.quotes);
+        if (!page.quotes.length || all.length >= page.total) return all;
+      }
+    },
     dropAnchor: async (quoteId) => {
       try {
         await request("DELETE", `/api/anchors/${quoteId}`);
@@ -217,7 +228,13 @@ export interface AddQuoteArgs {
   request_id?: string;
 }
 
-export interface AddQuoteOptions { corpus: CorpusClient | null; primary?: string | null; actor?: string }
+export interface AddQuoteOptions {
+  corpus: CorpusClient | null; primary?: string | null; actor?: string;
+  /** Where the quote came from: an agent (the default), or corpus-mcp's own quotes, taken over by importCorpusQuotes. */
+  origin?: "agent" | "corpus";
+  /** Kept with the origin, beside the request: corpus-mcp's record of a quote taken over. */
+  source?: Record<string, unknown>;
+}
 
 /** Tags resolve to concepts by label, then alternative label, then slug, ignoring case, as the import does. */
 function conceptOf(db: DB, tag: string): number | null {
@@ -235,7 +252,7 @@ const pageOf = (page: string | undefined) => {
 
 interface Plan {
   status: "verified" | "transcribed"; work: number; text: string; locator: string | null; section: string | null;
-  anchor: Record<string, unknown> | null; book: Book | null; exact: boolean; note: string;
+  position: { section: string | null; page_label: string | null } | null; anchor: Record<string, unknown> | null; book: Book | null; exact: boolean; note: string;
 }
 
 /**
@@ -247,42 +264,46 @@ export async function addQuote(db: DB, args: AddQuoteArgs, o: AddQuoteOptions): 
   if (!text) throw new ToolError("The quote has no text.");
   if (text.length > MAX_QUOTE) throw new ToolError(`The quote is ${text.length} characters; the limit is ${MAX_QUOTE}. Quote less, or save two.`);
   const requestId = args.request_id?.trim() || randomUUID();
-  const earlier = alreadySaved(db, requestId);
+  const origin = o.origin ?? ORIGIN;
+  const earlier = alreadySaved(db, origin, requestId);
   if (earlier) return earlier;
 
   const primary = o.primary ?? null;
   const t = target(db, args.work, primary);
-  // A retry of words already saved returns them without asking corpus-mcp again.
-  const same = t.known !== undefined ? alreadySaved(db, requestId, t.known, text) : undefined;
+  // A retry of words already saved returns them without asking corpus-mcp again. corpus-mcp's own quotes are
+  // checked anyway: one whose words are already here is taken over (save), which needs the fresh anchor.
+  const same = t.known !== undefined && origin !== "corpus" ? alreadySaved(db, origin, requestId, t.known, text) : undefined;
   if (same) return same;
   const plan = await planQuote(db, t, text, args.page, o.corpus);
 
-  const saving = save(db, args, plan, requestId, o.actor ?? ORIGIN);
-  if (typeof saving !== "number") return saving;
-  const id = saving;
+  const saving = save(db, args, plan, requestId, o.actor ?? origin, origin, o.source);
+  if (typeof saving !== "number" && !("takenOver" in saving)) return saving;
+  const takenOver = typeof saving !== "number";
+  const id = typeof saving === "number" ? saving : (saving.takenOver as number);
   let anchored = false;
   const warnings: string[] = [];
   if (plan.anchor && o.corpus) {
     anchored = await postAnchor(db, o.corpus, id, plan.anchor, args.page);
     if (!anchored) warnings.push("corpus-mcp didn't store the anchor; the quote is flagged anchor_missing and the next import posts it again.");
   }
+  if (takenOver) return { saved: false, taken_over: true, reason: "The work already had these words; corpus-mcp's quote was joined to it.", anchored, warnings, book: plan.book, quote: getQuote(db, id) };
   if (plan.status === "verified" && !plan.exact) warnings.push("The text is the book's wording, which differs from what was sent (quote marks, spacing, or case).");
   if (plan.status === "transcribed") warnings.push(plan.note);
-  return { saved: true, status: plan.status, anchored, warnings, quote: getQuote(db, id) };
+  return { saved: true, status: plan.status, anchored, warnings, book: plan.book, quote: getQuote(db, id) };
 }
 
 /** The quote this request id, or these words for this work, already saved, as add_quote returns it. */
-function alreadySaved(db: DB, requestId: string, work?: number, text?: string): Record<string, unknown> | undefined {
-  const byRequest = db.prepare("SELECT quote_id FROM quote_origins WHERE kind = ? AND ref = ?").pluck().get(ORIGIN, requestId) as number | undefined;
-  if (byRequest !== undefined) return { saved: false, reason: "This request_id already saved this quote.", quote: getQuote(db, byRequest) };
+function alreadySaved(db: DB, origin: string, requestId: string, work?: number, text?: string): Record<string, unknown> | undefined {
+  const byRequest = db.prepare("SELECT quote_id FROM quote_origins WHERE kind = ? AND ref = ?").pluck().get(origin, requestId) as number | undefined;
+  if (byRequest !== undefined) return { saved: false, reason: "This request_id already saved this quote.", book: calibreSource(db, byRequest)?.book ?? null, quote: getQuote(db, byRequest) };
   if (work === undefined || text === undefined) return undefined;
   const byWords = db.prepare("SELECT id FROM quotes WHERE work_id = ? AND text_key = ? LIMIT 1").pluck().get(work, quoteKey(text)) as number | undefined;
-  return byWords !== undefined ? { saved: false, reason: "The work already has this quote.", quote: getQuote(db, byWords) } : undefined;
+  return byWords !== undefined ? { saved: false, reason: "The work already has this quote.", book: calibreSource(db, byWords)?.book ?? null, quote: getQuote(db, byWords) } : undefined;
 }
 
 async function planQuote(db: DB, t: Target, text: string, page: string | undefined, corpus: CorpusClient | null): Promise<Plan> {
   const transcribed = (work: number, note: string, book: Book | null = null): Plan =>
-    ({ status: "transcribed", work, text, locator: page?.trim() || null, section: null, anchor: null, book, exact: true, note });
+    ({ status: "transcribed", work, text, locator: page?.trim() || null, section: null, position: null, anchor: null, book, exact: true, note });
   if (!t.book || !corpus) {
     if (!t.work) throw new ToolError(`${t.label} is a Calibre book with no work here yet, and corpus-mcp, which would say which work it is, is off (CORPUS_BASE). Pass the work's key from find_work instead.`);
     return transcribed(t.work(), t.book ? "Saved transcribed: corpus-mcp is off here, so the words weren't checked against the book." : "Saved transcribed: the work has no Calibre book to check against.");
@@ -312,31 +333,55 @@ async function planQuote(db: DB, t: Target, text: string, page: string | undefin
   // The work comes from the book corpus-mcp matched, unless the caller named it and the book isn't in Zotero.
   const work = v.book.zotero ? bookWork(db, v.book) : t.work ? t.work() : calibreWork(db, v.book);
   const locator = v.page_label ? v.locator?.replace(/^pp?\.\s*/, "") ?? v.page_label : null;
-  return { status: "verified", work, text: v.text, locator, section: v.locator ? null : v.section, anchor: v.anchor, book: v.book, exact: v.exact, note: "" };
+  return { status: "verified", work, text: v.text, locator, section: v.locator ? null : v.section,
+    position: { section: v.section, page_label: v.page_label }, anchor: v.anchor, book: v.book, exact: v.exact, note: "" };
 }
 
-/** Saves the quote, or returns the one a concurrent call with this request id, or these words, saved first. */
-function save(db: DB, args: AddQuoteArgs, plan: Plan, requestId: string, actor: string): number | Record<string, unknown> {
+/**
+ * Saves the quote, or returns the one a concurrent call with this request id, or these words, saved first. One
+ * of corpus-mcp's quotes whose words the work already has is taken over instead: the quote gains the corpus
+ * origin and its tags, keeps its own text, and is flagged anchor_missing until the new anchor is posted.
+ */
+function save(db: DB, args: AddQuoteArgs, plan: Plan, requestId: string, actor: string, origin: string, source?: Record<string, unknown>): number | Record<string, unknown> {
   const stamp = now();
   const flags = [...(plan.locator ? [] : ["no_locator"]), ...(plan.anchor ? [ANCHOR_MISSING] : [])];
   // A chapter of an EPUB has no page: its section is the place, kept in the comment.
   const comment = [plan.section ? `Section: ${plan.section}` : null, args.comment?.trim() || null].filter(Boolean).join("\n\n") || null;
-  const raw = JSON.stringify({ request: { ...args, request_id: requestId }, ...(plan.book ? { book: plan.book } : {}), ...(plan.anchor ? { anchor: plan.anchor } : {}) });
+  const raw = JSON.stringify({ request: { ...args, request_id: requestId }, ...(source ? { source } : {}), ...(plan.book ? { book: plan.book } : {}),
+    ...(plan.position ? { position: plan.position } : {}), ...(plan.anchor ? { anchor: plan.anchor } : {}) });
   return db.transaction((): number | Record<string, unknown> => {
-    const earlier = alreadySaved(db, requestId, plan.work, plan.text);
+    if (origin === "corpus") {
+      const has = db.prepare("SELECT id FROM quotes WHERE work_id = ? AND text_key = ? LIMIT 1").pluck().get(plan.work, quoteKey(plan.text)) as number | undefined;
+      if (has !== undefined && alreadySaved(db, origin, requestId) === undefined) return takeOver(db, has, args, plan, requestId, actor, origin, raw, stamp);
+    }
+    const earlier = alreadySaved(db, origin, requestId, plan.work, plan.text);
     if (earlier) return earlier;
     const id = db.prepare(`INSERT INTO quotes (kind, work_id, text, text_key, locator_kind, locator, comment, status, grade, flags, created_at, created_by, updated_at, updated_by)
       VALUES ('quote', ?, ?, ?, ?, ?, ?, ?, 'A', ?, ?, ?, ?, ?) RETURNING id`).pluck()
       .get(plan.work, plan.text, quoteKey(plan.text), plan.locator ? "page" : "none", plan.locator, comment, plan.status, JSON.stringify(flags), stamp, actor, stamp, actor) as number;
-    db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, version, raw, imported_at) VALUES (?, ?, ?, NULL, ?, ?)").run(ORIGIN, requestId, id, raw, stamp);
+    db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, version, raw, imported_at) VALUES (?, ?, ?, NULL, ?, ?)").run(origin, requestId, id, raw, stamp);
     const tags = [...new Set((args.tags ?? []).map((t) => t.trim()).filter(Boolean))];
-    for (const tag of tags) db.prepare("INSERT OR IGNORE INTO quote_tags (quote_id, tag, concept_id, origin) VALUES (?, ?, ?, ?)").run(id, tag, conceptOf(db, tag), ORIGIN);
+    for (const tag of tags) db.prepare("INSERT OR IGNORE INTO quote_tags (quote_id, tag, concept_id, origin) VALUES (?, ?, ?, ?)").run(id, tag, conceptOf(db, tag), origin);
     const how = plan.status === "verified" ? `checked against Calibre book ${plan.book!.book_id}${plan.exact ? "" : "; the wording is the book's"}` : plan.note;
     db.prepare("INSERT INTO history (quote_id, at, kind, before, after, actor, reason) VALUES (?, ?, 'added', ?, ?, ?, ?)")
       .run(id, stamp, plan.exact ? null : args.text, plan.text, actor, `add_quote: ${how}`);
     db.prepare("INSERT INTO quotes_fts (rowid, text, comment, tags) VALUES (?, ?, ?, ?)").run(id, plan.text, comment ?? "", tags.join(" "));
     return id;
   })();
+}
+
+function takeOver(db: DB, id: number, args: AddQuoteArgs, plan: Plan, requestId: string, actor: string, origin: string, raw: string, stamp: string): { takenOver: number } {
+  db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, version, raw, imported_at) VALUES (?, ?, ?, NULL, ?, ?)").run(origin, requestId, id, raw, stamp);
+  const tags = [...new Set((args.tags ?? []).map((t) => t.trim()).filter(Boolean))];
+  for (const tag of tags) db.prepare("INSERT OR IGNORE INTO quote_tags (quote_id, tag, concept_id, origin) VALUES (?, ?, ?, ?)").run(id, tag, conceptOf(db, tag), origin);
+  if (plan.anchor) {
+    db.prepare(`UPDATE quotes SET flags = json_insert(flags, '$[#]', ?), updated_at = ?, updated_by = ? WHERE id = ?
+      AND NOT EXISTS (SELECT 1 FROM json_each(flags) WHERE value = ?)`).run(ANCHOR_MISSING, stamp, actor, id, ANCHOR_MISSING);
+  }
+  db.prepare("UPDATE quotes_fts SET tags = (SELECT group_concat(tag, ' ') FROM quote_tags WHERE quote_id = ?) WHERE rowid = ?").run(id, id);
+  db.prepare("INSERT INTO history (quote_id, at, kind, before, after, actor, reason) VALUES (?, ?, 'taken_over', NULL, NULL, ?, ?)")
+    .run(id, stamp, actor, `take-corpus-quotes: corpus-mcp's quote ${requestId} has these words${plan.book ? `, checked against Calibre book ${plan.book.book_id}` : ""}`);
+  return { takenOver: id };
 }
 
 /**
@@ -375,12 +420,48 @@ async function postAnchor(db: DB, corpus: CorpusClient, id: number, anchor: Reco
 
 /** Posts the anchors of quotes flagged anchor_missing again. Run after each import. */
 export async function retryAnchors(db: DB, corpus: CorpusClient): Promise<{ tried: number; stored: number }> {
-  const rows = db.prepare(`SELECT q.id, o.raw FROM quotes q JOIN quote_origins o ON o.quote_id = q.id AND o.kind = ?
-    WHERE EXISTS (SELECT 1 FROM json_each(q.flags) WHERE value = ?)`).all(ORIGIN, ANCHOR_MISSING) as { id: number; raw: string }[];
+  const rows = db.prepare(`SELECT q.id, o.raw FROM quotes q JOIN quote_origins o ON o.quote_id = q.id AND o.kind IN ('agent', 'corpus')
+    WHERE EXISTS (SELECT 1 FROM json_each(q.flags) WHERE value = ?)`).all(ANCHOR_MISSING) as { id: number; raw: string }[];
   let stored = 0;
   for (const r of rows) {
     const raw = JSON.parse(r.raw) as { anchor?: Record<string, unknown>; request?: AddQuoteArgs };
     if (raw.anchor && (await postAnchor(db, corpus, r.id, raw.anchor, raw.request?.page))) stored++;
   }
   return { tried: rows.length, stored };
+}
+
+// --- corpus-mcp's own quotes ---------------------------------------------------------------------
+
+/** One of corpus-mcp's saved quotes, as GET /api/quotes lists them. */
+export interface CorpusQuote {
+  id: number; book_id: string; calibre_uuid: string; title: string; text: string; note: string | null; labels: string[];
+  page: number | null; status: string; created_by: string | null; created_at: string; [field: string]: unknown;
+}
+
+/**
+ * Takes over corpus-mcp's quotes (docs/dev-briefs/holdings-and-quotes.md §2.3): each is checked against its
+ * book again, as add_quote does, saved with origin "corpus" (its corpus-mcp id as the ref, so a re-run skips
+ * it) and its labels as tags exactly as written, and its new anchor posted. A book not in Zotero arrives as an
+ * unmatched work carrying the Calibre UUID. Returns each quote's old and new id, or why it wasn't taken.
+ */
+export async function importCorpusQuotes(db: DB, corpus: CorpusClient, quotes: CorpusQuote[], o: { primary?: string | null; skip?: number[]; dryRun?: boolean } = {}) {
+  const results: { corpus_id: number; quote_id?: number; status?: string; anchored?: boolean; taken_over?: boolean; skipped?: string; error?: string }[] = [];
+  for (const c of quotes) {
+    if (o.skip?.includes(c.id)) { results.push({ corpus_id: c.id, skipped: "asked to skip" }); continue; }
+    const taken = db.prepare("SELECT quote_id FROM quote_origins WHERE kind = 'corpus' AND ref = ?").pluck().get(String(c.id)) as number | undefined;
+    if (taken !== undefined) { results.push({ corpus_id: c.id, quote_id: taken, skipped: "already taken" }); continue; }
+    if (o.dryRun) { results.push({ corpus_id: c.id, skipped: `dry run: would check it against ${c.calibre_uuid} (${c.title})` }); continue; }
+    try {
+      const r = await addQuote(db, {
+        work: c.calibre_uuid, text: c.text, ...(c.page ? { page: String(c.page) } : {}), ...(c.note?.trim() ? { comment: c.note } : {}),
+        tags: c.labels, request_id: String(c.id),
+      }, { corpus, primary: o.primary, origin: "corpus", actor: `corpus-mcp${c.created_by ? `:${c.created_by}` : ""}`, source: c });
+      const q = r.quote as { id: number; status: string };
+      results.push({ corpus_id: c.id, quote_id: q.id, status: q.status, anchored: r.anchored as boolean | undefined,
+        ...(r.taken_over ? { taken_over: true } : r.saved ? {} : { skipped: r.reason as string }) });
+    } catch (error) {
+      results.push({ corpus_id: c.id, error: (error as Error).message });
+    }
+  }
+  return results;
 }

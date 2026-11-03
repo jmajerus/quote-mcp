@@ -18,6 +18,7 @@ How quote-mcp is run, configured, and deployed.
 | `npm run quotes -- publish --sql <file>` | The snapshot as a SQL file that loads a D1 replica from scratch. |
 | `npm run terms` | Follows terminology-mcp's `human-work` scheme: a dry run of what the next pass would apply and where it would stop. `-- --apply` applies it, `-- --accept <n> [--repoint <slug>]` passes a held change a person has handled, `-- --status` shows the cursor (see [the dev-brief](dev-briefs/human-work-from-terminology-mcp.md)). |
 | `npm run quotes -- propose <tag>` | Proposes a tag that isn't a concept to terminology-mcp, with a quote that uses it as evidence; `--send` sends it. |
+| `quote-mcp take-corpus-quotes --skip 2` | Once: takes over corpus-mcp's own saved quotes, each checked against its book again, and prints corpus-mcp's id and the new one for each (see [the dev-brief](dev-briefs/holdings-and-quotes.md), §2.3). `--dry-run` first. |
 | `npm run quotes -- export --out quotes.json` | Everything as JSON. |
 | `npm run quotes -- backup` | A SQLite backup in `data/backups`, keeping 14. |
 | `npm run survey` | Phase 0's read-only survey of the sources (`-- --source drupal` for the old site). |

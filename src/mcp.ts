@@ -78,7 +78,7 @@ export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture)
 
   server.registerTool("cite_quote", {
     title: "Cite a quote",
-    description: "The quote with a CSL JSON item for its work (from Zotero, or the old site's record when the work isn't in Zotero yet), the locator, the Better BibTeX citekey, and a Pandoc citation such as [@roberts1993victory, p. 44]. Warnings say what to check: no page, possible OCR errors, a work not yet in Zotero.",
+    description: "The quote with a CSL JSON item for its work (from Zotero, or the old site's record when the work isn't in Zotero yet), the locator, the Better BibTeX citekey, and a Pandoc citation such as [@roberts1993victory, p. 44]. A quote checked against a Calibre book comes as prose (line breaks inside sentences joined, paragraph breaks as \\n\\n), with book (the Calibre book, its book_id for corpus-mcp's cite_passage) and position (section, for citing an EPUB by chapter, and page_label). Warnings say what to check: no page, possible OCR errors, a work not yet in Zotero.",
     inputSchema: { id: quoteId },
     annotations: readOnly,
   }, ({ id }) => run(() => citeQuote(db, id)));
@@ -123,7 +123,7 @@ export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture)
   if (capture) {
     server.registerTool("add_quote", {
       title: "Add a quote",
-      description: `Save a quote from a work. When the work has a Calibre book with text, corpus-mcp checks the words against it first: on a match the quote is saved with the book's exact wording and page, status "verified"; with no match nothing is saved and the error lists the closest passages, so quote again from those. A work with no Calibre book (a paper book) is saved "transcribed", with the page you give. A retry with the same request_id, or the same words for the same work, returns the quote already saved. Tags that aren't concepts are kept as written (see quote_worklist unresolved_tags).`,
+      description: `Save a quote from a work. When the work has a Calibre book with text, corpus-mcp checks the words against it first: on a match the quote is saved with the book's exact wording and page, status "verified"; with no match nothing is saved and the error lists the closest passages, so quote again from those. A work with no Calibre book (a paper book) is saved "transcribed", with the page you give. A retry with the same request_id, or the same words for the same work, returns the quote already saved. The answer carries book, the Calibre book it was checked against (null when it wasn't). Tags that aren't concepts are kept as written (see quote_worklist unresolved_tags).`,
       inputSchema: {
         work: z.string().describe("The work: a key from holdings-mcp's find_work (zotero:<library>/<key> or quote:<id>), a citekey, a Zotero item key, or a Calibre book id (main:42)"),
         text: z.string().max(MAX_QUOTE).describe("The words quoted, as in the book"),

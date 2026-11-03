@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { type Book, type CorpusClient, CorpusError, type Verified, addQuote, retryAnchors } from "../src/capture.js";
+import { type Book, type CorpusClient, CorpusError, type CorpusQuote, type Verified, addQuote, importCorpusQuotes, retryAnchors } from "../src/capture.js";
 import { ToolError } from "../src/common.js";
 import type { DB } from "../src/db.js";
 import { holdingsCounts } from "../src/holdings.js";
 import { runImport } from "../src/import.js";
-import { searchQuotes } from "../src/queries.js";
+import { citeQuote, searchQuotes } from "../src/queries.js";
 import { drupal, makeStore } from "./fixture.js";
 
 const PRIMARY = "users/1";
@@ -54,6 +54,10 @@ class FakeCorpus implements CorpusClient {
     return { quote_id: quoteId, status: "verified", anchor };
   }
 
+  async quotes(): Promise<CorpusQuote[]> {
+    return [];
+  }
+
   async dropAnchor(quoteId: number): Promise<void> {
     this.anchors.delete(quoteId);
   }
@@ -87,6 +91,22 @@ describe("add_quote", () => {
     const history = db.prepare("SELECT kind, before, after FROM history WHERE quote_id = ?").get(q.id);
     expect(history).toEqual({ kind: "added", before: "It begins when an individual becomes the TARGET", after: q.text });
     expect(searchQuotes(db, { query: "individual target" }).quotes.map((x) => x.id)).toEqual([q.id]);
+  });
+
+  it("cites a quote checked against a book as prose, with the book and its place", async () => {
+    corpus.books.set("main:7", { book: unfiledBook, text: "Work is a story\nwe tell ourselves.\nAnd then\nit ends." });
+    const r = await addQuote(db, { work: "main:7", text: "Work is a story we tell ourselves. And then it ends." }, options());
+    expect((r.book as Book).book_id).toBe("main:7");
+    const id = saved(r).id;
+    expect(saved(r).text).toBe("Work is a story\nwe tell ourselves.\nAnd then\nit ends.");
+    expect(citeQuote(db, id)).toMatchObject({
+      quote: "Work is a story we tell ourselves.\n\nAnd then it ends.", book: { book_id: "main:7", calibre_uuid: unfiledBook.calibre_uuid },
+      position: { section: "Chapter 1", page_label: "40" },
+    });
+    const again = await addQuote(db, { work: "main:7", text: "Work is a story we tell ourselves. And then it ends." }, options());
+    expect(again).toMatchObject({ saved: false, book: { book_id: "main:7" } });
+    const other = db.prepare("SELECT id FROM quotes WHERE id != ? AND kind = 'quote' LIMIT 1").pluck().get(id) as number;
+    expect(citeQuote(db, other)).not.toHaveProperty("position");
   });
 
   it("finds the work by citekey or quote:<id> as well", async () => {
@@ -200,5 +220,60 @@ describe("add_quote", () => {
     const id = saved(await addQuote(db, { work: "main:42", text: "disrespectful behavior" }, options())).id;
     runImport(db, { drupal, primary: PRIMARY, sources: [PRIMARY], dictionary: new Set(["mobbing"]) });
     expect(db.prepare("SELECT flags FROM quotes WHERE id = ?").pluck().get(id)).toBe("[]");
+  });
+});
+
+describe("taking over corpus-mcp's quotes", () => {
+  const theirs = (id: number, book: Book, text: string, labels: string[], note: string | null = null): CorpusQuote => ({
+    id, book_id: book.book_id, calibre_uuid: book.calibre_uuid, title: book.title, text, note, labels, page: 40, status: "verified", created_by: "claude", created_at: "2026-10-01T00:00:00Z",
+  });
+  const quotes = [
+    theirs(1, mobbingBook, "It begins when an individual becomes the target", ["confirmation bias"], "Why it matters."),
+    theirs(2, unfiledBook, "Work is a story", ["curiosity", "test:standalone-article"]),
+    theirs(3, unfiledBook, "Work is a story we tell ourselves.", ["project:on-curiosity", "curiosity"]),
+    theirs(4, mobbingBook, "Words this book doesn't have", ["curiosity"]),
+  ];
+
+  it("checks each again, saves it with origin corpus and its tags as written, and posts its anchor", async () => {
+    const r = await importCorpusQuotes(db, corpus, quotes, { primary: PRIMARY, skip: [2] });
+    expect(r.map((x) => [x.corpus_id, x.status ?? x.skipped ?? "error"])).toEqual([[1, "verified"], [2, "asked to skip"], [3, "verified"], [4, "error"]]);
+    expect(r[3].error).toMatch(/Not found/);
+    const [one, three] = [r[0].quote_id!, r[2].quote_id!];
+    expect(corpus.anchors.has(one) && corpus.anchors.has(three)).toBe(true);
+    expect(db.prepare("SELECT kind, ref FROM quote_origins WHERE quote_id IN (?, ?) ORDER BY ref").all(one, three)).toEqual([{ kind: "corpus", ref: "1" }, { kind: "corpus", ref: "3" }]);
+    const q3 = db.prepare("SELECT created_by, comment FROM quotes WHERE id = ?").get(three);
+    expect(q3).toEqual({ created_by: "corpus-mcp:claude", comment: null });
+    expect(db.prepare("SELECT comment FROM quotes WHERE id = ?").pluck().get(one)).toBe("Why it matters.");
+    expect(db.prepare("SELECT tag FROM quote_tags WHERE quote_id = ? ORDER BY tag").pluck().all(three)).toEqual(["curiosity", "project:on-curiosity"]);
+    const unfiled = holdingsCounts(db, PRIMARY).works.find((w) => w.work_id === db.prepare("SELECT work_id FROM quotes WHERE id = ?").pluck().get(three));
+    expect(unfiled).toMatchObject({ match: "unmatched", calibre_uuid: unfiledBook.calibre_uuid, verified: 1 });
+
+    const again = await importCorpusQuotes(db, corpus, quotes, { primary: PRIMARY, skip: [2, 4] });
+    expect(again.filter((x) => x.skipped === "already taken").map((x) => [x.corpus_id, x.quote_id])).toEqual([[1, one], [3, three]]);
+  });
+
+  it("takes over a quote whose words the work already has: checked again, origin and tags added, anchor posted", async () => {
+    const mine = saved(await addQuote(db, { work: "main:42", text: "It begins when an individual becomes the target", tags: ["mobbing"] }, options())).id;
+    corpus.anchors.clear();
+    const before = corpus.verified.length;
+    const [r] = await importCorpusQuotes(db, corpus, [quotes[0]], { primary: PRIMARY });
+    expect(r).toMatchObject({ corpus_id: 1, quote_id: mine, taken_over: true, anchored: true, status: "verified" });
+    expect(corpus.verified.length).toBe(before + 1);
+    expect(corpus.anchors.has(mine)).toBe(true);
+    expect(db.prepare("SELECT kind FROM quote_origins WHERE quote_id = ? ORDER BY kind").pluck().all(mine)).toEqual(["agent", "corpus"]);
+    expect(db.prepare("SELECT tag FROM quote_tags WHERE quote_id = ? ORDER BY tag").pluck().all(mine)).toEqual(["confirmation bias", "mobbing"]);
+    expect(db.prepare("SELECT flags FROM quotes WHERE id = ?").pluck().get(mine)).toBe("[]");
+    expect(db.prepare("SELECT COUNT(*) FROM history WHERE quote_id = ? AND kind = 'taken_over'").pluck().get(mine)).toBe(1);
+    expect(db.prepare("SELECT tags FROM quotes_fts WHERE rowid = ?").pluck().get(mine)).toMatch(/confirmation bias/);
+    const [again] = await importCorpusQuotes(db, corpus, [quotes[0]], { primary: PRIMARY });
+    expect(again).toMatchObject({ quote_id: mine, skipped: "already taken" });
+  });
+
+  it("changes nothing on a dry run", async () => {
+    const before = db.prepare("SELECT COUNT(*) FROM quotes").pluck().get();
+    const r = await importCorpusQuotes(db, corpus, quotes, { primary: PRIMARY, dryRun: true });
+    expect(r.every((x) => x.skipped?.startsWith("dry run"))).toBe(true);
+    expect(db.prepare("SELECT COUNT(*) FROM quotes").pluck().get()).toBe(before);
+    expect(corpus.verified).toEqual([]);
   });
 });

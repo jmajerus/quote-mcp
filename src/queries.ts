@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { citekeyOf, zoteroToCsl } from "./csl.js";
 import type { DB } from "./db.js";
 import { RELATION_LABEL, ToolError, ftsQuery } from "./common.js";
+import { reflow } from "./text.js";
 import type { ApiItem } from "./zotero.js";
 
 export { RELATION_LABEL, ToolError, ftsQuery };
@@ -273,6 +274,18 @@ export function getQuote(db: DB, id: number) {
 }
 
 /** The quote with a CSL JSON item for its work and a locator, ready for Pandoc or a reference manager. */
+/**
+ * The Calibre book a quote was checked against, and where in it, as corpus-mcp's verify answered (kept in the
+ * origin of a quote saved by add_quote, or taken from corpus-mcp); null for any other quote.
+ */
+export function calibreSource(db: DB, id: number): { book: Record<string, unknown>; position: { section: string | null; page_label: string | null } | null } | null {
+  const raw = db.prepare(`SELECT raw FROM quote_origins WHERE quote_id = ? AND kind IN ('agent', 'corpus')
+    AND json_extract(raw, '$.book') IS NOT NULL ORDER BY imported_at LIMIT 1`).pluck().get(id) as string | undefined;
+  if (!raw) return null;
+  const r = JSON.parse(raw) as { book: Record<string, unknown>; position?: { section: string | null; page_label: string | null } };
+  return { book: r.book, position: r.position ?? null };
+}
+
 export function citeQuote(db: DB, id: number) {
   const q = getQuote(db, id);
   const row = db.prepare("SELECT w.* FROM works w JOIN quotes q ON q.work_id = w.id WHERE q.id = ?").get(id) as Record<string, unknown> | undefined;
@@ -315,8 +328,11 @@ export function citeQuote(db: DB, id: number) {
   const kindle = q.locator?.startsWith("Kindle");
   const locator = q.locator && !kindle ? { label: "page", locator: q.locator.replace(/^pp?\. /, "") } : null;
   const pandoc = citekey ? `[@${citekey}${locator ? `, ${q.locator}` : kindle ? `, ${q.locator}` : ""}]` : null;
+  // A quote checked against a Calibre book is the book's text, line breaks and all; cite it as prose.
+  const source = q.status === "verified" ? calibreSource(db, id) : null;
   return {
-    kind: q.kind, quote: q.kind === "note" ? null : q.text, ...(q.kind === "note" ? { note: q.note } : {}), locator, locator_text: q.locator, chapter_author: q.chapter_author, csl, citekey, pandoc, ...(editions ? { editions } : {}),
+    kind: q.kind, quote: q.kind === "note" ? null : source ? reflow(q.text) : q.text,
+    ...(source ? { book: source.book, position: source.position } : {}), ...(q.kind === "note" ? { note: q.note } : {}), locator, locator_text: q.locator, chapter_author: q.chapter_author, csl, citekey, pandoc, ...(editions ? { editions } : {}),
     ...(q.chapter_author ? { note: `The passage is by ${q.chapter_author}, in an edited volume; cite the chapter if your style needs it.` } : {}),
     warnings,
   };
