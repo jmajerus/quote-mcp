@@ -122,19 +122,65 @@ tar xzf /tmp/quote-mcp-${id}.tgz -C "$release"
 rm -f /tmp/quote-mcp-${id}.tgz
 cd "$release"
 npm ci --omit=dev --no-audit --no-fund --loglevel=error
-install -m 0644 deploy/quote-mcp.service deploy/quote-import.service deploy/quote-import.timer \\
-  deploy/quote-backup.service deploy/quote-backup.timer /etc/systemd/system/
-install -m 0755 deploy/quote-mcp /usr/local/bin/quote-mcp
+set -a; . /etc/quote-mcp/env; set +a
 previous=$(readlink /opt/quote-mcp/current || true)
 echo "previous=$previous"
+# A first import that fails leaves this marker (and whatever store it made), so the next deploy runs it again.
+first_import=/var/lib/quote-mcp/first-import.pending
+# The store as it was before this release's migration changed its schema; a rollback puts it back, since the
+# previous release refuses a store at a newer schema.
+pre_migrate=/var/lib/quote-mcp/pre-migrate.db
+rm -f "$pre_migrate"
+install_units() {
+  # Chained, since a rollback calls it in a condition, where set -e doesn't apply.
+  install -m 0644 "$1/deploy/quote-mcp.service" "$1/deploy/quote-import.service" "$1/deploy/quote-import.timer" \\
+    "$1/deploy/quote-backup.service" "$1/deploy/quote-backup.timer" /etc/systemd/system/ &&
+    install -m 0755 "$1/deploy/quote-mcp" /usr/local/bin/quote-mcp &&
+    systemctl daemon-reload
+}
+# From the switch on, any failure puts the previous release (and its units) back, and the store as it was
+# before a migration that changed its schema. Otherwise the store is left as it is, even after a failed
+# first import: it's primary data, and the next deploy or the import timer carries on from it.
+rollback() {
+  status=$?
+  [ "$status" -eq 0 ] && return
+  journalctl -u quote-mcp.service -n 20 --no-pager || true
+  if [ -n "$previous" ]; then
+    ln -sfn "$previous" /opt/quote-mcp/current
+    units=1
+    install_units "$previous" || units=""
+    if [ -f "$pre_migrate" ]; then
+      systemctl stop quote-mcp.service quote-import.service || true
+      # Chained, so the copy never replaces a migrated store that couldn't be set aside. Its -wal and -shm
+      # go with it, renamed alike, since committed writes can still be only in the -wal.
+      if mv "$QUOTE_DB" "$QUOTE_DB.rolled-back" &&
+        { [ ! -f "$QUOTE_DB-wal" ] || mv "$QUOTE_DB-wal" "$QUOTE_DB.rolled-back-wal"; } &&
+        { [ ! -f "$QUOTE_DB-shm" ] || mv "$QUOTE_DB-shm" "$QUOTE_DB.rolled-back-shm"; } &&
+        mv "$pre_migrate" "$QUOTE_DB" && chown quote:quote "$QUOTE_DB"; then
+        echo "restored the store from before the migration; the migrated one, with anything written since the migration, is $QUOTE_DB.rolled-back"
+      else
+        echo "store_restore_failed: the copy from before the migration is $pre_migrate; anything written since the migration is only in the migrated store"
+      fi
+    fi
+    if [ -n "$units" ]; then
+      systemctl restart quote-mcp.service || echo "quote-mcp didn't restart on $previous"
+      echo "rolled_back=$previous"
+    else
+      echo "rollback_incomplete=$previous: its units couldn't all be put back"
+    fi
+  fi
+  exit "$status"
+}
+trap rollback EXIT
 ln -sfn "$release" /opt/quote-mcp/current.new && mv -T /opt/quote-mcp/current.new /opt/quote-mcp/current
-systemctl daemon-reload
-set -a; . /etc/quote-mcp/env; set +a
-if [ ! -f "$QUOTE_DB" ]; then
+install_units "$release"
+if [ ! -f "$QUOTE_DB" ] || [ -f "$first_import" ]; then
   echo "No store yet: running the first import, the old site included."
+  touch "$first_import"
   ${asQuote("import")}
+  rm -f "$first_import"
 else
-  ${asQuote("migrate")}
+  ${asQuote("migrate --backup /var/lib/quote-mcp/pre-migrate.db")}
 fi
 # The public site's preview reads a snapshot that imports rebuild; build it now so a new build's pages show at once
 # (nothing, when vocab/site.md doesn't make the site public).
@@ -146,16 +192,11 @@ for i in $(seq 1 20); do
   if curl -sf "http://127.0.0.1:$QUOTE_PORT/health"; then echo; echo "installed=${id}"; break; fi
   sleep 1
 done
-if ! curl -sf -o /dev/null "http://127.0.0.1:$QUOTE_PORT/health"; then
-  journalctl -u quote-mcp.service -n 20 --no-pager || true
-  if [ -n "$previous" ]; then
-    ln -sfn "$previous" /opt/quote-mcp/current
-    systemctl restart quote-mcp.service
-    echo "rolled_back=$previous"
-  fi
-  exit 1
-fi
-ls -1dt /opt/quote-mcp/releases/* | tail -n +4 | xargs -r rm -rf
+curl -sf -o /dev/null "http://127.0.0.1:$QUOTE_PORT/health"
+trap - EXIT
+rm -f "$pre_migrate"
+# Pruning old releases is housekeeping; failing at it doesn't fail the deploy.
+ls -1dt /opt/quote-mcp/releases/* | tail -n +4 | xargs -r rm -rf || echo "couldn't prune old releases" >&2
 `);
   await writeDeployed({ branch: git(["rev-parse", "--abbrev-ref", "HEAD"]), commit: git(["rev-parse", "HEAD"]), local: true, dirty: git(["status", "--porcelain"]) !== "" });
 }

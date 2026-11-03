@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:
 import Database from "better-sqlite3";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { openDb } from "./db.js";
+import { SCHEMA_VERSION, openDb } from "./db.js";
 import { openReadOnly } from "./queries.js";
 import { servePublic, serveHttp, serveStdio } from "./server.js";
 import { drupalUrl, loadDrupal } from "./drupal.js";
@@ -27,7 +27,9 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *       Syncs the Zotero mirror (QUOTE_ZOTERO_LIBRARY plus QUOTE_ZOTERO_SOURCES), reads the old site
  *       (QUOTE_DRUPAL_URL, when set), and imports. Safe to run again; run it on a timer to pick up new
  *       quote notes typed into Zotero.
- *   quote-mcp migrate                   Brings the store up to this build's schema (the server opens it read-only).
+ *   quote-mcp migrate [--backup <file>] Brings the store up to this build's schema (the server opens it read-only);
+ *                                       with --backup, copies it to <file> first when its schema will change, so
+ *                                       a deploy that rolls back can put back a store the previous build opens.
  *   quote-mcp export [--out file]      Everything as JSON (stdout by default).
  *   quote-mcp backup [--dir data/backups] [--keep 14]
  *   quote-mcp stats
@@ -295,7 +297,19 @@ async function proposeCommand() {
   console.log(`Proposed "${body.label}" as ${String(answer.slug)} (${String(answer.id)}, ${String(answer.status)}), change ${String(answer.change)}. The subscriber adds it as a provisional concept; the next import resolves the tag.`);
 }
 
-function migrateCommand() {
+async function migrateCommand() {
+  const file = process.env.QUOTE_DB ?? "data/quotes.db";
+  const backup = option("--backup");
+  if (backup && existsSync(file)) {
+    const old = new Database(file, { readonly: true, fileMustExist: true });
+    const version = Number(old.pragma("user_version", { simple: true }));
+    if (version < SCHEMA_VERSION) {
+      rmSync(backup, { force: true });
+      await old.backup(backup);
+      console.log(`Copied the store at schema ${version} to ${backup}.`);
+    }
+    old.close();
+  }
   console.log(`The store is at schema ${openDb().pragma("user_version", { simple: true })}.`);
 }
 

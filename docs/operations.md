@@ -9,7 +9,7 @@ How quote-mcp is run, configured, and deployed.
 | `npm run import` | Syncs the Zotero mirror, reads the old site, and imports (see [Importing](importing.md)). Safe to run again. |
 | `npm run serve` | MCP at `/mcp`, the admin pages at `/admin`, the JSON API at `/api`, the maps at `/map/` (with `QUOTE_MAP_DIR`), the public site's preview at `/`, `/health`, and on the LAN only, holdings-mcp's counts feed at `/api/holdings/counts` (see [the dev-brief](dev-briefs/holdings-and-quotes.md)); port `QUOTE_PORT` (8010 by default). With D1 settings it also runs the replica's drain. |
 | `npm run quotes -- stdio` | MCP over stdio. |
-| `npm run quotes -- migrate` | Brings the store up to this build's schema. Deploy runs it. |
+| `npm run quotes -- migrate` | Brings the store up to this build's schema. Deploy runs it with `--backup`, which copies the store first when its schema will change, so a rolled-back deploy can put the old store back. |
 | `npm run quotes -- config` | Every setting, where it came from, and what each feature still needs; secrets show only as set. |
 | `npm run quotes -- stats` | Counts by status, origin, work match, and scheme. |
 | `npm run quotes -- sets` | Each concept set as the store has it now; fails on a concept its scheme doesn't have. |
