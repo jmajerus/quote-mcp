@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import { ToolError } from "./common.js";
-import { type DB, getMeta, now, setMeta } from "./db.js";
+import { type DB, NEXT_QUOTE_ID, getMeta, now, setMeta } from "./db.js";
 import { creators } from "./import.js";
 import { citekeyOf } from "./csl.js";
 import { calibreSource, getQuote } from "./queries.js";
@@ -241,7 +241,7 @@ export interface AddQuoteOptions {
 }
 
 /** Tags resolve to concepts by label, then alternative label, then slug, ignoring case, as the import does. */
-function conceptOf(db: DB, tag: string): number | null {
+export function conceptOf(db: DB, tag: string): number | null {
   const t = tag.toLowerCase();
   const rows = db.prepare("SELECT id, slug, label, alt_labels FROM concepts WHERE status != 'retired'").all() as { id: number; slug: string; label: string; alt_labels: string }[];
   return rows.find((c) => c.label.toLowerCase() === t)?.id ?? rows.find((c) => (JSON.parse(c.alt_labels) as string[]).some((a) => a.toLowerCase() === t))?.id
@@ -361,8 +361,8 @@ function save(db: DB, args: AddQuoteArgs, plan: Plan, requestId: string, actor: 
     }
     const earlier = alreadySaved(db, origin, requestId, plan.work, plan.text);
     if (earlier) return earlier;
-    const id = db.prepare(`INSERT INTO quotes (kind, work_id, text, text_key, locator_kind, locator, comment, status, grade, flags, created_at, created_by, updated_at, updated_by)
-      VALUES ('quote', ?, ?, ?, ?, ?, ?, ?, 'A', ?, ?, ?, ?, ?) RETURNING id`).pluck()
+    const id = db.prepare(`INSERT INTO quotes (id, kind, work_id, text, text_key, locator_kind, locator, comment, status, grade, flags, created_at, created_by, updated_at, updated_by)
+      VALUES (${NEXT_QUOTE_ID}, 'quote', ?, ?, ?, ?, ?, ?, ?, 'A', ?, ?, ?, ?, ?) RETURNING id`).pluck()
       .get(plan.work, plan.text, quoteKey(plan.text), plan.locator ? "page" : "none", plan.locator, comment, plan.status, JSON.stringify(flags), stamp, actor, stamp, actor) as number;
     db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, version, raw, imported_at) VALUES (?, ?, ?, NULL, ?, ?)").run(origin, requestId, id, raw, stamp);
     const tags = [...new Set((args.tags ?? []).map((t) => t.trim()).filter(Boolean))];

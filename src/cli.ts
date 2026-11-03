@@ -1,10 +1,13 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import Database from "better-sqlite3";
+import { userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { corpusClient, corpusConfig, followAnchors, importCorpusQuotes, retryAnchors, storeWriter } from "./capture.js";
 import { SCHEMA_VERSION, openDb } from "./db.js";
-import { openReadOnly } from "./queries.js";
+import { reviewProposal } from "./edits.js";
+import { ToolError } from "./common.js";
+import { listProposals, openReadOnly } from "./queries.js";
 import { servePublic, serveHttp, serveStdio } from "./server.js";
 import { drupalUrl, loadDrupal } from "./drupal.js";
 import { exportAll } from "./export.js";
@@ -36,6 +39,10 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *                                       Takes over corpus-mcp's own saved quotes, once: each is checked against
  *                                       its book again, saved with origin corpus, and its anchor posted. Prints
  *                                       corpus-mcp's id and the new one for each; a re-run skips those taken.
+ *   quote-mcp proposals [--accept <n> | --reject <n>] [--note "…"] [--status accepted|rejected]
+ *                                       Agents' proposed changes to a quote's text, locator, or chapter author:
+ *                                       the pending ones, or accept or reject one (accepting applies it as your
+ *                                       edit, recorded under your login).
  *   quote-mcp backup [--dir data/backups] [--keep 14]
  *   quote-mcp stats
  *   quote-mcp config                    Each setting, where it came from, and what each feature still needs.
@@ -351,9 +358,38 @@ async function takeCorpusQuotesCommand() {
   }
 }
 
+function proposalsCommand() {
+  const accept = option("--accept");
+  const reject = option("--reject");
+  const db = openDb();
+  try {
+    if (accept || reject) {
+      const id = Number(accept ?? reject);
+      if (!Number.isInteger(id) || id < 1) throw new Error(`Give a proposal number, not ${accept ?? reject}.`);
+      const reviewer = process.env.SUDO_USER || userInfo().username;
+      const r = reviewProposal(db, id, accept ? "accept" : "reject", reviewer, option("--note"));
+      console.log(`Proposal ${id} ${r.proposal.status}; quote ${r.quote.id} is now:\n${JSON.stringify({ text: r.quote.text, locator: r.quote.locator, chapter_author: r.quote.chapter_author }, null, 2)}`);
+      return;
+    }
+    const status = (option("--status") ?? "pending") as "pending" | "accepted" | "rejected";
+    const list = listProposals(db, { status, limit: 200 });
+    if (!list.total) return console.log(`No ${status} proposals.`);
+    for (const p of list.proposals) {
+      console.log(`\n${p.id}. Quote ${p.quote.id}${p.quote.work ? ` (${p.quote.work})` : ""}, by ${p.proposer}, ${p.created_at.slice(0, 10)}: ${p.rationale}${p.evidence ? `\n   Evidence: ${p.evidence}` : ""}`);
+      for (const k of Object.keys(p.change) as (keyof typeof p.change)[]) console.log(`   ${k}: ${JSON.stringify(p.before[k] ?? null)}\n     → ${JSON.stringify(p.change[k] ?? null)}`);
+    }
+    if (status === "pending") console.log("\nquote-mcp proposals --accept <n> | --reject <n> [--note \"…\"]");
+  } catch (error) {
+    if (error instanceof ToolError) throw new Error(error.message);
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
 const commands: Record<string, () => unknown> = {
   import: importCommand, migrate: migrateCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, sets: setsCommand, publish: publishCommand, config: configCommand, serve: serveCommand,
-  terms: termsCommand, propose: proposeCommand, "take-corpus-quotes": takeCorpusQuotesCommand,
+  terms: termsCommand, propose: proposeCommand, "take-corpus-quotes": takeCorpusQuotesCommand, proposals: proposalsCommand,
   stdio: () => serveStdio(openReadOnly(), sets(), capture()),
 };
 const command = commands[process.argv[2] ?? ""];

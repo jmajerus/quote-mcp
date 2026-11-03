@@ -3,6 +3,7 @@ import { type AnchorChange, type Book, type CorpusClient, CorpusError, type Corp
 import http from "node:http";
 import { ToolError } from "../src/common.js";
 import { handleCorpusQuotes } from "../src/corpus-api.js";
+import { deleteQuote } from "../src/edits.js";
 import type { DB } from "../src/db.js";
 import { holdingsCounts } from "../src/holdings.js";
 import { runImport } from "../src/import.js";
@@ -117,6 +118,13 @@ describe("add_quote", () => {
     expect(again).toMatchObject({ saved: false, book: { book_id: "main:7" } });
     const other = db.prepare("SELECT id FROM quotes WHERE id != ? AND kind = 'quote' LIMIT 1").pluck().get(id) as number;
     expect(citeQuote(db, other)).not.toHaveProperty("position");
+  });
+
+  it("gives a new quote an id past a deleted one's", async () => {
+    const first = saved(await addQuote(db, { work: "main:42", text: "It begins when an individual becomes the target" }, options())).id;
+    await deleteQuote(db, corpus, first, "testing ids", "agent");
+    const next = saved(await addQuote(db, { work: "main:42", text: "disrespectful behavior" }, options())).id;
+    expect(next).toBeGreaterThan(first);
   });
 
   it("finds the work by citekey or quote:<id> as well", async () => {

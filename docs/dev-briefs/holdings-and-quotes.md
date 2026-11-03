@@ -160,6 +160,23 @@ new quotes landing in corpus-mcp soonest:
    here with the rest of phase 2's editing: tag and comment changes by
    agents, text and locator changes as proposals.
 
+   As built (`src/edits.ts`, schema 4), as MCP tools beside `add_quote`:
+   - `update_quote(id, comment?, add_tags?, remove_tags?, reason?)` changes
+     tags and the comment directly, with history. A removed tag is kept in
+     `tag_removals`, so a re-import doesn't put back one the Zotero note
+     still has; a changed comment marks the quote edited, so a re-import
+     keeps it. A note's words aren't changed by an agent.
+   - `propose_quote_fix(id, text?, locator?, chapter_author?, rationale,
+     evidence?)` adds a row to `proposals`, shown in `get_quote`, the
+     `proposals` worklist queue, and the admin pages. A verified quote's
+     text is the book's and isn't proposed. A person reviews them with
+     `quote-mcp proposals [--accept n | --reject n] [--note …]`; accepting
+     applies the change as their edit, unless the quote changed since.
+   - `delete_quote(id, reason)` deletes a quote whose origins are all
+     `agent` or `corpus`, after `DELETE /api/anchors/<id>`; an imported one
+     is refused, since its source would bring it back. The quote as it was
+     stays in history.
+
 ### corpus-mcp's reader (corpus-mcp's §3.4)
 
 corpus-mcp's book reader keeps highlighting quotes from its anchors, and links

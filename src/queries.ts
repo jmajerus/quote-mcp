@@ -270,6 +270,7 @@ export function getQuote(db: DB, id: number) {
     edited: Boolean(q.edited),
     created_at: q.created_at, updated_at: q.updated_at,
     history: db.prepare("SELECT at, kind, actor, reason FROM history WHERE quote_id = ? ORDER BY id").all(id),
+    proposals: (db.prepare("SELECT id FROM proposals WHERE quote_id = ? AND status = 'pending' ORDER BY id").pluck().all(id) as number[]).map((p) => proposal(db, p)),
   };
 }
 
@@ -339,9 +340,49 @@ export function citeQuote(db: DB, id: number) {
   };
 }
 
+// --- Proposals -----------------------------------------------------------------------------------
+
+/** The fields a proposal can change (src/edits.ts makes and applies them). */
+export type ProposalFields = { text?: string; locator?: string | null; chapter_author?: string | null };
+type Fields = ProposalFields;
+
+export interface Proposal {
+  id: number; quote_id: number; change: Fields; before: Fields; rationale: string; evidence: string | null; proposer: string;
+  status: "pending" | "accepted" | "rejected"; reviewer: string | null; review_note: string | null; created_at: string; reviewed_at: string | null;
+  /** The proposed fields as the quote has them now; stale when one differs from before, so accepting it would be refused. */
+  current: Fields; stale: boolean;
+}
+
+export function proposal(db: DB, id: number): Proposal {
+  const p = db.prepare("SELECT * FROM proposals WHERE id = ?").get(id) as (Omit<Proposal, "change" | "before" | "current" | "stale"> & { change: string; before: string }) | undefined;
+  if (!p) throw new ToolError(`No proposal ${id}.`);
+  const before = JSON.parse(p.before) as Fields;
+  const q = db.prepare("SELECT text, locator_kind, locator, chapter_author FROM quotes WHERE id = ?").get(p.quote_id) as { text: string; locator_kind: string; locator: string | null; chapter_author: string | null };
+  const all: Required<Fields> = { text: q.text, locator: locatorText(q.locator_kind, q.locator), chapter_author: q.chapter_author ?? null };
+  const current = Object.fromEntries(Object.keys(before).map((k) => [k, all[k as keyof Fields]])) as Fields;
+  const stale = Object.keys(before).some((k) => current[k as keyof Fields] !== before[k as keyof Fields]);
+  return { ...p, change: JSON.parse(p.change) as Fields, before, current, stale };
+}
+
+/** Pending proposals (or those with another status), newest last, each with its quote's current text and work. */
+export function listProposals(db: DB, args: { status?: "pending" | "accepted" | "rejected"; quote?: number; limit?: number; offset?: number } = {}) {
+  const status = args.status ?? "pending";
+  const limit = Math.min(Math.max(args.limit ?? 50, 1), 200);
+  const offset = Math.max(args.offset ?? 0, 0);
+  const where = `p.status = @status${args.quote ? " AND p.quote_id = @quote" : ""}`;
+  const total = db.prepare(`SELECT COUNT(*) FROM proposals p WHERE ${where}`).pluck().get({ status, quote: args.quote }) as number;
+  const ids = db.prepare(`SELECT p.id FROM proposals p WHERE ${where} ORDER BY p.id LIMIT @limit OFFSET @offset`).pluck().all({ status, quote: args.quote, limit, offset }) as number[];
+  const proposals = ids.map((id) => {
+    const p = proposal(db, id);
+    const q = db.prepare("SELECT q.text, q.status, w.title FROM quotes q LEFT JOIN works w ON w.id = q.work_id WHERE q.id = ?").get(p.quote_id) as { text: string; status: string; title: string | null };
+    return { ...p, quote: { id: p.quote_id, text: q.text, status: q.status, work: q.title } };
+  });
+  return { status, total, offset, limit, proposals };
+}
+
 // --- Worklists -----------------------------------------------------------------------------------
 
-export const QUEUES = ["unparsed", "ambiguous_works", "unmatched_works", "unresolved_tags", "no_locator", "ocr_suspect", "unbalanced_quotes", "commentary_mixed", "chapter_author", "kindle_locator", "title_tag_only", "compound_tag", "anchor_lost", "anchor_missing"] as const;
+export const QUEUES = ["unparsed", "ambiguous_works", "unmatched_works", "unresolved_tags", "no_locator", "ocr_suspect", "unbalanced_quotes", "commentary_mixed", "chapter_author", "kindle_locator", "title_tag_only", "compound_tag", "anchor_lost", "anchor_missing", "proposals"] as const;
 export type Queue = (typeof QUEUES)[number];
 
 export function worklist(db: DB, queue: Queue, args: { work?: string; limit?: number; offset?: number } = {}) {
@@ -362,6 +403,7 @@ export function worklist(db: DB, queue: Queue, args: { work?: string; limit?: nu
     }));
     return { queue, total, offset, limit, works };
   }
+  if (queue === "proposals") return { queue, ...listProposals(db, { limit, offset }) };
   if (queue === "unresolved_tags") {
     const tags = db.prepare(`SELECT tag, COUNT(*) AS quotes, group_concat(quote_id) AS quote_ids FROM quote_tags WHERE concept_id IS NULL GROUP BY tag COLLATE NOCASE ORDER BY quotes DESC, tag`).all() as Record<string, unknown>[];
     return { queue, total: tags.length, offset: 0, limit: tags.length, tags: tags.map((t) => ({ ...t, quote_ids: String(t.quote_ids).split(",").map(Number) })) };
@@ -381,6 +423,7 @@ export function overview(db: DB) {
     if (q === "unparsed") queues[q] = one("SELECT COUNT(*) FROM quotes WHERE status = 'unparsed'");
     else if (q === "ambiguous_works" || q === "unmatched_works") queues[q] = one(`SELECT COUNT(*) FROM works w WHERE match = '${q === "ambiguous_works" ? "ambiguous" : "unmatched"}' AND EXISTS (SELECT 1 FROM quotes WHERE work_id = w.id)`);
     else if (q === "unresolved_tags") queues[q] = one("SELECT COUNT(DISTINCT lower(tag)) FROM quote_tags WHERE concept_id IS NULL");
+    else if (q === "proposals") queues[q] = one("SELECT COUNT(*) FROM proposals WHERE status = 'pending'");
     else queues[q] = one(`SELECT COUNT(*) FROM quotes q WHERE EXISTS (SELECT 1 FROM json_each(q.flags) WHERE value = '${q}')`);
   }
   return {

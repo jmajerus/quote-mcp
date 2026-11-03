@@ -1,4 +1,4 @@
-import { type DB, now } from "./db.js";
+import { type DB, NEXT_QUOTE_ID, now } from "./db.js";
 import type { DrupalSite, DrupalWork } from "./drupal.js";
 import { type Suspect, dropCommonUnknowns, suspectTokens } from "./ocr.js";
 import { readMargin } from "./margin.js";
@@ -191,13 +191,15 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
     const findDuplicate = db.prepare("SELECT id, work_id, edited, status, locator, chapter_author, comment FROM quotes WHERE text_key = ? ORDER BY (work_id IS ?) DESC, id LIMIT 1");
     const addOrigin = db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, version, raw, imported_at) VALUES (?, ?, ?, ?, ?, ?)");
     const updateOrigin = db.prepare("UPDATE quote_origins SET version = ?, raw = ?, imported_at = ? WHERE kind = ? AND ref = ?");
-    const addTag = db.prepare("INSERT OR IGNORE INTO quote_tags (quote_id, tag, concept_id, origin) VALUES (?, ?, ?, ?)");
+    // A tag someone took off the quote stays off, though its source still has it.
+    const addTag = db.prepare(`INSERT OR IGNORE INTO quote_tags (quote_id, tag, concept_id, origin) SELECT @q, @tag, @concept, @origin
+      WHERE NOT EXISTS (SELECT 1 FROM tag_removals WHERE quote_id = @q AND tag = @tag)`);
     const addKwic = db.prepare("INSERT OR IGNORE INTO quote_kwic (quote_id, phrase, tag, concept_id) VALUES (?, ?, ?, ?)");
     const addHistory = db.prepare("INSERT INTO history (quote_id, at, kind, before, after, actor, reason) VALUES (?, ?, ?, ?, ?, ?, ?)");
     const insertQuote = db.prepare(`
-      INSERT INTO quotes (kind, work_id, text, text_key, locator_kind, locator, chapter_author, comment, attribution, source_url, status, grade, flags,
+      INSERT INTO quotes (id, kind, work_id, text, text_key, locator_kind, locator, chapter_author, comment, attribution, source_url, status, grade, flags,
         created_at, created_by, updated_at, updated_by)
-      VALUES (@kind, @work_id, @text, @text_key, @locator_kind, @locator, @chapter_author, @comment, @attribution, @source_url, @status, @grade, @flags,
+      VALUES (${NEXT_QUOTE_ID}, @kind, @work_id, @text, @text_key, @locator_kind, @locator, @chapter_author, @comment, @attribution, @source_url, @status, @grade, @flags,
         @stamp, @actor, @stamp, @actor) RETURNING id`);
     const updateQuote = db.prepare(`
       UPDATE quotes SET kind = @kind, work_id = @work_id, text = @text, text_key = @text_key, locator_kind = @locator_kind, locator = @locator,
@@ -213,7 +215,7 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
       };
     };
     const tagAndMark = (quoteId: number, q: Incoming) => {
-      for (const t of q.tags) addTag.run(quoteId, t.tag, conceptOf(t.tag), t.origin);
+      for (const t of q.tags) addTag.run({ q: quoteId, tag: t.tag, concept: conceptOf(t.tag), origin: t.origin });
       for (const k of q.parsed.kwic) addKwic.run(quoteId, k.phrase, k.concept, conceptOf(k.concept));
     };
 

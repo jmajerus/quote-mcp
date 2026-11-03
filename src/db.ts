@@ -16,7 +16,7 @@ import Database from "better-sqlite3";
 
 export type DB = Database.Database;
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -76,6 +76,20 @@ CREATE TABLE IF NOT EXISTS quote_kwic (
   quote_id INTEGER NOT NULL REFERENCES quotes(id) ON DELETE CASCADE, phrase TEXT NOT NULL, tag TEXT NOT NULL,
   concept_id INTEGER REFERENCES concepts(id), PRIMARY KEY (quote_id, phrase, tag)
 );
+-- A change to a quote's text, locator, or chapter author that an agent proposed and a person accepts or rejects.
+CREATE TABLE IF NOT EXISTS proposals (
+  id INTEGER PRIMARY KEY, quote_id INTEGER NOT NULL REFERENCES quotes(id) ON DELETE CASCADE,
+  change TEXT NOT NULL, before TEXT NOT NULL,     -- JSON: the fields proposed, and what they were then
+  rationale TEXT NOT NULL, evidence TEXT, proposer TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected')),
+  reviewer TEXT, review_note TEXT, created_at TEXT NOT NULL, reviewed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS proposals_status ON proposals (status, quote_id);
+-- Tags taken off a quote, so a re-import doesn't put back one its source still has.
+CREATE TABLE IF NOT EXISTS tag_removals (
+  quote_id INTEGER NOT NULL REFERENCES quotes(id) ON DELETE CASCADE, tag TEXT NOT NULL COLLATE NOCASE,
+  by TEXT, at TEXT NOT NULL, reason TEXT, PRIMARY KEY (quote_id, tag)
+);
 -- Every change to a quote. No foreign key, so a deleted quote keeps its history.
 CREATE TABLE IF NOT EXISTS history (
   id INTEGER PRIMARY KEY, quote_id INTEGER, at TEXT NOT NULL, kind TEXT NOT NULL, before TEXT, after TEXT, actor TEXT, reason TEXT
@@ -109,7 +123,14 @@ function migrate(db: DB): void {
   if (!concepts.has("term_id")) db.exec("ALTER TABLE concepts ADD COLUMN term_id TEXT");
   if (!concepts.has("former_slugs")) db.exec("ALTER TABLE concepts ADD COLUMN former_slugs TEXT NOT NULL DEFAULT '[]'");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS concepts_term ON concepts (term_id)");
+  // 4: proposals and tag removals, which SCHEMA creates.
 }
+
+/**
+ * A new quote's id, for an INSERT's id column: past every id used before, a deleted quote's included (its history
+ * keeps it), so an id in a draft's marker, a citation, or corpus-mcp's anchor log never comes to name another quote.
+ */
+export const NEXT_QUOTE_ID = "(SELECT MAX(COALESCE((SELECT MAX(id) FROM quotes), 0), COALESCE((SELECT MAX(quote_id) FROM history), 0)) + 1)";
 
 export function getMeta(db: DB, key: string): string | undefined {
   return (db.prepare("SELECT value FROM meta WHERE key = ?").get(key) as { value: string } | undefined)?.value;
