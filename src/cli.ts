@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:
 import Database from "better-sqlite3";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { corpusClient, corpusConfig, importCorpusQuotes, retryAnchors, storeWriter } from "./capture.js";
+import { corpusClient, corpusConfig, followAnchors, importCorpusQuotes, retryAnchors, storeWriter } from "./capture.js";
 import { SCHEMA_VERSION, openDb } from "./db.js";
 import { openReadOnly } from "./queries.js";
 import { servePublic, serveHttp, serveStdio } from "./server.js";
@@ -94,10 +94,13 @@ async function importCommand() {
   const corpus = corpusConfig();
   if (corpus) {
     try {
-      const a = await retryAnchors(db, corpusClient(corpus));
+      const client = corpusClient(corpus);
+      const a = await retryAnchors(db, client);
       if (a.tried) console.log(`Anchors posted again to corpus-mcp: ${a.stored} of ${a.tried}.`);
+      const f = await followAnchors(db, client);
+      if (f.read) console.log(`Anchor changes from corpus-mcp: ${f.read} (changes ${f.from}–${f.to}); ${f.lost} no longer found, ${f.found} found again, ${f.updated} anchors updated.`);
     } catch (error) {
-      say(`Anchors not posted again: ${(error as Error).message}\n`);
+      say(`Anchors not followed: ${(error as Error).message}\n`);
     }
   }
   const publish = snapshotOptions();

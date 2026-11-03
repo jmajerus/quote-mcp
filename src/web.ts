@@ -69,7 +69,7 @@ const QUEUE_LABEL: Record<Queue, string> = {
   unparsed: "Unparsed quotes to split", ambiguous_works: "Works with several Zotero editions", unmatched_works: "Works not in Zotero yet",
   unresolved_tags: "Tags that aren't concepts", no_locator: "No page or location", ocr_suspect: "Possible OCR errors", unbalanced_quotes: "Unbalanced quotation marks",
   commentary_mixed: "Commentary mixed in", chapter_author: "Chapter authors to check", kindle_locator: "Kindle locations", title_tag_only: "Concepts only in the title attribute",
-  compound_tag: "Compound tags",
+  compound_tag: "Compound tags", anchor_lost: "Quotes no longer found in their book", anchor_missing: "Anchors not yet stored in corpus-mcp",
 };
 
 function overviewPage(db: DB): string {
