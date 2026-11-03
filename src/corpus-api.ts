@@ -3,7 +3,7 @@ import { addQuote, type AddQuoteArgs } from "./capture.js";
 import { ToolError } from "./common.js";
 import type { DB } from "./db.js";
 import type { Capture } from "./mcp.js";
-import { getQuote } from "./queries.js";
+import { locatorText } from "./queries.js";
 import { reflow } from "./text.js";
 
 /**
@@ -26,21 +26,26 @@ function send(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }).end(JSON.stringify(body));
 }
 
-/** The quotes checked against one Calibre book, by its UUID or corpus-mcp book id, with the anchor kept for each. */
+/**
+ * The quotes checked against one Calibre book, by its UUID or corpus-mcp book id, with the anchor kept for each:
+ * one query, the fields the reader uses, rather than a full get_quote for each.
+ */
 export function bookQuotes(db: DB, book: string) {
-  const rows = db.prepare(`SELECT o.quote_id AS id, o.raw FROM quote_origins o JOIN quotes q ON q.id = o.quote_id
+  const rows = db.prepare(`SELECT q.id, q.kind, q.text, q.comment, q.status, q.flags, q.locator_kind, q.locator, o.raw,
+      (SELECT json_group_array(tag) FROM (SELECT tag FROM quote_tags WHERE quote_id = q.id ORDER BY tag)) AS tags
+    FROM quote_origins o JOIN quotes q ON q.id = o.quote_id
     WHERE o.kind IN ('agent', 'corpus') AND (json_extract(o.raw, '$.book.calibre_uuid') = @book OR json_extract(o.raw, '$.book.book_id') = @book)
-    ORDER BY o.quote_id, json_extract(o.raw, '$.anchor') IS NULL, o.imported_at DESC`).all({ book }) as { id: number; raw: string }[];
+    ORDER BY q.id, json_extract(o.raw, '$.anchor') IS NULL, o.imported_at DESC`).all({ book }) as
+    { id: number; kind: string; text: string; comment: string | null; status: string; flags: string; locator_kind: string; locator: string | null; raw: string; tags: string }[];
   const seen = new Set<number>();
   const quotes = [];
-  for (const r of rows) {
-    if (seen.has(r.id)) continue;
-    seen.add(r.id);
-    const q = getQuote(db, r.id);
+  for (const q of rows) {
+    if (seen.has(q.id)) continue;
+    seen.add(q.id);
     quotes.push({
-      id: q.id, kind: q.kind, text: q.text, prose: q.text ? reflow(q.text) : q.text, ...(q.kind === "note" ? { note: q.note } : {}),
-      comment: q.comment, tags: q.tags.map((t) => t.tag), status: q.status, flags: q.flags, locator: q.locator,
-      anchor: (JSON.parse(r.raw) as { anchor?: unknown }).anchor ?? null, admin_path: `/admin/quotes/${q.id}`,
+      id: q.id, kind: q.kind, text: q.text, prose: q.text ? reflow(q.text) : q.text, ...(q.kind === "note" ? { note: q.comment } : {}),
+      comment: q.comment, tags: JSON.parse(q.tags) as string[], status: q.status, flags: JSON.parse(q.flags) as string[],
+      locator: locatorText(q.locator_kind, q.locator), anchor: (JSON.parse(q.raw) as { anchor?: unknown }).anchor ?? null, admin_path: `/admin/quotes/${q.id}`,
     });
   }
   return { book, quotes };
@@ -99,6 +104,7 @@ export async function handleCorpusQuotes(db: DB, capture: Capture | undefined, r
   } catch (error) {
     if (!(error instanceof ToolError)) throw error;
     const code = String(error.data?.error ?? "not-saved");
-    send(res, code === "bad-request" ? 400 : code === "corpus-unavailable" ? 502 : 422, { ...error.data, error: code, message: error.message });
+    // data.message, when there is one, is the message without what the answer carries as data (the closest passages).
+    send(res, code === "bad-request" ? 400 : code === "corpus-unavailable" ? 502 : 422, { ...error.data, error: code, message: (error.data?.message as string | undefined) ?? error.message });
   }
 }

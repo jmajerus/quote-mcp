@@ -333,7 +333,7 @@ async function planQuote(db: DB, t: Target, text: string, page: string | undefin
   }
   if (!v.match) {
     throw new ToolError(`Not found in ${v.book.title} (${v.book.book_id}). Nothing was saved. The closest passages: ${JSON.stringify(v.closest)}`,
-      { error: "no-match", closest: v.closest, book: v.book });
+      { error: "no-match", message: `Not found in ${v.book.title} (${v.book.book_id}). Nothing was saved.`, closest: v.closest, book: v.book });
   }
   // The work comes from the book corpus-mcp matched, unless the caller named it and the book isn't in Zotero.
   const work = v.book.zotero ? bookWork(db, v.book) : t.work ? t.work() : calibreWork(db, v.book);

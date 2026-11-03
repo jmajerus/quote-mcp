@@ -394,7 +394,8 @@ describe("the reader's routes for corpus-mcp", () => {
     try {
       const miss = await post(s.base, { work: "main:42", text: "Words this book doesn't have" });
       expect(miss.status).toBe(422);
-      expect(await miss.json()).toMatchObject({ error: "no-match", closest: [expect.objectContaining({ page: 40 })], book: { book_id: "main:42" } });
+      expect(await miss.json()).toMatchObject({ error: "no-match", message: "Not found in Mobbing (main:42). Nothing was saved.", closest: [expect.objectContaining({ page: 40 })], book: { book_id: "main:42" } });
+      await rejects(addQuote(db, { work: "main:42", text: "Words this book doesn't have" }, options()), /The closest passages: \[/);
       expect((await post(s.base, { text: "no work" })).status).toBe(400);
       expect((await post(s.base, { work: "main:42", text: "x", tags: "one" })).status).toBe(400);
       expect((await post(s.base, { work: "main:42", text: "x", page: 0 })).status).toBe(400);
