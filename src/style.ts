@@ -35,6 +35,12 @@ h2 { font-size: 1.02rem; margin: 28px 0 10px; }
 form.filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 18px; }
 form.filters input, form.filters select { font: inherit; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); min-width: 0; }
 form.filters input[name="q"] { flex: 1 1 260px; }
+form.edit label { display: block; margin: 14px 0 4px; font-weight: 600; }
+form.edit input, form.edit textarea { font: inherit; width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
+form.edit textarea { min-height: 7em; resize: vertical; }
+form.edit textarea[readonly] { background: transparent; color: var(--muted); }
+form.edit .actions { margin-top: 16px; display: flex; gap: 12px; align-items: center; }
+.error { background: var(--warn-bg); color: var(--warn); border-radius: 6px; padding: 8px 12px; }
 button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: var(--surface); cursor: pointer; }
 .result { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
 .result .text { margin: 0 0 6px; }

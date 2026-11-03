@@ -20,7 +20,7 @@ import type { ConceptSet } from "./sets.js";
 import { isSitePath, renderSite } from "./site.js";
 import { VERSION, createServer } from "./mcp.js";
 import { ToolError, overview } from "./queries.js";
-import { renderAdmin } from "./web.js";
+import { renderAdmin, saveAdminEdit } from "./web.js";
 
 /**
  * Streamable HTTP at /mcp (stateless: a fresh server per request, JSON responses), the admin pages at
@@ -105,12 +105,50 @@ function listen(server: http.Server, port: number, host: string, what: string): 
   }));
 }
 
+/**
+ * A form posted from the admin pages: the edit form. It's taken only from a page this server served (Origin, or
+ * failing that Referer, naming this host), so another site can't post it with the person's Access session. Writes
+ * go through the writable connection; the redirect's GET then reads them through the read-only one.
+ */
+async function adminPost(req: http.IncomingMessage, res: http.ServerResponse, path: string, capture: Capture | undefined, editor: string): Promise<void> {
+  const from = req.headers.origin ?? req.headers.referer;
+  let sameHost = false;
+  try {
+    sameHost = Boolean(from) && new URL(from!).host === req.headers.host;
+  } catch {
+    sameHost = false;
+  }
+  if (!sameHost) {
+    res.writeHead(403, { "content-type": "text/plain; charset=utf-8" }).end("Forms are taken only from this server's own pages.");
+    return;
+  }
+  if (!capture) {
+    res.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end("Editing isn't set up on this server.");
+    return;
+  }
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size > 64 * 1024) {
+      res.writeHead(413, { "content-type": "text/plain; charset=utf-8" }).end("The form is too large.");
+      return;
+    }
+    chunks.push(chunk as Buffer);
+  }
+  const answer = saveAdminEdit(capture.writer(), path, new URLSearchParams(Buffer.concat(chunks).toString("utf8")), editor);
+  if (!answer) res.writeHead(404, { "content-type": "text/plain" }).end("Not found");
+  else if ("redirect" in answer) res.writeHead(303, { location: answer.redirect }).end();
+  else res.writeHead(answer.status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }).end(answer.html);
+}
+
 export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
   const access = options.access ?? requestAccessConfig(process.env, ["quote-mcp", "quote-mcp.localdomain"]);
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     try {
-      const via = (await authorizeRequest(req, url.pathname, access, options.accessKeys)).via;
+      const auth = await authorizeRequest(req, url.pathname, access, options.accessKeys);
+      const via = auth.via;
       if (url.pathname === "/health") {
         const { quotes, notes } = overview(db);
         res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true, version: VERSION, quotes, notes, deployed: readDeployed(), ...(options.replica ? { replica: options.replica() } : {}), ...(options.terms ? { terms: options.terms() } : {}) }));
@@ -143,6 +181,10 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
         return;
       }
       if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
+        if (req.method === "POST" && /^\/admin\/quotes\/\d+\/edit$/.test(url.pathname)) {
+          await adminPost(req, res, url.pathname, options.capture, auth.via === "access" ? (auth.email ?? auth.subject ?? "access") : "lan");
+          return;
+        }
         if (req.method !== "GET") {
           res.writeHead(405, { allow: "GET" }).end();
           return;

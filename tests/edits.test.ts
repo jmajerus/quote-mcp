@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { CorpusClient } from "../src/capture.js";
 import { ToolError } from "../src/common.js";
 import type { DB } from "../src/db.js";
-import { deleteQuote, proposeFix, reviewProposal, updateQuote } from "../src/edits.js";
+import { deleteQuote, editQuote, proposeFix, reviewProposal, updateQuote } from "../src/edits.js";
+import { serveHttp } from "../src/server.js";
 import { runImport } from "../src/import.js";
 import { getQuote, overview, searchQuotes, worklist } from "../src/queries.js";
 import { renderAdmin } from "../src/web.js";
@@ -193,5 +194,58 @@ describe("delete_quote", () => {
     await expect(deleteQuote(db, corpus(dropped), id, "no", "agent")).rejects.toThrow(/came from drupal/);
     expect(dropped).toEqual([]);
     await expect(deleteQuote(db, null, id, " ", "agent")).rejects.toThrow(/give a reason/);
+  });
+});
+
+describe("editing on the admin pages", () => {
+  it("fixes a typo as a person's edit, with history, and leaves a verified quote's text alone", () => {
+    const id = byText("Abuse at work rarely");
+    const q = getQuote(db, id);
+    const r = editQuote(db, { id, text: "Abuse at work rarely announces itself!", locator: "p. 12", comment: "", reason: "typo", updated_at: q.updated_at as string }, "jo@example.org");
+    expect(r.changed).toEqual(["text"]);
+    expect(r.quote).toMatchObject({ text: "Abuse at work rarely announces itself!", edited: true });
+    expect(db.prepare("SELECT actor, reason FROM history WHERE quote_id = ? AND kind = 'edited'").get(id)).toEqual({ actor: "jo@example.org", reason: "typo" });
+    fails(() => editQuote(db, { id, text: "Again", updated_at: q.updated_at as string }, "jo@example.org"), /changed after this form was opened/);
+    expect(editQuote(db, { id, text: "Abuse at work rarely announces itself!" }, "jo@example.org").changed).toEqual([]);
+
+    db.prepare("UPDATE quotes SET status = 'verified' WHERE id = ?").run(id);
+    fails(() => editQuote(db, { id, text: "Different words" }, "jo@example.org"), /text is the book's/);
+    expect(editQuote(db, { id, text: "Abuse at work rarely announces itself!", locator: "13" }, "jo@example.org").changed).toEqual(["locator"]);
+  });
+
+  it("saves the form posted from its own page, and refuses one posted from elsewhere", async () => {
+    const server = await serveHttp(db, { host: "127.0.0.1", port: 0, capture: { writer: () => db, corpus: null, primary: "users/1" } });
+    const { port } = server.address() as import("node:net").AddressInfo;
+    const base = `http://127.0.0.1:${port}`;
+    const id = byText("Everyone deserves dignity");
+    try {
+      const form = await (await fetch(`${base}/admin/quotes/${id}/edit`)).text();
+      expect(form).toContain('<form class="edit" method="post"');
+      const updated = /name="updated_at" value="([^"]+)"/.exec(form)![1];
+      const post = (origin: string | null, fields: Record<string, string>) => fetch(`${base}/admin/quotes/${id}/edit`, {
+        method: "POST", redirect: "manual", body: new URLSearchParams(fields),
+        headers: { "content-type": "application/x-www-form-urlencoded", ...(origin ? { origin } : {}) },
+      });
+      expect((await post("https://evil.example", { text: "Hacked", updated_at: updated })).status).toBe(403);
+      expect((await post(null, { text: "Hacked", updated_at: updated })).status).toBe(403);
+      const saved = await post(base, { text: "Everyone deserves dignity at work.", locator: "7", comment: "", reason: "typo", updated_at: updated });
+      expect(saved.status).toBe(303);
+      expect(saved.headers.get("location")).toBe(`/admin/quotes/${id}`);
+      expect(getQuote(db, id)).toMatchObject({ text: "Everyone deserves dignity at work.", locator: "p. 7" });
+      expect(db.prepare("SELECT actor FROM history WHERE quote_id = ? AND kind = 'edited'").pluck().get(id)).toBe("lan");
+      const again = await post(base, { text: "Something else", updated_at: updated });
+      expect(again.status).toBe(409);
+      expect(await again.text()).toContain("changed after this form was opened");
+      const empty = await post(base, { text: " ", updated_at: getQuote(db, id).updated_at as string });
+      expect(empty.status).toBe(400);
+      expect(await (await fetch(`${base}/admin/quotes/${id}`)).text()).toContain(`href="/admin/quotes/${id}/edit"`);
+      // A note has no quoted text to edit, but a chapter author can come with it from the import.
+      const note = db.prepare("SELECT id FROM quotes WHERE kind = 'note' LIMIT 1").pluck().get() as number;
+      const noteForm = await (await fetch(`${base}/admin/quotes/${note}/edit`)).text();
+      expect(noteForm).toContain('name="chapter_author"');
+      expect(noteForm).not.toContain('name="text"');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

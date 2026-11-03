@@ -128,6 +128,78 @@ export function proposeFix(db: DB, args: ProposeArgs, actor: string) {
 }
 
 /**
+ * Writes a person's change to a quote's text, locator, chapter author, or comment, marking it edited (re-imports
+ * leave it alone). The flags the parser sets for these follow: no_locator and kindle_locator the new locator, and
+ * chapter_author, which asks a person to check the chapter author, is settled by a person setting it.
+ */
+function applyFields(db: DB, q: Record<string, unknown>, c: Fields & { comment?: string | null }, editor: string, stamp: string): void {
+  const id = q.id as number;
+  let flags = JSON.parse(q.flags as string) as string[];
+  if (c.text !== undefined) db.prepare("UPDATE quotes SET text = ?, text_key = ? WHERE id = ?").run(c.text, quoteKey(c.text), id);
+  if (c.locator !== undefined) {
+    const l = parseLocator(c.locator);
+    db.prepare("UPDATE quotes SET locator_kind = ?, locator = ? WHERE id = ?").run(l.kind, l.value, id);
+    flags = flags.filter((f) => f !== "no_locator" && f !== "kindle_locator");
+    if (!l.value) flags.push("no_locator");
+    else if (l.kind === "kindle") flags.push("kindle_locator");
+  }
+  if (c.chapter_author !== undefined) {
+    db.prepare("UPDATE quotes SET chapter_author = ? WHERE id = ?").run(c.chapter_author, id);
+    flags = flags.filter((f) => f !== "chapter_author");
+  }
+  if (c.comment !== undefined) db.prepare("UPDATE quotes SET comment = ? WHERE id = ?").run(c.comment, id);
+  db.prepare("UPDATE quotes SET flags = ?, edited = 1, updated_at = ?, updated_by = ? WHERE id = ?").run(JSON.stringify(flags), stamp, editor, id);
+  refreshFts(db, id);
+}
+
+export interface EditArgs { id: number; text?: string; locator?: string | null; chapter_author?: string | null; comment?: string | null; reason?: string; updated_at?: string }
+
+/**
+ * A person's edit from the admin pages: fixing a typo, a page, a chapter author, or the comment. Only the fields that
+ * changed are written. A verified quote's text is the book's and stays. updated_at, when given, is the quote's as the
+ * form showed it; a quote changed since is refused, so one edit doesn't undo another.
+ */
+export function editQuote(db: DB, args: EditArgs, editor: string) {
+  return db.transaction(() => {
+    const q = quoteRow(db, args.id);
+    if (args.updated_at !== undefined && args.updated_at !== q.updated_at) {
+      throw new ToolError(`Quote ${args.id} changed after this form was opened (by ${q.updated_by ?? "someone"}); open it again and redo the edit.`);
+    }
+    const now_ = { ...fieldsOf(q), comment: (q.comment as string | null) ?? null };
+    const change: Fields & { comment?: string | null } = {};
+    if (args.text !== undefined && q.kind !== "note") {
+      const text = args.text.replace(/\r\n/g, "\n").trim();
+      if (!text) throw new ToolError("The text can't be empty.");
+      if (text.length > MAX_TEXT) throw new ToolError(`The text is ${text.length} characters; the limit is ${MAX_TEXT}.`);
+      if (text !== now_.text) {
+        if (q.status === "verified") throw new ToolError(`Quote ${args.id} was checked against its Calibre book, so its text is the book's and isn't edited.`);
+        change.text = text;
+      }
+    }
+    if (args.locator !== undefined) {
+      const l = parseLocator(args.locator);
+      const locator = locatorText(l.kind, l.value);
+      if (locator !== now_.locator) change.locator = locator;
+    }
+    if (args.chapter_author !== undefined) {
+      const author = args.chapter_author?.trim() || null;
+      if (author !== now_.chapter_author) change.chapter_author = author;
+    }
+    if (args.comment !== undefined) {
+      const comment = args.comment?.replace(/\r\n/g, "\n").trim() || null;
+      if (comment && comment.length > MAX_NOTE) throw new ToolError(`The ${q.kind === "note" ? "note" : "comment"} is ${comment.length} characters; the limit is ${MAX_NOTE}.`);
+      if (comment !== now_.comment) change.comment = comment;
+    }
+    const keys = Object.keys(change) as (keyof typeof change)[];
+    if (!keys.length) return { changed: [] as string[], quote: getQuote(db, args.id) };
+    const stamp = now();
+    applyFields(db, q, change, editor, stamp);
+    history(db, args.id, "edited", Object.fromEntries(keys.map((k) => [k, now_[k]])), change, editor, args.reason?.trim() || "edited on the admin pages");
+    return { changed: keys as string[], quote: getQuote(db, args.id) };
+  })();
+}
+
+/**
  * Accepts or rejects a pending proposal. Accepting applies it as a person's edit (the quote is marked edited, so
  * re-imports leave it alone), unless the quote has changed since in a field the proposal touches.
  */
@@ -145,25 +217,8 @@ export function reviewProposal(db: DB, id: number, decision: "accept" | "reject"
       if (c.text !== undefined && q.status === "verified") {
         throw new ToolError(`Quote ${p.quote_id} was checked against its Calibre book after proposal ${id} was made, so its text is the book's; reject the proposal.`);
       }
-      let flags = JSON.parse(q.flags as string) as string[];
-      if (c.text !== undefined) db.prepare("UPDATE quotes SET text = ?, text_key = ? WHERE id = ?").run(c.text, quoteKey(c.text), p.quote_id);
-      if (c.locator !== undefined) {
-        const l = parseLocator(c.locator);
-        db.prepare("UPDATE quotes SET locator_kind = ?, locator = ? WHERE id = ?").run(l.kind, l.value, p.quote_id);
-        // The locator flags follow the new locator, as the parser sets them: none is no_locator, a Kindle location kindle_locator.
-        flags = flags.filter((f) => f !== "no_locator" && f !== "kindle_locator");
-        if (!l.value) flags.push("no_locator");
-        else if (l.kind === "kindle") flags.push("kindle_locator");
-      }
-      if (c.chapter_author !== undefined) {
-        db.prepare("UPDATE quotes SET chapter_author = ? WHERE id = ?").run(c.chapter_author, p.quote_id);
-        // chapter_author asks a person to check the chapter author; accepting this proposal is that check.
-        flags = flags.filter((f) => f !== "chapter_author");
-      }
-      db.prepare("UPDATE quotes SET flags = ? WHERE id = ?").run(JSON.stringify(flags), p.quote_id);
-      db.prepare("UPDATE quotes SET edited = 1, updated_at = ?, updated_by = ? WHERE id = ?").run(stamp, reviewer, p.quote_id);
+      applyFields(db, q, c, reviewer, stamp);
       history(db, p.quote_id, "edited", p.before, c, reviewer, `accepted proposal ${id} by ${p.proposer}: ${p.rationale}${note ? ` (${note})` : ""}`);
-      refreshFts(db, p.quote_id);
     } else {
       history(db, p.quote_id, "proposal_rejected", null, null, reviewer, `rejected proposal ${id} by ${p.proposer}${note ? `: ${note}` : ""}`);
     }
