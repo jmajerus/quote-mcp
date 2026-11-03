@@ -507,6 +507,8 @@ export async function followAnchors(db: DB, corpus: CorpusClient): Promise<{ rea
       counts.from = 0;
     }
     if (!page.changes.length) break;
+    // A page that doesn't move past `since` would be read again forever.
+    if (page.changes.at(-1)!.seq <= since) throw new Error(`corpus-mcp's anchor changes after ${since} ended at ${page.changes.at(-1)!.seq}; stopped following them.`);
     db.transaction(() => {
       for (const c of page.changes) {
         counts.read++;

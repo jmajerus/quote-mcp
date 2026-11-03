@@ -310,6 +310,12 @@ describe("following corpus-mcp's anchor changes", () => {
     expect(await followAnchors(db, corpus)).toMatchObject({ read: 0, from: 4, to: 4 });
   });
 
+  it("stops rather than reading the same page forever when corpus-mcp ignores since", async () => {
+    corpus.changes = [change(1, 9999, "stored")];
+    corpus.anchorChanges = async () => ({ log: "log-1", changes: [change(1, 9999, "stored")], last: 1 });
+    await expect(followAnchors(db, corpus)).rejects.toThrow(/stopped following/);
+  });
+
   it("reads from the start again when corpus-mcp's change log is a new one", async () => {
     const id = saved(await addQuote(db, { work: "main:42", text: "It begins when an individual becomes the target" }, options())).id;
     corpus.changes = [change(1, id, "orphaned")];
