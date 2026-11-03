@@ -196,7 +196,7 @@ ${(r.proposals as (Proposal & { quote: { id: number; text: string; work: string 
   return page(QUEUE_LABEL[queue], "worklists", `<h1>${QUEUE_LABEL[queue]}</h1><p class="sub"><a href="/admin/worklists">All worklists</a></p>${body}${"tags" in r ? "" : pager(`/admin/worklists/${queue}`, {}, r.total, r.offset, r.limit)}`);
 }
 
-/** The form for fixing a quote: its text (a verified quote's is the book's, shown but not edited), locator, chapter author, and comment. */
+/** The form for fixing a quote: its text (a verified quote's words are the book's; only its spacing can change), locator, chapter author, and comment. */
 function editPage(db: DB, id: number, error?: string, sent?: URLSearchParams): string {
   const q = getQuote(db, id);
   const note = q.kind === "note";
@@ -207,8 +207,8 @@ function editPage(db: DB, id: number, error?: string, sent?: URLSearchParams): s
 ${error ? `<p class="error">${esc(error)}</p>` : ""}
 <form class="edit" method="post" action="/admin/quotes/${id}/edit">
 <input type="hidden" name="updated_at" value="${esc(sent?.get("updated_at") ?? (q.updated_at as string))}">
-${note ? "" : `<label for="text">Text</label><textarea id="text" name="text"${locked ? " readonly" : ""}>${value("text", q.text)}</textarea>
-${locked ? '<p class="note">Checked against its Calibre book: the text is the book\'s, so it isn\'t edited here.</p>' : ""}`}
+${note ? "" : `<label for="text">Text</label><textarea id="text" name="text">${value("text", q.text)}</textarea>
+${locked ? '<p class="note">Checked against its Calibre book: the words are the book\'s. Only spacing and line breaks can change, such as joining lines the book broke mid-sentence.</p>' : ""}`}
 <label for="locator">Page or location</label><input id="locator" name="locator" value="${value("locator", q.locator)}" placeholder="211, 211-212, or Kindle loc. 208">
 <label for="chapter_author">Chapter author</label><input id="chapter_author" name="chapter_author" value="${value("chapter_author", q.chapter_author)}" placeholder="In an edited volume">
 <label for="comment">${note ? "Note" : "Comment"}</label><textarea id="comment" name="comment">${value("comment", q.comment)}</textarea>
