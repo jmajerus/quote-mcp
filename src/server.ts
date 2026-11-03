@@ -1,4 +1,5 @@
 import { handleHoldingsCounts } from "./holdings.js";
+import type { Capture } from "./mcp.js";
 import { AccessError, authorizeRequest, requestAccessConfig, type RequestAccessConfig } from './http-access.js';
 import type { JWTVerifyGetKey } from 'jose';
 import fs from "node:fs";
@@ -47,6 +48,8 @@ export interface ServeOptions {
   replica?: () => DrainStatus;
   /** The subscriber that follows terminology-mcp's human-work scheme (src/terminology.ts), for /health. */
   terms?: () => TermSyncStatus;
+  /** add_quote's writer and corpus-mcp; without it the MCP server is read-only. */
+  capture?: Capture;
 }
 
 
@@ -164,7 +167,7 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
         }));
         return;
       }
-      const mcp = createServer(db, options.sets);
+      const mcp = createServer(db, options.sets, options.capture);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       res.on("close", () => {
         void transport.close();
@@ -214,6 +217,6 @@ export function servePublic(options: ServeOptions): Promise<http.Server> {
   return listen(server, options.port, options.host, `public, from the snapshot: /${options.mapDir ? ", /map/" : ""}, /api/graph, /api/concepts, /api/sets`);
 }
 
-export async function serveStdio(db: DB, sets: ConceptSet[] = []): Promise<void> {
-  await createServer(db, sets).connect(new StdioServerTransport());
+export async function serveStdio(db: DB, sets: ConceptSet[] = [], capture?: Capture): Promise<void> {
+  await createServer(db, sets, capture).connect(new StdioServerTransport());
 }

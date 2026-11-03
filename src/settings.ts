@@ -36,6 +36,7 @@ export const SETTINGS: Setting[] = [
   { name: "QUOTE_SETS", group: "Service", about: "the concept sets", fallback: "vocab/sets.json" },
   { name: "QUOTE_TERMS_SYNC", group: "Concepts from terminology-mcp", about: "on: the server follows terminology-mcp's human-work scheme every minute", fallback: "off" },
   { name: "TERMINOLOGY_BASE", group: "Concepts from terminology-mcp", about: "terminology-mcp on the LAN, where progress reports name the caller; off turns following off", fallback: "http://terminology-mcp.localdomain:8000" },
+  { name: "CORPUS_BASE", group: "Saving quotes", about: "corpus-mcp on the LAN, which checks add_quote's words against a Calibre book; off saves every quote transcribed", fallback: "http://corpus-mcp.localdomain:8000" },
   { name: "QUOTE_MAP_DIR", group: "Maps", about: "quote-atlas's built maps, served at /map/" },
   { name: "QUOTE_PUBLIC", group: "Public site", about: "none, catalogue (no quoted text), or quotes", fallback: "none", site: "public" },
   { name: "QUOTE_PUBLIC_NOTES", group: "Public site", about: "notes on the public site: none or all", fallback: "none", site: "notes" },
