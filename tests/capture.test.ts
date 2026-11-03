@@ -135,7 +135,7 @@ describe("add_quote", () => {
     const b = saved(await addQuote(db, { work: unfiledBook.calibre_uuid, text: "a story we tell ourselves" }, options()));
     expect(a.work?.title).toBe("An Unfiled Ebook");
     expect(b.work?.id).toBe(a.work?.id);
-    expect(holdingsCounts(db, PRIMARY).works.find((w) => w.work_id === a.work?.id)).toMatchObject({ match: "unmatched", quotes: 2, verified: 2 });
+    expect(holdingsCounts(db, PRIMARY).works.find((w) => w.work_id === a.work?.id)).toMatchObject({ match: "unmatched", calibre_uuid: unfiledBook.calibre_uuid, quotes: 2, verified: 2 });
   });
 
   it("returns the quote already saved for a retry, by request_id or by the same words", async () => {

@@ -92,7 +92,8 @@ new quotes landing in corpus-mcp soonest:
      `404 no-book` or `no-text` saves it `transcribed`; `409 ambiguous`
      saves nothing and lists the books. A Calibre book not in Zotero
      becomes an `unmatched` work, found again by its UUID (`work_origins`
-     of kind `calibre`).
+     of kind `calibre`). The counts feed sends its `calibre_uuid`, so
+     holdings-mcp joins it to the book's work.
    - `POST /api/anchors` after the save. On `409 stale-anchor` it verifies
      again once. If corpus-mcp can't take it, the quote is flagged
      `anchor_missing`, and each import posts it again.

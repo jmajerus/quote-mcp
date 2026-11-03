@@ -11,7 +11,8 @@ import { firstLibrary, json } from "./queries.js";
  * unmatched or ambiguous work is sent by its id (holdings-mcp's quote:<id>) with its title, authors,
  * and year, and an ambiguous one with its candidate items as <library>/<key>. Unparsed records aren't
  * counted. Every entry has its work_id, and former_work_ids lists the ids of works since filed into it,
- * so holdings-mcp can move a quote:<id> key to the work's zotero: key. Served at GET
+ * so holdings-mcp can move a quote:<id> key to the work's zotero: key. An unmatched work made for a
+ * Calibre book (by add_quote) has its calibre_uuid, an exact link to the book. Served at GET
  * /api/holdings/counts, on the LAN only, with a strong ETag.
  */
 
@@ -21,14 +22,15 @@ interface Counts { quotes: number; notes: number; verified: number }
 interface Ids { work_id: number; former_work_ids?: number[] }
 export type HoldingsWork =
   | (Ids & { match: "zotero"; zotero: { library: string; key: string }; citekey: string | null } & Counts)
-  | (Ids & { match: "unmatched" | "ambiguous"; candidates?: string[]; title: string; authors: string[]; year: string | null } & Counts);
+  | (Ids & { match: "unmatched" | "ambiguous"; candidates?: string[]; calibre_uuid?: string; title: string; authors: string[]; year: string | null } & Counts);
 
 /** The feed's body. Candidates are items in the primary library, the one the import matches works against. */
 export function holdingsCounts(db: DB, library: string | null = firstLibrary(db)): { version: number; works: HoldingsWork[] } {
   const rows = db.prepare(`
     SELECT w.id, w.match, w.title, w.authors, w.year, w.zotero_library, w.zotero_key, w.candidates, z.data,
       SUM(q.kind = 'quote') AS quotes, SUM(q.kind = 'note') AS notes, SUM(q.kind = 'quote' AND q.status = 'verified') AS verified,
-      (SELECT json_group_array(CAST(o.ref AS INTEGER)) FROM work_origins o WHERE o.kind = 'work' AND o.work_id = w.id) AS former
+      (SELECT json_group_array(CAST(o.ref AS INTEGER)) FROM work_origins o WHERE o.kind = 'work' AND o.work_id = w.id) AS former,
+      (SELECT o.ref FROM work_origins o WHERE o.kind = 'calibre' AND o.work_id = w.id LIMIT 1) AS calibre_uuid
     FROM works w JOIN quotes q ON q.work_id = w.id AND q.status != 'unparsed'
     LEFT JOIN zotero_items z ON z.library = w.zotero_library AND z.key = w.zotero_key
     GROUP BY w.id ORDER BY w.zotero_library IS NULL, w.zotero_library, w.zotero_key, w.id`).all() as Record<string, unknown>[];
@@ -43,6 +45,7 @@ export function holdingsCounts(db: DB, library: string | null = firstLibrary(db)
     return {
       ...ids, match: w.match as "unmatched" | "ambiguous",
       ...(w.match === "ambiguous" ? { candidates: candidates.map((key) => (library ? `${library}/${key}` : key)) } : {}),
+      ...(w.calibre_uuid ? { calibre_uuid: w.calibre_uuid as string } : {}),
       title: w.title as string, authors: json<string[]>(w.authors as string, []), year: (w.year as string) ?? null, ...counts,
     };
   });
