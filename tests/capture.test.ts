@@ -25,6 +25,7 @@ class FakeCorpus implements CorpusClient {
   books = new Map<string, { book: Book; text: string | null }>([
     ["zotero:users/1/MOBB0001", { book: mobbingBook, text: PAGE }], ["main:42", { book: mobbingBook, text: PAGE }],
     [mobbingBook.calibre_uuid, { book: mobbingBook, text: PAGE }], ["main:7", { book: unfiledBook, text: "Work is a story we tell ourselves." }],
+    [unfiledBook.calibre_uuid, { book: unfiledBook, text: "Work is a story we tell ourselves." }],
   ]);
   anchors = new Map<number, Record<string, unknown>>();
   verified: { book: string; text: string; page?: number }[] = [];
@@ -126,12 +127,11 @@ describe("add_quote", () => {
     corpus.verify = async () => {
       throw new CorpusError(409, "ambiguous", { error: "ambiguous", books: [mobbingBook, { ...mobbingBook, book_id: "main:43", year: 2005 }] });
     };
-    await rejects(addQuote(db, { work: "davenport1999mobbing", text: "Mobbing is an emotional assault" }, options()), /main:42.*main:43/);
+    await rejects(addQuote(db, { work: "davenport1999mobbing", text: "It begins when an individual" }, options()), /main:42.*main:43/);
   });
 
   it("files a Calibre book not in Zotero as an unmatched work, once", async () => {
     const a = saved(await addQuote(db, { work: "main:7", text: "Work is a story" }, options()));
-    corpus.books.set(unfiledBook.calibre_uuid, corpus.books.get("main:7")!);
     const b = saved(await addQuote(db, { work: unfiledBook.calibre_uuid, text: "a story we tell ourselves" }, options()));
     expect(a.work?.title).toBe("An Unfiled Ebook");
     expect(b.work?.id).toBe(a.work?.id);
@@ -159,6 +159,35 @@ describe("add_quote", () => {
     expect(await retryAnchors(db, corpus)).toEqual({ tried: 1, stored: 1 });
     expect(corpus.anchors.has(id)).toBe(true);
     expect(searchQuotes(db, { flag: "anchor_missing" as never, status: "any" }).total).toBe(0);
+  });
+
+  it("checks a Calibre book's work against the book again, by quote:<id> or its UUID, and without corpus-mcp saves it transcribed", async () => {
+    const work = saved(await addQuote(db, { work: "main:7", text: "Work is a story" }, options())).work!.id;
+    const again = await addQuote(db, { work: `quote:${work}`, text: "we tell ourselves", page: "12-13" }, options());
+    expect(again).toMatchObject({ status: "verified", quote: { work: { id: work } } });
+    expect(corpus.verified.at(-1)).toEqual({ book: unfiledBook.calibre_uuid, text: "we tell ourselves", page: 12 });
+    const off = await addQuote(db, { work: unfiledBook.calibre_uuid, text: "Typed while corpus-mcp was off." }, { corpus: null, primary: PRIMARY });
+    expect(off).toMatchObject({ status: "transcribed", quote: { work: { id: work } } });
+    await rejects(addQuote(db, { work: "main:7", text: "Typed while corpus-mcp was off." }, { corpus: null, primary: PRIMARY }), /find_work/);
+  });
+
+  it("returns the saved quote for a retry when corpus-mcp is down, or when two retries race", async () => {
+    const first = saved(await addQuote(db, { work: "davenport1999mobbing", text: "the target of disrespectful behavior" }, options()));
+    corpus.verify = async () => {
+      throw new CorpusError(0, "unreachable");
+    };
+    expect(await addQuote(db, { work: "davenport1999mobbing", text: "The target of disrespectful behavior" }, options())).toMatchObject({ saved: false, quote: { id: first.id } });
+    corpus = new FakeCorpus();
+    const [a, b] = await Promise.all([1, 2].map(() => addQuote(db, { work: "main:42", text: "an individual becomes", request_id: "race" }, options())));
+    expect([a.saved, b.saved].sort()).toEqual([false, true]);
+    expect(saved(a).id).toBe(saved(b).id);
+  });
+
+  it("verifies a stale anchor again only once", async () => {
+    corpus.anchorErrors = [1, 2].map(() => new CorpusError(409, "stale-anchor", { error: "stale-anchor" }));
+    const r = await addQuote(db, { work: "main:42", text: "disrespectful behavior" }, options());
+    expect(r).toMatchObject({ anchored: false, quote: { flags: ["anchor_missing"] } });
+    expect(corpus.verified.length).toBe(2);
   });
 
   it("refuses text over the limit, and works it can't find", async () => {

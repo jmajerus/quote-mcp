@@ -115,10 +115,20 @@ function item(db: DB, library: string, key: string): Item | undefined {
   return row && { library, key, data: JSON.parse(row.data) };
 }
 
+/** The store's work for a Zotero item, if it has one. */
+function knownZoteroWork(db: DB, library: string, key: string): number | undefined {
+  return db.prepare(`SELECT id FROM works WHERE zotero_library = ? AND zotero_key = ?
+    UNION ALL SELECT work_id FROM work_origins WHERE kind = 'zotero' AND ref = ? LIMIT 1`).pluck().get(library, key, `${library}:${key}`) as number | undefined;
+}
+
+/** The store's work for a Calibre book not in Zotero, if add_quote made one. */
+function knownCalibreWork(db: DB, uuid: string): number | undefined {
+  return db.prepare("SELECT work_id FROM work_origins WHERE kind = 'calibre' AND ref = ?").pluck().get(uuid) as number | undefined;
+}
+
 /** The work for a Zotero item, made from the mirror when the store has none yet. */
 function zoteroWork(db: DB, library: string, key: string): number {
-  const id = db.prepare(`SELECT id FROM works WHERE zotero_library = ? AND zotero_key = ?
-    UNION ALL SELECT work_id FROM work_origins WHERE kind = 'zotero' AND ref = ? LIMIT 1`).pluck().get(library, key, `${library}:${key}`) as number | undefined;
+  const id = knownZoteroWork(db, library, key);
   if (id !== undefined) return id;
   const it = item(db, library, key);
   if (!it) throw new ToolError(`zotero:${library}/${key} isn't in the Zotero mirror yet; the next import (every 30 minutes) brings it in.`);
@@ -132,7 +142,7 @@ function zoteroWork(db: DB, library: string, key: string): number {
 
 /** The work for a Calibre book not in Zotero: unmatched, found again by its Calibre UUID. */
 function calibreWork(db: DB, book: Book): number {
-  const id = db.prepare("SELECT work_id FROM work_origins WHERE kind = 'calibre' AND ref = ?").pluck().get(book.calibre_uuid) as number | undefined;
+  const id = knownCalibreWork(db, book.calibre_uuid);
   if (id !== undefined) return id;
   const stamp = now();
   const work = db.prepare(`INSERT INTO works (title, authors, year, item_type, match, created_at, updated_at) VALUES (?, ?, ?, 'book', 'unmatched', ?, ?) RETURNING id`)
@@ -149,7 +159,14 @@ function bookWork(db: DB, book: Book): number {
  * What a work key names here, and what to ask corpus-mcp for. Keys: quote:<work id>, zotero:<library>/<key>,
  * a citekey or Zotero item key, or a Calibre book (main:42, or its UUID), which only corpus-mcp knows.
  */
-interface Target { work?: () => number; book: string | null; label: string }
+interface Target {
+  /** The work, made when the store has none yet; absent for a Calibre book only corpus-mcp can place. */
+  work?: () => number;
+  /** The work the store already has, looked up without making one. */
+  known?: number;
+  book: string | null;
+  label: string;
+}
 
 function target(db: DB, key: string, primary: string | null): Target {
   const k = key.trim();
@@ -159,18 +176,24 @@ function target(db: DB, key: string, primary: string | null): Target {
       .pluck().get(Number(quote[1]), quote[1]) as number | undefined;
     if (id === undefined) throw new ToolError(`No work ${k}.`);
     const w = db.prepare("SELECT match, zotero_library, zotero_key FROM works WHERE id = ?").get(id) as { match: string; zotero_library: string | null; zotero_key: string | null };
-    if (w.match !== "zotero" || !w.zotero_library || !w.zotero_key) return { work: () => id, book: null, label: k };
-    return { work: () => id, book: bookKey(db, w.zotero_library, w.zotero_key, primary), label: k };
+    if (w.match === "zotero" && w.zotero_library && w.zotero_key) return { work: () => id, known: id, book: bookKey(db, w.zotero_library, w.zotero_key, primary), label: k };
+    // A work add_quote made for a Calibre book not in Zotero is checked against that book again.
+    const uuid = db.prepare("SELECT ref FROM work_origins WHERE kind = 'calibre' AND work_id = ? LIMIT 1").pluck().get(id) as string | undefined;
+    return { work: () => id, known: id, book: uuid ?? null, label: k };
   }
   const zotero = /^zotero:((?:users|groups)\/\d+)\/([A-Z0-9]{8})$/i.exec(k);
   if (zotero) {
     const [library, itemKey] = [zotero[1], zotero[2].toUpperCase()];
-    return { work: () => zoteroWork(db, library, itemKey), book: bookKey(db, library, itemKey, primary), label: k };
+    return { work: () => zoteroWork(db, library, itemKey), known: knownZoteroWork(db, library, itemKey), book: bookKey(db, library, itemKey, primary), label: k };
   }
   const it = itemByKey(db, k, primary);
-  if (it) return { work: () => zoteroWork(db, it.library, it.key), book: bookKey(db, it.library, it.key, primary), label: k };
-  // A Calibre book id or UUID: corpus-mcp says which work it is.
-  if (/^[\w-]+:\d+$/.test(k) || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(k)) return { book: k, label: k };
+  if (it) return { work: () => zoteroWork(db, it.library, it.key), known: knownZoteroWork(db, it.library, it.key), book: bookKey(db, it.library, it.key, primary), label: k };
+  // A Calibre book's UUID names the work add_quote made for it, if any; otherwise, and for a book id, corpus-mcp says which work it is.
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(k)) {
+    const known = knownCalibreWork(db, k.toLowerCase()) ?? knownCalibreWork(db, k);
+    return { ...(known !== undefined ? { work: () => known, known } : {}), book: k, label: k };
+  }
+  if (/^[\w-]+:\d+$/.test(k)) return { book: k, label: k };
   throw new ToolError(`No work for "${k}": pass a key from find_work (quote:<id> or zotero:<library>/<key>), a citekey, a Zotero item key, or a Calibre book id.`);
 }
 
@@ -204,7 +227,11 @@ function conceptOf(db: DB, tag: string): number | null {
     ?? rows.find((c) => c.slug === t)?.id ?? null;
 }
 
-const pageOf = (page: string | undefined) => (page && /^\d+$/.test(page.trim()) ? Number(page.trim()) : undefined);
+/** Where corpus-mcp starts looking: the page, or the first of a range ("211-212"). */
+const pageOf = (page: string | undefined) => {
+  const m = /^\s*(\d+)\s*(?:[-–]\s*\d+\s*)?$/.exec(page ?? "");
+  return m && Number(m[1]) >= 1 ? Number(m[1]) : undefined;
+};
 
 interface Plan {
   status: "verified" | "transcribed"; work: number; text: string; locator: string | null; section: string | null;
@@ -220,17 +247,19 @@ export async function addQuote(db: DB, args: AddQuoteArgs, o: AddQuoteOptions): 
   if (!text) throw new ToolError("The quote has no text.");
   if (text.length > MAX_QUOTE) throw new ToolError(`The quote is ${text.length} characters; the limit is ${MAX_QUOTE}. Quote less, or save two.`);
   const requestId = args.request_id?.trim() || randomUUID();
-  const earlier = db.prepare("SELECT quote_id FROM quote_origins WHERE kind = ? AND ref = ?").pluck().get(ORIGIN, requestId) as number | undefined;
-  if (earlier !== undefined) return { saved: false, reason: "This request_id already saved this quote.", quote: getQuote(db, earlier) };
+  const earlier = alreadySaved(db, requestId);
+  if (earlier) return earlier;
 
   const primary = o.primary ?? null;
   const t = target(db, args.work, primary);
+  // A retry of words already saved returns them without asking corpus-mcp again.
+  const same = t.known !== undefined ? alreadySaved(db, requestId, t.known, text) : undefined;
+  if (same) return same;
   const plan = await planQuote(db, t, text, args.page, o.corpus);
 
-  const existing = db.prepare("SELECT id FROM quotes WHERE work_id = ? AND text_key = ? LIMIT 1").pluck().get(plan.work, quoteKey(plan.text)) as number | undefined;
-  if (existing !== undefined) return { saved: false, reason: "The work already has this quote.", quote: getQuote(db, existing) };
-
-  const id = save(db, args, plan, requestId, o.actor ?? ORIGIN);
+  const saving = save(db, args, plan, requestId, o.actor ?? ORIGIN);
+  if (typeof saving !== "number") return saving;
+  const id = saving;
   let anchored = false;
   const warnings: string[] = [];
   if (plan.anchor && o.corpus) {
@@ -242,11 +271,20 @@ export async function addQuote(db: DB, args: AddQuoteArgs, o: AddQuoteOptions): 
   return { saved: true, status: plan.status, anchored, warnings, quote: getQuote(db, id) };
 }
 
+/** The quote this request id, or these words for this work, already saved, as add_quote returns it. */
+function alreadySaved(db: DB, requestId: string, work?: number, text?: string): Record<string, unknown> | undefined {
+  const byRequest = db.prepare("SELECT quote_id FROM quote_origins WHERE kind = ? AND ref = ?").pluck().get(ORIGIN, requestId) as number | undefined;
+  if (byRequest !== undefined) return { saved: false, reason: "This request_id already saved this quote.", quote: getQuote(db, byRequest) };
+  if (work === undefined || text === undefined) return undefined;
+  const byWords = db.prepare("SELECT id FROM quotes WHERE work_id = ? AND text_key = ? LIMIT 1").pluck().get(work, quoteKey(text)) as number | undefined;
+  return byWords !== undefined ? { saved: false, reason: "The work already has this quote.", quote: getQuote(db, byWords) } : undefined;
+}
+
 async function planQuote(db: DB, t: Target, text: string, page: string | undefined, corpus: CorpusClient | null): Promise<Plan> {
   const transcribed = (work: number, note: string, book: Book | null = null): Plan =>
     ({ status: "transcribed", work, text, locator: page?.trim() || null, section: null, anchor: null, book, exact: true, note });
   if (!t.book || !corpus) {
-    if (!t.work) throw new ToolError(`${t.label} is a Calibre book, and corpus-mcp is off here (CORPUS_BASE).`);
+    if (!t.work) throw new ToolError(`${t.label} is a Calibre book with no work here yet, and corpus-mcp, which would say which work it is, is off (CORPUS_BASE). Pass the work's key from find_work instead.`);
     return transcribed(t.work(), t.book ? "Saved transcribed: corpus-mcp is off here, so the words weren't checked against the book." : "Saved transcribed: the work has no Calibre book to check against.");
   }
   let v: Verified;
@@ -277,13 +315,16 @@ async function planQuote(db: DB, t: Target, text: string, page: string | undefin
   return { status: "verified", work, text: v.text, locator, section: v.locator ? null : v.section, anchor: v.anchor, book: v.book, exact: v.exact, note: "" };
 }
 
-function save(db: DB, args: AddQuoteArgs, plan: Plan, requestId: string, actor: string): number {
+/** Saves the quote, or returns the one a concurrent call with this request id, or these words, saved first. */
+function save(db: DB, args: AddQuoteArgs, plan: Plan, requestId: string, actor: string): number | Record<string, unknown> {
   const stamp = now();
   const flags = [...(plan.locator ? [] : ["no_locator"]), ...(plan.anchor ? [ANCHOR_MISSING] : [])];
   // A chapter of an EPUB has no page: its section is the place, kept in the comment.
   const comment = [plan.section ? `Section: ${plan.section}` : null, args.comment?.trim() || null].filter(Boolean).join("\n\n") || null;
   const raw = JSON.stringify({ request: { ...args, request_id: requestId }, ...(plan.book ? { book: plan.book } : {}), ...(plan.anchor ? { anchor: plan.anchor } : {}) });
-  return db.transaction(() => {
+  return db.transaction((): number | Record<string, unknown> => {
+    const earlier = alreadySaved(db, requestId, plan.work, plan.text);
+    if (earlier) return earlier;
     const id = db.prepare(`INSERT INTO quotes (kind, work_id, text, text_key, locator_kind, locator, comment, status, grade, flags, created_at, created_by, updated_at, updated_by)
       VALUES ('quote', ?, ?, ?, ?, ?, ?, ?, 'A', ?, ?, ?, ?, ?) RETURNING id`).pluck()
       .get(plan.work, plan.text, quoteKey(plan.text), plan.locator ? "page" : "none", plan.locator, comment, plan.status, JSON.stringify(flags), stamp, actor, stamp, actor) as number;
@@ -298,9 +339,13 @@ function save(db: DB, args: AddQuoteArgs, plan: Plan, requestId: string, actor: 
   })();
 }
 
-/** Posts a quote's anchor, verifying again once if corpus-mcp says it's stale; clears anchor_missing when stored. */
+/**
+ * Posts a quote's anchor, trying a failed connection again and verifying again once if corpus-mcp says the
+ * anchor is stale; clears anchor_missing when stored.
+ */
 async function postAnchor(db: DB, corpus: CorpusClient, id: number, anchor: Record<string, unknown>, page?: string): Promise<boolean> {
   let current = anchor;
+  let reverified = false;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       await corpus.anchor(id, current);
@@ -310,6 +355,8 @@ async function postAnchor(db: DB, corpus: CorpusClient, id: number, anchor: Reco
     } catch (error) {
       if (!(error instanceof CorpusError)) throw error;
       if (error.code === "stale-anchor") {
+        if (reverified) return false;
+        reverified = true;
         const text = db.prepare("SELECT text FROM quotes WHERE id = ?").pluck().get(id) as string;
         try {
           const v = await corpus.verify({ book: String(current.calibre_uuid), text, ...(pageOf(page) ? { page: pageOf(page) } : {}) });

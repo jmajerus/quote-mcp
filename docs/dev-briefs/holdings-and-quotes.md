@@ -98,7 +98,9 @@ new quotes landing in corpus-mcp soonest:
      again once. If corpus-mcp can't take it, the quote is flagged
      `anchor_missing`, and each import posts it again.
    - A retry with the same `request_id`, or the same words for the same
-     work, returns the quote already saved.
+     work, returns the quote already saved, before asking corpus-mcp, so a
+     retry works while corpus-mcp is down. `quote:<id>` for a work made for
+     a Calibre book is checked against that book again.
    - The server's store stays read-only; `add_quote` writes through its
      own connection. `CORPUS_BASE` (default
      `http://corpus-mcp.localdomain:8000`; `off` saves every quote
