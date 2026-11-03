@@ -373,7 +373,8 @@ highlighting quotes from the anchors.
 
 holdings-mcp (2026-11-02) orders this work and adds a counts feed for its
 `find_work`: see [docs/dev-briefs/holdings-and-quotes.md](docs/dev-briefs/holdings-and-quotes.md).
-The feed is built; `add_quote` on corpus-mcp's verify endpoint is next.
+The feed and `add_quote` (on corpus-mcp's verify and anchors endpoints) are
+built; next, the `cited-article` skill switches to them.
 
 ## Concept tags
 

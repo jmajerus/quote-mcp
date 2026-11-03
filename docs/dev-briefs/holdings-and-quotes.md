@@ -1,7 +1,7 @@
 # holdings-mcp, and corpus-mcp's quotes
 
 **Status: proposed 2026-11-02, copied from holdings-mcp. §1 is built
-(2026-11-02, `src/holdings.ts`); §2.1 is next; the rest waits. The plan of
+(2026-11-02, `src/holdings.ts`), and §2.1 (`src/capture.ts`); the rest waits. The plan of
 record is holdings-mcp's [PLAN.md](https://github.com/jmajerus/holdings-mcp/blob/main/PLAN.md).**
 
 A review of corpus-mcp, quote-mcp, and terminology-mcp found that an agent
@@ -79,6 +79,37 @@ new quotes landing in corpus-mcp soonest:
    it returns corpus-mcp's closest passages and saves nothing, as
    `save_quote` does now. A work with no Calibre book is saved
    `transcribed`, as planned.
+   As built, on the contract agreed with corpus-mcp (2026-11-02):
+
+   - `add_quote(work, text, page?, comment?, tags?, request_id?)`. `work`
+     is any key: `zotero:<library>/<key>`, `quote:<id>`, a citekey, a
+     Zotero item key, or a Calibre book id or UUID.
+   - `POST /api/verify` with `book` as `zotero:<library>/<key>` (or the
+     citekey, for an item outside the library corpus-mcp mirrors). The
+     answers carry the book as its books-feed entry. A match saves the
+     book's wording, and the page from `locator` (an EPUB's section goes in
+     the comment); `exact: false` is noted in the quote's history.
+     `404 no-book` or `no-text` saves it `transcribed`; `409 ambiguous`
+     saves nothing and lists the books. A Calibre book not in Zotero
+     becomes an `unmatched` work, found again by its UUID (`work_origins`
+     of kind `calibre`). The counts feed sends its `calibre_uuid`, so
+     holdings-mcp joins it to the book's work.
+   - `POST /api/anchors` after the save. On `409 stale-anchor` it verifies
+     again once. If corpus-mcp can't take it, the quote is flagged
+     `anchor_missing`, and each import posts it again.
+   - A retry with the same `request_id`, or the same words for the same
+     work, returns the quote already saved, before asking corpus-mcp, so a
+     retry works while corpus-mcp is down. `quote:<id>` for a work made for
+     a Calibre book is checked against that book again.
+   - The server's store stays read-only; `add_quote` writes through its
+     own connection. `CORPUS_BASE` (default
+     `http://corpus-mcp.localdomain:8000`; `off` saves every quote
+     transcribed).
+   - The import's OCR check leaves verified quotes alone.
+   - Not yet: `DELETE /api/anchors/<id>` when a quote is deleted or moved
+     (quote-mcp has no tool for either yet), and following
+     `/api/anchors/changes` (§2.4).
+
 2. **The `cited-article` skill** (in corpus-mcp's `skills/`) switches to
    `add_quote` and this repo's `cite_quote`. `cite_quote` needs what the
    skill uses from corpus-mcp's: the quote as reflowed prose, and the BibTeX

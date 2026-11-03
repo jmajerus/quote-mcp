@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:
 import Database from "better-sqlite3";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { corpusClient, corpusConfig, retryAnchors, storeWriter } from "./capture.js";
 import { SCHEMA_VERSION, openDb } from "./db.js";
 import { openReadOnly } from "./queries.js";
 import { servePublic, serveHttp, serveStdio } from "./server.js";
@@ -86,8 +87,23 @@ async function importCommand() {
     `Skipped: ${Object.entries(s.skipped).map(([k, n]) => `${n} ${k}`).join(", ") || "nothing"}.`,
     `Tags not in a concept scheme: ${s.unresolvedTags.length}${s.unresolvedTags.length ? ` (${s.unresolvedTags.slice(0, 25).map(([t, n]) => `${t} ${n}`).join(", ")}${s.unresolvedTags.length > 25 ? ", …" : ""})` : ""}.`,
   ].join("\n"));
+  const corpus = corpusConfig();
+  if (corpus) {
+    try {
+      const a = await retryAnchors(db, corpusClient(corpus));
+      if (a.tried) console.log(`Anchors posted again to corpus-mcp: ${a.stored} of ${a.tried}.`);
+    } catch (error) {
+      say(`Anchors not posted again: ${(error as Error).message}\n`);
+    }
+  }
   const publish = snapshotOptions();
   if (publish) console.log(snapshotLine(buildSnapshot(db, publish, snapshotFile())));
+}
+
+/** add_quote's writes: a writable connection to the store, corpus-mcp to check quotes against, and the primary library. */
+function capture() {
+  const corpus = corpusConfig();
+  return { writer: storeWriter(process.env.QUOTE_DB ?? "data/quotes.db"), corpus: corpus ? corpusClient(corpus) : null, primary: process.env.QUOTE_ZOTERO_LIBRARY || null };
 }
 
 function exportCommand() {
@@ -221,7 +237,7 @@ async function serveCommand() {
     }
   };
   const terms = startTermSync({ file: process.env.QUOTE_DB ?? "data/quotes.db", sets: conceptSets, onApplied: rebuild });
-  const options = { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010), mapDir: process.env.QUOTE_MAP_DIR || undefined, sets: conceptSets, snapshot, replica, terms };
+  const options = { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010), mapDir: process.env.QUOTE_MAP_DIR || undefined, sets: conceptSets, snapshot, replica, terms, capture: capture() };
   await serveHttp(openReadOnly(), options);
   if (process.env.QUOTE_PUBLIC_PORT) await servePublic({ ...options, port: Number(process.env.QUOTE_PUBLIC_PORT) });
 }
@@ -316,7 +332,7 @@ async function migrateCommand() {
 const commands: Record<string, () => unknown> = {
   import: importCommand, migrate: migrateCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, sets: setsCommand, publish: publishCommand, config: configCommand, serve: serveCommand,
   terms: termsCommand, propose: proposeCommand,
-  stdio: () => serveStdio(openReadOnly(), sets()),
+  stdio: () => serveStdio(openReadOnly(), sets(), capture()),
 };
 const command = commands[process.argv[2] ?? ""];
 if (!command) {
