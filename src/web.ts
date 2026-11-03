@@ -1,5 +1,6 @@
 import type { DB } from "./db.js";
 import { editQuote } from "./edits.js";
+import { emphasisHtml } from "./public.js";
 import {
   type Proposal, QUEUES, type Queue, ToolError, type WorkSummary, citeQuote, getConcept, getQuote, listConcepts, overview, searchQuotes, worklist,
 } from "./queries.js";
@@ -54,7 +55,7 @@ type Listed = ReturnType<typeof searchQuotes>["quotes"][number];
 
 function quoteCard(q: Listed): string {
   const words = q.kind === "note" ? q.note ?? "" : q.text;
-  const text = q.snippet ? esc(q.snippet).replace(/«/g, "<mark>").replace(/»/g, "</mark>") : esc(words.length > 420 ? `${words.slice(0, 420)}…` : words);
+  const text = q.snippet ? emphasisHtml(q.snippet).replace(/«/g, "<mark>").replace(/»/g, "</mark>") : emphasisHtml(words.length > 420 ? `${words.slice(0, 420)}…` : words);
   return `<div class="result"><p class="text"><a href="/admin/quotes/${q.id}">#${q.id}</a> ${q.kind === "note" ? '<span class="kind">note</span>' : ""}${text}</p>
 <div class="meta">${workLine(q.work, q.attribution)}${q.locator ? ` · ${esc(q.locator)}` : ""}${q.chapter_author ? ` · by ${esc(q.chapter_author)}` : ""}</div>
 <div>${tagChips(q.tags)}${q.flags.map((f) => `<span class="flag">${esc(f)}</span>`).join("")}</div></div>`;
@@ -130,7 +131,7 @@ function quotePage(db: DB, id: number): string {
   const note = q.kind === "note";
   const name = `${note ? "Note" : "Quote"} ${id}`;
   return page(name, "quotes", `<h1>${name}</h1><p class="sub">${note ? "your own words, no quoted text" : `${esc(q.status)} · grade ${esc(q.grade)}`}${q.edited ? " · edited" : ""} · <a href="/admin/quotes/${id}/edit">Edit</a></p>
-${note ? (q.note ? `<div class="words">${esc(q.note)}</div>` : '<p class="note">Tags only.</p>') : `<blockquote>${esc(q.text)}</blockquote>`}
+${note ? (q.note ? `<div class="words">${esc(q.note)}</div>` : '<p class="note">Tags only.</p>') : `<blockquote>${emphasisHtml(q.text)}</blockquote>`}
 <div class="meta">${workLine(q.work, q.attribution)}${q.locator ? ` · ${esc(q.locator)}` : ""}</div>
 <p>${tagChips(q.tags)}${q.flags.map((f) => `<span class="flag">${esc(f)}</span>`).join("")}</p>
 <h2>Details</h2><div class="scroll"><table>${rows([
@@ -208,7 +209,7 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
 <form class="edit" method="post" action="/admin/quotes/${id}/edit">
 <input type="hidden" name="updated_at" value="${esc(sent?.get("updated_at") ?? (q.updated_at as string))}">
 ${note ? "" : `<label for="text">Text</label><textarea id="text" name="text">${value("text", q.text)}</textarea>
-${locked ? '<p class="note">Checked against its Calibre book: the words are the book\'s. Only spacing and line breaks can change, such as joining lines the book broke mid-sentence, and a misprint can be marked [sic].</p>' : ""}`}
+${locked ? '<p class="note">Checked against its Calibre book: the words are the book\'s. You can add your own marks: [brackets] for a clarification or [sic], *asterisks* around words you italicise (add [emphasis added]), and … for words left out. Spacing and line breaks can change too. Anything else that changes the words is refused.</p>' : ""}`}
 <label for="locator">Page or location</label><input id="locator" name="locator" value="${value("locator", q.locator)}" placeholder="211, 211-212, or Kindle loc. 208">
 <label for="chapter_author">Chapter author</label><input id="chapter_author" name="chapter_author" value="${value("chapter_author", q.chapter_author)}" placeholder="In an edited volume">
 <label for="comment">${note ? "Note" : "Comment"}</label><textarea id="comment" name="comment">${value("comment", q.comment)}</textarea>

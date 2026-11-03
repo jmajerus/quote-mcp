@@ -35,9 +35,18 @@ place, its tags (concepts as chips; tags that aren't concepts are dashed), and i
 `Kindle loc. 208`), chapter author, and comment (a note's words), with a line for the history saying why.
 Saving is your edit: it's recorded in the history under your Access email (`lan` on the LAN), and the
 quote is marked edited, so imports leave it alone from then on. The page and chapter-author flags follow
-what you set. A quote checked against its Calibre book keeps the book's words: only their spacing and line breaks
-can change (joining lines an EPUB broke mid-sentence, say), and a misprint can be marked "[sic]"; any other
-change to its text is refused. If the quote changed after you opened the form, the save is refused and the form shows it as it
+what you set. A quote checked against its Calibre book keeps the book's words, and you add your own marks to them:
+
+- `[brackets]` for anything you insert: a clarification (`he [Smith]`), `[sic]` after a misprint, or
+  `[emphasis added]`;
+- `*asterisks*` around words you italicise, shown in italics here and on the public site, and as Markdown
+  emphasis in a citation;
+- `…` (or `...`, `[…]`) where words are left out;
+- spacing and line breaks, such as joining lines an EPUB broke mid-sentence.
+
+Taking out the brackets and asterisks has to leave the book's words, in order, with any omitted ones where
+the ellipses are, so a changed or replaced word (`[Smith]` in place of `he`) is refused. The check is
+against the passage as the book has it, so words you left out can be put back later. If the quote changed after you opened the form, the save is refused and the form shows it as it
 is now. A form posted from anywhere but these pages is refused.
 
 ## Concepts

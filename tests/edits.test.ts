@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { CorpusClient } from "../src/capture.js";
 import { ToolError } from "../src/common.js";
 import type { DB } from "../src/db.js";
-import { deleteQuote, editQuote, proposeFix, reviewProposal, updateQuote } from "../src/edits.js";
+import { deleteQuote, editQuote, fromBook, proposeFix, reviewProposal, updateQuote } from "../src/edits.js";
 import { serveHttp } from "../src/server.js";
 import { runImport } from "../src/import.js";
 import { getQuote, overview, searchQuotes, worklist } from "../src/queries.js";
@@ -121,6 +121,9 @@ describe("proposals", () => {
       expect(html).toContain("Checked &lt;the&gt; book");
     }
     expect(renderAdmin(db, "/admin/worklists", new URLSearchParams())).toContain("Proposed changes to review");
+    editQuote(db, { id, text: "Everyone deserves *dignity* [emphasis added]." }, "jo@example.org");
+    expect(renderAdmin(db, `/admin/quotes/${id}`, new URLSearchParams())).toContain("Everyone deserves <em>dignity</em> [emphasis added].");
+    expect(renderAdmin(db, "/admin/quotes", new URLSearchParams({ q: "dignity" }))).toContain("<em><mark>dignity</mark></em>");
   });
 
   it("rejects, refuses a stale accept, and keeps a verified quote's text the book's", () => {
@@ -198,6 +201,15 @@ describe("delete_quote", () => {
 });
 
 describe("editing on the admin pages", () => {
+  it("checks against the newest anchor's passage", () => {
+    const id = byText("Everyone deserves dignity");
+    db.prepare("UPDATE quotes SET status = 'verified' WHERE id = ?").run(id);
+    db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, raw, imported_at) VALUES ('agent', 'a', ?, ?, '2026-01-01')").run(id, JSON.stringify({ anchor: { text: "An old wording." } }));
+    db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, raw, imported_at) VALUES ('corpus', 'c', ?, ?, '2026-02-01')").run(id, JSON.stringify({ anchor: { text: "Everyone deserves dignity." } }));
+    expect(editQuote(db, { id, text: "Everyone deserves *dignity* [emphasis added]." }, "jo@example.org").changed).toEqual(["text"]);
+    fails(() => editQuote(db, { id, text: "An old wording." }, "jo@example.org"), /Anything else that changes the words is refused/);
+  });
+
   it("fixes a typo as a person's edit, with history, and leaves a verified quote's text alone", () => {
     const id = byText("Abuse at work rarely");
     const q = getQuote(db, id);
@@ -209,11 +221,16 @@ describe("editing on the admin pages", () => {
     expect(editQuote(db, { id, text: "Abuse at work rarely announces itself!" }, "jo@example.org").changed).toEqual([]);
 
     db.prepare("UPDATE quotes SET status = 'verified', text = 'Abuse at work\n\nrarely announces\nitself!' WHERE id = ?").run(id);
+    // As add_quote keeps it: the passage corpus-mcp matched, with its anchor.
+    db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, raw, imported_at) VALUES ('agent', 'r', ?, ?, 'x')").run(id, JSON.stringify({ anchor: { text: "Abuse at work\n\nrarely announces\nitself!" } }));
     fails(() => editQuote(db, { id, text: "Different words" }, "jo@example.org"), /words are the book's/);
     expect(editQuote(db, { id, text: "Abuse at work rarely announces itself!" }, "jo@example.org")).toMatchObject({ changed: ["text"], quote: { text: "Abuse at work rarely announces itself!", status: "verified" } });
     expect(editQuote(db, { id, text: "Abuse at work rarely [sic] announces itself!" }, "jo@example.org").quote.text).toBe("Abuse at work rarely [sic] announces itself!");
-    fails(() => editQuote(db, { id, text: "Abuse at work [sic] seldom announces itself!" }, "jo@example.org"), /marked \[sic\]/);
-    fails(() => editQuote(db, { id, text: "Abuse at work [usually] announces itself!" }, "jo@example.org"), /marked \[sic\]/);
+    fails(() => editQuote(db, { id, text: "Abuse at work [sic] seldom announces itself!" }, "jo@example.org"), /Anything else that changes the words is refused/);
+    fails(() => editQuote(db, { id, text: "Abuse at work [usually] announces itself!" }, "jo@example.org"), /Anything else that changes the words is refused/);
+    // Checked against the book's words, not the last edit: words cut with an ellipsis can be put back.
+    editQuote(db, { id, text: "Abuse at work … announces *itself* [emphasis added]!" }, "jo@example.org");
+    expect(editQuote(db, { id, text: "Abuse at work rarely announces itself!" }, "jo@example.org").changed).toEqual(["text"]);
     expect(editQuote(db, { id, text: "Abuse at work rarely announces itself!" }, "jo@example.org").quote.text).toBe("Abuse at work rarely announces itself!");
     expect(editQuote(db, { id, text: "Abuse at work rarely announces itself!", locator: "13" }, "jo@example.org").changed).toEqual(["locator"]);
   });
@@ -252,5 +269,34 @@ describe("editing on the admin pages", () => {
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+});
+
+describe("a reader's marks in a verified quote", () => {
+  const book = "I flatter myself that I understand all sorts of curiosity. Curiosity about\n\ndaily facts, about daily things, about daily men.";
+  it.each([
+    ["the same words, lines joined", "I flatter myself that I understand all sorts of curiosity. Curiosity about daily facts, about daily things, about daily men.", true],
+    ["[sic] and a clarification in brackets", "I flatter myself [Marlow speaks] that I understand all sorts [sic] of curiosity. Curiosity about daily facts, about daily things, about daily men.", true],
+    ["*emphasis* with [emphasis added]", "I flatter myself that I understand *all* sorts of curiosity [emphasis added]. Curiosity about daily facts, about daily things, about daily men.", true],
+    ["words left out with …", "I flatter myself … curiosity. Curiosity about daily facts … about daily men.", true],
+    ["words left out with [...]", "I flatter myself [...] about daily men.", true],
+    ["an ellipsis at the start", "… about daily things, about daily men.", true],
+    ["a changed word", "I flatter myself that I understand all kinds of curiosity. Curiosity about daily facts, about daily things, about daily men.", false],
+    ["a bracket replacing a word", "[Marlow] flatter[s] himself that I understand all sorts of curiosity. Curiosity about daily facts, about daily things, about daily men.", false],
+    ["words out of order around an ellipsis", "about daily men … I flatter myself", false],
+    ["a shortened quote without an ellipsis", "I flatter myself that I understand all sorts of curiosity.", false],
+    ["nothing but an ellipsis", "…", false],
+  ])("%s", (_, text, ok) => {
+    expect(fromBook(text, book)).toBe(ok);
+  });
+
+  it("keeps the book's own asterisks, and matches whole words beside an ellipsis", () => {
+    expect(fromBook("2 3", "2 * 3")).toBe(false);
+    expect(fromBook("2 * 3", "2 * 3")).toBe(true);
+    expect(fromBook("*2* * 3", "2 * 3")).toBe(true);
+    expect(fromBook("on … two", "one two")).toBe(false);
+    expect(fromBook("one … two", "one and two")).toBe(true);
+    expect(fromBook("ne … two", "one and two")).toBe(false);
+    expect(fromBook("I flatter myself … curiosity", book)).toBe(true);
   });
 });
