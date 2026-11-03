@@ -122,14 +122,32 @@ tar xzf /tmp/quote-mcp-${id}.tgz -C "$release"
 rm -f /tmp/quote-mcp-${id}.tgz
 cd "$release"
 npm ci --omit=dev --no-audit --no-fund --loglevel=error
-install -m 0644 deploy/quote-mcp.service deploy/quote-import.service deploy/quote-import.timer \\
-  deploy/quote-backup.service deploy/quote-backup.timer /etc/systemd/system/
-install -m 0755 deploy/quote-mcp /usr/local/bin/quote-mcp
+set -a; . /etc/quote-mcp/env; set +a
 previous=$(readlink /opt/quote-mcp/current || true)
 echo "previous=$previous"
+install_units() {
+  install -m 0644 "$1/deploy/quote-mcp.service" "$1/deploy/quote-import.service" "$1/deploy/quote-import.timer" \\
+    "$1/deploy/quote-backup.service" "$1/deploy/quote-backup.timer" /etc/systemd/system/
+  install -m 0755 "$1/deploy/quote-mcp" /usr/local/bin/quote-mcp
+  systemctl daemon-reload
+}
+# From the switch on, any failure puts the previous release (and its units) back. The store is left as it
+# is, even after a failed first import: it's primary data, and the import timer carries on from it.
+rollback() {
+  status=$?
+  [ "$status" -eq 0 ] && return
+  journalctl -u quote-mcp.service -n 20 --no-pager || true
+  if [ -n "$previous" ]; then
+    ln -sfn "$previous" /opt/quote-mcp/current
+    install_units "$previous" || true
+    systemctl restart quote-mcp.service || true
+    echo "rolled_back=$previous"
+  fi
+  exit "$status"
+}
+trap rollback EXIT
 ln -sfn "$release" /opt/quote-mcp/current.new && mv -T /opt/quote-mcp/current.new /opt/quote-mcp/current
-systemctl daemon-reload
-set -a; . /etc/quote-mcp/env; set +a
+install_units "$release"
 if [ ! -f "$QUOTE_DB" ]; then
   echo "No store yet: running the first import, the old site included."
   ${asQuote("import")}
@@ -146,15 +164,8 @@ for i in $(seq 1 20); do
   if curl -sf "http://127.0.0.1:$QUOTE_PORT/health"; then echo; echo "installed=${id}"; break; fi
   sleep 1
 done
-if ! curl -sf -o /dev/null "http://127.0.0.1:$QUOTE_PORT/health"; then
-  journalctl -u quote-mcp.service -n 20 --no-pager || true
-  if [ -n "$previous" ]; then
-    ln -sfn "$previous" /opt/quote-mcp/current
-    systemctl restart quote-mcp.service
-    echo "rolled_back=$previous"
-  fi
-  exit 1
-fi
+curl -sf -o /dev/null "http://127.0.0.1:$QUOTE_PORT/health"
+trap - EXIT
 ls -1dt /opt/quote-mcp/releases/* | tail -n +4 | xargs -r rm -rf
 `);
   await writeDeployed({ branch: git(["rev-parse", "--abbrev-ref", "HEAD"]), commit: git(["rev-parse", "HEAD"]), local: true, dirty: git(["status", "--porcelain"]) !== "" });
