@@ -77,7 +77,15 @@ export function corpusClient({ baseUrl, timeoutMs = 20_000, fetchImpl = fetch }:
     baseUrl,
     verify: (r) => request("POST", "/api/verify", r),
     anchor: (quoteId, anchor) => request("POST", "/api/anchors", { quote_id: quoteId, anchor }),
-    quotes: async () => ((await request("GET", "/api/quotes?limit=1000")) as { quotes: CorpusQuote[] }).quotes,
+    // corpus-mcp gives at most 200 a page; read on until total.
+    quotes: async () => {
+      const all: CorpusQuote[] = [];
+      for (;;) {
+        const page = (await request("GET", `/api/quotes?limit=200&offset=${all.length}`)) as { total: number; quotes: CorpusQuote[] };
+        all.push(...page.quotes);
+        if (!page.quotes.length || all.length >= page.total) return all;
+      }
+    },
     dropAnchor: async (quoteId) => {
       try {
         await request("DELETE", `/api/anchors/${quoteId}`);
