@@ -13,7 +13,8 @@ import { reflow } from "./text.js";
  *
  *   GET  /api/corpus/quotes?book=<calibre_uuid or book_id>
  *        → { book, quotes: [{ id, kind, text, prose, note?, comment, tags, status, flags, locator, anchor, admin_path }] }
- *   POST /api/corpus/quotes  { work, text, page?, comment?, tags?, request_id?, by? }
+ *   POST /api/corpus/quotes  { work, text, page?, comment?, tags?, request_id?, by? } (page a string or a number;
+ *        null for any optional field is the same as leaving it out)
  *        → 201 with add_quote's answer when saved, 200 when it was already (saved: false);
  *          422 { error: "no-match", message, closest, book } | { error: "ambiguous", books } | { error, message };
  *          502 { error: "corpus-unavailable" } when verify couldn't be reached
@@ -68,9 +69,12 @@ function quoteArgs(body: unknown): AddQuoteArgs & { by?: string } {
   const b = body as Record<string, unknown>;
   if (!str(b.work)?.trim()) throw new ToolError("Send the work: a Calibre book id or UUID, a citekey, or a work key.", { error: "bad-request" });
   if (!str(b.text)?.trim()) throw new ToolError("Send the text to save.", { error: "bad-request" });
+  // An optional field sent as null is one left out; a page may come as a number (the reader's file page).
+  for (const k of ["page", "comment", "tags", "request_id", "by"]) if (b[k] === null) delete b[k];
+  if (typeof b.page === "number" && Number.isInteger(b.page) && b.page >= 1) b.page = String(b.page);
   if (b.tags !== undefined && !(Array.isArray(b.tags) && b.tags.every((t) => typeof t === "string"))) throw new ToolError("tags is a list of strings.", { error: "bad-request" });
   for (const k of ["page", "comment", "request_id", "by"]) {
-    if (b[k] !== undefined && typeof b[k] !== "string") throw new ToolError(`${k} is a string.`, { error: "bad-request" });
+    if (b[k] !== undefined && typeof b[k] !== "string") throw new ToolError(k === "page" ? "page is a page number from 1." : `${k} is a string.`, { error: "bad-request" });
   }
   return { work: str(b.work)!, text: str(b.text)!, page: str(b.page), comment: str(b.comment), tags: b.tags as string[] | undefined, request_id: str(b.request_id), by: str(b.by)?.trim() || undefined };
 }

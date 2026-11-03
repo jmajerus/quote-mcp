@@ -371,11 +371,14 @@ describe("the reader's routes for corpus-mcp", () => {
       const id = answer.quote.id;
       expect(db.prepare("SELECT created_by FROM quotes WHERE id = ?").pluck().get(id)).toBe("corpus-mcp:jo@example.org");
       expect((await post(s.base, { work: "main:42", text: "It begins when an individual becomes the target", request_id: "reader-1" })).status).toBe(200);
+      const numbered = await post(s.base, { work: mobbingBook.calibre_uuid, text: "disrespectful behavior", page: 40, comment: null, tags: ["mobbing"], request_id: "reader-2", by: null });
+      expect(numbered.status).toBe(201);
+      expect(corpus.verified.at(-1)).toMatchObject({ book: mobbingBook.calibre_uuid, page: 40 });
 
       db.prepare(`UPDATE quotes SET flags = '["anchor_lost"]' WHERE id = ?`).run(id);
       for (const key of [mobbingBook.calibre_uuid, "main:42"]) {
         const listed = (await (await fetch(`${s.base}?book=${encodeURIComponent(key)}`)).json()) as { quotes: Record<string, unknown>[] };
-        expect(listed.quotes).toEqual([expect.objectContaining({
+        expect(listed.quotes.filter((q) => q.id === id)).toEqual([expect.objectContaining({
           id, kind: "quote", text: "It begins when an individual becomes the target", tags: ["mobbing"], status: "verified", flags: ["anchor_lost"],
           anchor: expect.objectContaining({ calibre_uuid: mobbingBook.calibre_uuid }), admin_path: `/admin/quotes/${id}`,
         })]);
@@ -394,6 +397,7 @@ describe("the reader's routes for corpus-mcp", () => {
       expect(await miss.json()).toMatchObject({ error: "no-match", closest: [expect.objectContaining({ page: 40 })], book: { book_id: "main:42" } });
       expect((await post(s.base, { text: "no work" })).status).toBe(400);
       expect((await post(s.base, { work: "main:42", text: "x", tags: "one" })).status).toBe(400);
+      expect((await post(s.base, { work: "main:42", text: "x", page: 0 })).status).toBe(400);
       expect((await post(s.base, { work: "main:42", text: "x" }, "text/plain")).status).toBe(415);
       expect((await fetch(s.base, { method: "DELETE" })).status).toBe(405);
       corpus.verify = async () => { throw new CorpusError(0, "corpus-mcp unreachable"); };

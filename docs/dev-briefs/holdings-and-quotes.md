@@ -172,7 +172,8 @@ routes serve it, on the LAN only (a 404 through Access), in `src/corpus-api.ts`:
   `anchor_lost`; `anchor` is the one kept with the quote's origin, which
   follows the anchor changes feed.
 - `POST /api/corpus/quotes` (`application/json`): `add_quote`'s arguments
-  (`work`, `text`, `page?`, `comment?`, `tags?`, `request_id?`) plus `by?`,
+  (`work`, `text`, `page?` as a string or a number, `comment?`, `tags?`,
+  `request_id?`; `null` is the same as left out) plus `by?`,
   the person saving, recorded as `corpus-mcp:<by>`. Same verification, work
   and duplicate handling as `add_quote`; the answer is `add_quote`'s, `201`
   when saved and `200` when it already was. A miss is `422 { error:
