@@ -10,6 +10,7 @@ import { type DB, openDb } from "../src/db.js";
 import type { DrupalSite } from "../src/drupal.js";
 import { runImport } from "../src/import.js";
 import { citeQuote, ftsQuery, getConcept, searchQuotes } from "../src/queries.js";
+import { holdingsCounts } from "../src/holdings.js";
 import { serveHttp } from "../src/server.js";
 import type { ConceptSet } from "../src/sets.js";
 
@@ -292,6 +293,41 @@ describe("JSON API", () => {
   });
 });
 
+describe("holdings counts", () => {
+  it("counts each work's quotes and notes, by its Zotero item or, unmatched, by its id", async () => {
+    const res = await fetch(`${base}/api/holdings/counts`);
+    expect(res.status).toBe(200);
+    const unmatched = db.prepare("SELECT id FROM works WHERE title = 'A Book Nobody Filed'").pluck().get() as number;
+    const mobbing = db.prepare("SELECT id FROM works WHERE zotero_key = 'MOBB0001'").pluck().get() as number;
+    expect(await res.json()).toEqual({ version: 1, works: [
+      { work_id: mobbing, match: "zotero", zotero: { library: PRIMARY, key: "MOBB0001" }, citekey: "davenport1999mobbing", quotes: 2, notes: 1, verified: 0 },
+      { work_id: unmatched, match: "unmatched", title: "A Book Nobody Filed", authors: ["Doe, Jane"], year: "2001", quotes: 1, notes: 0, verified: 0 },
+    ] });
+    const etag = res.headers.get("etag")!;
+    expect(etag).toMatch(/^"[^"]+"$/);
+    expect((await fetch(`${base}/api/holdings/counts`, { headers: { "if-none-match": etag } })).status).toBe(304);
+    expect((await fetch(`${base}/api/holdings/counts`, { headers: { "if-none-match": '"other"' } })).status).toBe(200);
+    expect((await fetch(`${base}/api/holdings/counts`, { method: "POST" })).status).toBe(405);
+  });
+
+  it("names an ambiguous work's candidates by library and key", () => {
+    const id = db.prepare("SELECT id FROM works WHERE title = 'A Book Nobody Filed'").pluck().get() as number;
+    db.prepare("UPDATE works SET match = 'ambiguous', candidates = ? WHERE id = ?").run(JSON.stringify(["NOBODY01", "NOBODY02"]), id);
+    try {
+      expect(holdingsCounts(db).works.find((w) => w.work_id === id)).toMatchObject({ match: "ambiguous", candidates: [`${PRIMARY}/NOBODY01`, `${PRIMARY}/NOBODY02`] });
+    } finally {
+      db.prepare("UPDATE works SET match = 'unmatched', candidates = NULL WHERE id = ?").run(id);
+    }
+  });
+
+  it("finds a work's quotes by holdings-mcp's keys", () => {
+    const unmatched = db.prepare("SELECT id FROM works WHERE title = 'A Book Nobody Filed'").pluck().get() as number;
+    expect(searchQuotes(db, { work: `quote:${unmatched}` }).quotes.map((q) => q.id)).toEqual([quoteId("deserves dignity")]);
+    expect(searchQuotes(db, { work: `zotero:${PRIMARY}/MOBB0001`, kind: "quote" }).total).toBe(2);
+    expect(searchQuotes(db, { work: "zotero:users/1/NOSUCH01" }).total).toBe(0);
+  });
+});
+
 describe("the map at /map/", () => {
   it("redirects /map to /map/ and serves index.html there, revalidated on every load", async () => {
     const redirect = await fetch(`${base}/map?x=1`, { redirect: "manual" });
@@ -368,5 +404,7 @@ it("requires a team-signed Access token, from any application, for public-host p
     expect((await send("/api/concepts/abuse",admin)).status).toBe(200);
     expect((await send("/mcp",forged)).status).toBe(403);
     expect((await send("/mcp",admin)).status).toBe(405);
+    // The counts feed is for holdings-mcp on the LAN, not through Access.
+    expect((await send("/api/holdings/counts",mcp)).status).toBe(404);
   } finally {await new Promise<void>(resolve=>guarded.close(()=>resolve()));}
 });

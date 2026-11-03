@@ -371,6 +371,10 @@ leaves the anchors behind with the new quote ids, and turns corpus-mcp's
 quote tools into calls to Quote MCP or retires them. The reader view keeps
 highlighting quotes from the anchors.
 
+holdings-mcp (2026-11-02) orders this work and adds a counts feed for its
+`find_work`: see [docs/dev-briefs/holdings-and-quotes.md](docs/dev-briefs/holdings-and-quotes.md).
+The feed is built; `add_quote` on corpus-mcp's verify endpoint is next.
+
 ## Concept tags
 
 - A tag report lists counts and likely duplicates (case, plurals, hyphens)

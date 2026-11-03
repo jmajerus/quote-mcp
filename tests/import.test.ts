@@ -4,6 +4,8 @@ import Database from "better-sqlite3";
 import { type DB, SCHEMA_VERSION, openDb } from "../src/db.js";
 import type { DrupalSite } from "../src/drupal.js";
 import { exportAll } from "../src/export.js";
+import { holdingsCounts } from "../src/holdings.js";
+import { searchQuotes } from "../src/queries.js";
 import { type ImportOptions, runImport } from "../src/import.js";
 
 const PRIMARY = "users/1";
@@ -135,6 +137,9 @@ describe("import", () => {
     expect(moved.work_id).not.toBe(old);
     expect(db.prepare("SELECT zotero_key FROM works WHERE id = ?").pluck().get(moved.work_id)).toBe("COMMUN01");
     expect(db.prepare("SELECT COUNT(*) FROM works WHERE id = ?").pluck().get(old)).toBe(0);
+    // Its old id still names it, for holdings-mcp's quote:<id> key.
+    expect(holdingsCounts(db).works.find((w) => w.work_id === moved.work_id)).toMatchObject({ match: "zotero", former_work_ids: [old] });
+    expect(searchQuotes(db, { work: `quote:${old}` }).quotes.map((q) => q.id)).toContain(moved.id);
   });
 
   it("tells editions apart by the full title when the short title repeats", () => {
