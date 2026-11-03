@@ -1,3 +1,4 @@
+import { handleCorpusQuotes } from "./corpus-api.js";
 import { handleHoldingsCounts } from "./holdings.js";
 import type { Capture } from "./mcp.js";
 import { AccessError, authorizeRequest, requestAccessConfig, type RequestAccessConfig } from './http-access.js';
@@ -125,6 +126,12 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
         // A feed for holdings-mcp on the LAN, not for a browser behind Access.
         if (via !== "lan") res.writeHead(404, { "content-type": "application/json; charset=utf-8" }).end(JSON.stringify({ error: "Not found." }));
         else handleHoldingsCounts(db, req, res, process.env.QUOTE_ZOTERO_LIBRARY || undefined);
+        return;
+      }
+      if (url.pathname === "/api/corpus/quotes") {
+        // For corpus-mcp's reader on the LAN, not for a browser behind Access.
+        if (via !== "lan") res.writeHead(404, { "content-type": "application/json; charset=utf-8" }).end(JSON.stringify({ error: "Not found." }));
+        else await handleCorpusQuotes(db, options.capture, req, res, url);
         return;
       }
       if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {

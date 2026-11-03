@@ -318,7 +318,7 @@ async function planQuote(db: DB, t: Target, text: string, page: string | undefin
   } catch (error) {
     if (!(error instanceof CorpusError)) throw error;
     if (error.code === "no-book") {
-      if (!t.work) throw new ToolError(`corpus-mcp has no book ${t.label}.`);
+      if (!t.work) throw new ToolError(`corpus-mcp has no book ${t.label}.`, { error: "no-book" });
       return transcribed(t.work(), "Saved transcribed: there's no Calibre book of this work to check the words against.");
     }
     if (error.code === "no-text") {
@@ -327,12 +327,13 @@ async function planQuote(db: DB, t: Target, text: string, page: string | undefin
     }
     if (error.code === "ambiguous") {
       const books = (error.body?.books as Book[] | undefined) ?? [];
-      throw new ToolError(`${t.label} names ${books.length} Calibre books; pass one's book_id as work: ${books.map((b) => `${b.book_id} (${b.title}${b.year ? `, ${b.year}` : ""})`).join("; ")}. Nothing was saved.`);
+      throw new ToolError(`${t.label} names ${books.length} Calibre books; pass one's book_id as work: ${books.map((b) => `${b.book_id} (${b.title}${b.year ? `, ${b.year}` : ""})`).join("; ")}. Nothing was saved.`, { error: "ambiguous", books });
     }
-    throw new ToolError(`${error.message}. Nothing was saved; try again.`);
+    throw new ToolError(`${error.message}. Nothing was saved; try again.`, { error: "corpus-unavailable" });
   }
   if (!v.match) {
-    throw new ToolError(`Not found in ${v.book.title} (${v.book.book_id}). Nothing was saved. The closest passages: ${JSON.stringify(v.closest)}`);
+    throw new ToolError(`Not found in ${v.book.title} (${v.book.book_id}). Nothing was saved. The closest passages: ${JSON.stringify(v.closest)}`,
+      { error: "no-match", closest: v.closest, book: v.book });
   }
   // The work comes from the book corpus-mcp matched, unless the caller named it and the book isn't in Zotero.
   const work = v.book.zotero ? bookWork(db, v.book) : t.work ? t.work() : calibreWork(db, v.book);
