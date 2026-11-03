@@ -310,6 +310,13 @@ describe("holdings counts", () => {
     expect((await fetch(`${base}/api/holdings/counts`, { method: "POST" })).status).toBe(405);
   });
 
+  it("lists no reader quotes for a book with none, and can't save where capture isn't set up", async () => {
+    expect(await (await fetch(`${base}/api/corpus/quotes?book=main:42`)).json()).toEqual({ book: "main:42", quotes: [] });
+    expect((await fetch(`${base}/api/corpus/quotes`)).status).toBe(400);
+    const post = await fetch(`${base}/api/corpus/quotes`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    expect(post.status).toBe(503);
+  });
+
   it("names an ambiguous work's candidates by library and key", () => {
     const id = db.prepare("SELECT id FROM works WHERE title = 'A Book Nobody Filed'").pluck().get() as number;
     db.prepare("UPDATE works SET match = 'ambiguous', candidates = ? WHERE id = ?").run(JSON.stringify(["NOBODY01", "NOBODY02"]), id);
@@ -406,5 +413,6 @@ it("requires a team-signed Access token, from any application, for public-host p
     expect((await send("/mcp",admin)).status).toBe(405);
     // The counts feed is for holdings-mcp on the LAN, not through Access.
     expect((await send("/api/holdings/counts",mcp)).status).toBe(404);
+    expect((await send("/api/corpus/quotes?book=main:42",mcp)).status).toBe(404);
   } finally {await new Promise<void>(resolve=>guarded.close(()=>resolve()));}
 });

@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { type AnchorChange, type Book, type CorpusClient, CorpusError, type CorpusQuote, type Verified, addQuote, followAnchors, importCorpusQuotes, retryAnchors } from "../src/capture.js";
+import http from "node:http";
 import { ToolError } from "../src/common.js";
+import { handleCorpusQuotes } from "../src/corpus-api.js";
 import type { DB } from "../src/db.js";
 import { holdingsCounts } from "../src/holdings.js";
 import { runImport } from "../src/import.js";
@@ -347,5 +349,62 @@ describe("following corpus-mcp's anchor changes", () => {
     corpus.changes = [change(1, id, "found", kept(id))];
     expect(await followAnchors(db, corpus)).toMatchObject({ read: 1, found: 1, from: 0, to: 1 });
     expect(flags(id)).toEqual([]);
+  });
+});
+
+describe("the reader's routes for corpus-mcp", () => {
+  const serve = async () => {
+    const server = http.createServer((req, res) => void handleCorpusQuotes(db, { writer: () => db, corpus, primary: PRIMARY }, req, res, new URL(req.url ?? "/", "http://x")));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as { port: number };
+    return { base: `http://127.0.0.1:${port}/api/corpus/quotes`, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
+  };
+  const post = (base: string, body: unknown, type = "application/json") => fetch(base, { method: "POST", headers: { "content-type": type }, body: JSON.stringify(body) });
+
+  it("saves a selection as add_quote does, and lists a book's quotes with flags and anchors", async () => {
+    const s = await serve();
+    try {
+      const made = await post(s.base, { work: "main:42", text: "It begins when an individual becomes the target", page: "40", tags: ["mobbing"], request_id: "reader-1", by: "jo@example.org" });
+      expect(made.status).toBe(201);
+      const answer = (await made.json()) as { saved: boolean; book: Book; quote: { id: number; status: string } };
+      expect(answer).toMatchObject({ saved: true, book: { book_id: "main:42" }, quote: { status: "verified" } });
+      const id = answer.quote.id;
+      expect(db.prepare("SELECT created_by FROM quotes WHERE id = ?").pluck().get(id)).toBe("corpus-mcp:jo@example.org");
+      expect((await post(s.base, { work: "main:42", text: "It begins when an individual becomes the target", request_id: "reader-1" })).status).toBe(200);
+      const numbered = await post(s.base, { work: mobbingBook.calibre_uuid, text: "disrespectful behavior", page: 40, comment: null, tags: ["mobbing"], request_id: "reader-2", by: null });
+      expect(numbered.status).toBe(201);
+      expect(corpus.verified.at(-1)).toMatchObject({ book: mobbingBook.calibre_uuid, page: 40 });
+
+      db.prepare(`UPDATE quotes SET flags = '["anchor_lost"]' WHERE id = ?`).run(id);
+      for (const key of [mobbingBook.calibre_uuid, "main:42"]) {
+        const listed = (await (await fetch(`${s.base}?book=${encodeURIComponent(key)}`)).json()) as { quotes: Record<string, unknown>[] };
+        expect(listed.quotes.filter((q) => q.id === id)).toEqual([expect.objectContaining({
+          id, kind: "quote", text: "It begins when an individual becomes the target", tags: ["mobbing"], status: "verified", flags: ["anchor_lost"],
+          anchor: expect.objectContaining({ calibre_uuid: mobbingBook.calibre_uuid }), admin_path: `/admin/quotes/${id}`,
+        })]);
+      }
+      expect(((await (await fetch(`${s.base}?book=main:7`)).json()) as { quotes: unknown[] }).quotes).toEqual([]);
+    } finally {
+      await s.close();
+    }
+  });
+
+  it("answers a miss with the closest passages, and a bad request with what's wrong", async () => {
+    const s = await serve();
+    try {
+      const miss = await post(s.base, { work: "main:42", text: "Words this book doesn't have" });
+      expect(miss.status).toBe(422);
+      expect(await miss.json()).toMatchObject({ error: "no-match", message: "Not found in Mobbing (main:42). Nothing was saved.", closest: [expect.objectContaining({ page: 40 })], book: { book_id: "main:42" } });
+      await rejects(addQuote(db, { work: "main:42", text: "Words this book doesn't have" }, options()), /The closest passages: \[/);
+      expect((await post(s.base, { text: "no work" })).status).toBe(400);
+      expect((await post(s.base, { work: "main:42", text: "x", tags: "one" })).status).toBe(400);
+      expect((await post(s.base, { work: "main:42", text: "x", page: 0 })).status).toBe(400);
+      expect((await post(s.base, { work: "main:42", text: "x" }, "text/plain")).status).toBe(415);
+      expect((await fetch(s.base, { method: "DELETE" })).status).toBe(405);
+      corpus.verify = async () => { throw new CorpusError(0, "corpus-mcp unreachable"); };
+      expect((await post(s.base, { work: "main:42", text: "anything" })).status).toBe(502);
+    } finally {
+      await s.close();
+    }
   });
 });

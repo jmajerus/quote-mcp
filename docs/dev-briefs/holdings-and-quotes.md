@@ -160,6 +160,26 @@ new quotes landing in corpus-mcp soonest:
    here with the rest of phase 2's editing: tag and comment changes by
    agents, text and locator changes as proposals.
 
+### corpus-mcp's reader (corpus-mcp's §3.4)
+
+corpus-mcp's book reader keeps highlighting quotes from its anchors, and links
+each one to `/admin/quotes/<id>` here; it doesn't keep a list of quotes. Two
+routes serve it, on the LAN only (a 404 through Access), in `src/corpus-api.ts`:
+
+- `GET /api/corpus/quotes?book=<calibre_uuid or book_id>`: the quotes checked
+  against that book, as `{ book, quotes: [{ id, kind, text, prose, comment,
+  tags, status, flags, locator, anchor, admin_path }] }`. `flags` shows
+  `anchor_lost`; `anchor` is the one kept with the quote's origin, which
+  follows the anchor changes feed.
+- `POST /api/corpus/quotes` (`application/json`): `add_quote`'s arguments
+  (`work`, `text`, `page?` as a string or a number, `comment?`, `tags?`,
+  `request_id?`; `null` is the same as left out) plus `by?`,
+  the person saving, recorded as `corpus-mcp:<by>`. Same verification, work
+  and duplicate handling as `add_quote`; the answer is `add_quote`'s, `201`
+  when saved and `200` when it already was. A miss is `422 { error:
+  "no-match", message, closest, book }`, several books `422 { error:
+  "ambiguous", books }`, a bad body `400`, and corpus-mcp unreachable `502`.
+
 ## 3. Concept sets to terminology-mcp (holdings phase 5)
 
 terminology-mcp holds `human-work`, and already stores concept sets with

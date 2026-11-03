@@ -4,7 +4,12 @@
  */
 
 /** A request the caller can fix (no such quote, a search with no words): the message says what to do. */
-export class ToolError extends Error {}
+/** An error to show the caller. `data` carries what an API answer needs besides the message (a code, closest passages). */
+export class ToolError extends Error {
+  constructor(message: string, readonly data?: Record<string, unknown>) {
+    super(message);
+  }
+}
 
 /** Old-site relation names, as people read them; "inverse" pairs are opposites (acceptance, rejection). */
 export const RELATION_LABEL: Record<string, string> = { broader: "broader", narrower: "narrower", related: "related", inverse: "opposite" };
