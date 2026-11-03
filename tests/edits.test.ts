@@ -239,6 +239,11 @@ describe("editing on the admin pages", () => {
       const empty = await post(base, { text: " ", updated_at: getQuote(db, id).updated_at as string });
       expect(empty.status).toBe(400);
       expect(await (await fetch(`${base}/admin/quotes/${id}`)).text()).toContain(`href="/admin/quotes/${id}/edit"`);
+      // A note has no quoted text to edit, but a chapter author can come with it from the import.
+      const note = db.prepare("SELECT id FROM quotes WHERE kind = 'note' LIMIT 1").pluck().get() as number;
+      const noteForm = await (await fetch(`${base}/admin/quotes/${note}/edit`)).text();
+      expect(noteForm).toContain('name="chapter_author"');
+      expect(noteForm).not.toContain('name="text"');
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

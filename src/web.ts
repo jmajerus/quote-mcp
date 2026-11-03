@@ -210,7 +210,7 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
 ${note ? "" : `<label for="text">Text</label><textarea id="text" name="text"${locked ? " readonly" : ""}>${value("text", q.text)}</textarea>
 ${locked ? '<p class="note">Checked against its Calibre book: the text is the book\'s, so it isn\'t edited here.</p>' : ""}`}
 <label for="locator">Page or location</label><input id="locator" name="locator" value="${value("locator", q.locator)}" placeholder="211, 211-212, or Kindle loc. 208">
-${note ? "" : `<label for="chapter_author">Chapter author</label><input id="chapter_author" name="chapter_author" value="${value("chapter_author", q.chapter_author)}" placeholder="In an edited volume">`}
+<label for="chapter_author">Chapter author</label><input id="chapter_author" name="chapter_author" value="${value("chapter_author", q.chapter_author)}" placeholder="In an edited volume">
 <label for="comment">${note ? "Note" : "Comment"}</label><textarea id="comment" name="comment">${value("comment", q.comment)}</textarea>
 <label for="reason">Why (for the history)</label><input id="reason" name="reason" value="${value("reason", null)}" placeholder="Typo fixed">
 <div class="actions"><button>Save</button><a href="/admin/quotes/${id}">Cancel</a></div>
