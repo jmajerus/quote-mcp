@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import { ToolError } from "./common.js";
-import { type DB, getMeta, now, setMeta } from "./db.js";
+import { type DB, NEXT_QUOTE_ID, getMeta, now, setMeta } from "./db.js";
 import { creators } from "./import.js";
 import { citekeyOf } from "./csl.js";
 import { calibreSource, getQuote } from "./queries.js";
@@ -361,8 +361,8 @@ function save(db: DB, args: AddQuoteArgs, plan: Plan, requestId: string, actor: 
     }
     const earlier = alreadySaved(db, origin, requestId, plan.work, plan.text);
     if (earlier) return earlier;
-    const id = db.prepare(`INSERT INTO quotes (kind, work_id, text, text_key, locator_kind, locator, comment, status, grade, flags, created_at, created_by, updated_at, updated_by)
-      VALUES ('quote', ?, ?, ?, ?, ?, ?, ?, 'A', ?, ?, ?, ?, ?) RETURNING id`).pluck()
+    const id = db.prepare(`INSERT INTO quotes (id, kind, work_id, text, text_key, locator_kind, locator, comment, status, grade, flags, created_at, created_by, updated_at, updated_by)
+      VALUES (${NEXT_QUOTE_ID}, 'quote', ?, ?, ?, ?, ?, ?, ?, 'A', ?, ?, ?, ?, ?) RETURNING id`).pluck()
       .get(plan.work, plan.text, quoteKey(plan.text), plan.locator ? "page" : "none", plan.locator, comment, plan.status, JSON.stringify(flags), stamp, actor, stamp, actor) as number;
     db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, version, raw, imported_at) VALUES (?, ?, ?, NULL, ?, ?)").run(origin, requestId, id, raw, stamp);
     const tags = [...new Set((args.tags ?? []).map((t) => t.trim()).filter(Boolean))];

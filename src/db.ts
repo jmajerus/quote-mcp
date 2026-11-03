@@ -126,6 +126,12 @@ function migrate(db: DB): void {
   // 4: proposals and tag removals, which SCHEMA creates.
 }
 
+/**
+ * A new quote's id, for an INSERT's id column: past every id used before, a deleted quote's included (its history
+ * keeps it), so an id in a draft's marker, a citation, or corpus-mcp's anchor log never comes to name another quote.
+ */
+export const NEXT_QUOTE_ID = "(SELECT MAX(COALESCE((SELECT MAX(id) FROM quotes), 0), COALESCE((SELECT MAX(quote_id) FROM history), 0)) + 1)";
+
 export function getMeta(db: DB, key: string): string | undefined {
   return (db.prepare("SELECT value FROM meta WHERE key = ?").get(key) as { value: string } | undefined)?.value;
 }

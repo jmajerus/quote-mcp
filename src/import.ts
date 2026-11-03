@@ -1,4 +1,4 @@
-import { type DB, now } from "./db.js";
+import { type DB, NEXT_QUOTE_ID, now } from "./db.js";
 import type { DrupalSite, DrupalWork } from "./drupal.js";
 import { type Suspect, dropCommonUnknowns, suspectTokens } from "./ocr.js";
 import { readMargin } from "./margin.js";
@@ -197,9 +197,9 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
     const addKwic = db.prepare("INSERT OR IGNORE INTO quote_kwic (quote_id, phrase, tag, concept_id) VALUES (?, ?, ?, ?)");
     const addHistory = db.prepare("INSERT INTO history (quote_id, at, kind, before, after, actor, reason) VALUES (?, ?, ?, ?, ?, ?, ?)");
     const insertQuote = db.prepare(`
-      INSERT INTO quotes (kind, work_id, text, text_key, locator_kind, locator, chapter_author, comment, attribution, source_url, status, grade, flags,
+      INSERT INTO quotes (id, kind, work_id, text, text_key, locator_kind, locator, chapter_author, comment, attribution, source_url, status, grade, flags,
         created_at, created_by, updated_at, updated_by)
-      VALUES (@kind, @work_id, @text, @text_key, @locator_kind, @locator, @chapter_author, @comment, @attribution, @source_url, @status, @grade, @flags,
+      VALUES (${NEXT_QUOTE_ID}, @kind, @work_id, @text, @text_key, @locator_kind, @locator, @chapter_author, @comment, @attribution, @source_url, @status, @grade, @flags,
         @stamp, @actor, @stamp, @actor) RETURNING id`);
     const updateQuote = db.prepare(`
       UPDATE quotes SET kind = @kind, work_id = @work_id, text = @text, text_key = @text_key, locator_kind = @locator_kind, locator = @locator,

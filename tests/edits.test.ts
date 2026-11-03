@@ -123,6 +123,19 @@ describe("delete_quote", () => {
     expect(h.reason).toBe("a test quote");
   });
 
+  it("never gives a deleted quote's id to a new one", async () => {
+    const work = db.prepare("SELECT work_id FROM quotes LIMIT 1").pluck().get() as number;
+    const top = db.prepare(`INSERT INTO quotes (kind, work_id, text, text_key, status, created_at, updated_at) VALUES ('quote', ?, 'The top quote', 'thetopquote', 'verified', 'x', 'x') RETURNING id`).pluck().get(work) as number;
+    db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, raw, imported_at) VALUES ('agent', 'top', ?, '{}', 'x')").run(top);
+    await deleteQuote(db, null, top, "testing ids", "agent");
+    // The import makes a quote again once it's gone from the store.
+    db.prepare("DELETE FROM quotes WHERE id = ?").run(byText("Everyone deserves dignity"));
+    reimport();
+    const fresh = byText("Everyone deserves dignity");
+    expect(fresh).toBeGreaterThan(top);
+    expect(db.prepare("SELECT kind FROM history WHERE quote_id = ?").pluck().all(top)).toEqual(["deleted"]);
+  });
+
   it("refuses an imported quote, which its source would bring back", async () => {
     const id = byText("Mobbing is an emotional assault");
     const dropped: number[] = [];
