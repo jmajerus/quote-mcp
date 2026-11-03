@@ -132,10 +132,11 @@ first_import=/var/lib/quote-mcp/first-import.pending
 pre_migrate=/var/lib/quote-mcp/pre-migrate.db
 rm -f "$pre_migrate"
 install_units() {
+  # Chained, since a rollback calls it in a condition, where set -e doesn't apply.
   install -m 0644 "$1/deploy/quote-mcp.service" "$1/deploy/quote-import.service" "$1/deploy/quote-import.timer" \\
-    "$1/deploy/quote-backup.service" "$1/deploy/quote-backup.timer" /etc/systemd/system/
-  install -m 0755 "$1/deploy/quote-mcp" /usr/local/bin/quote-mcp
-  systemctl daemon-reload
+    "$1/deploy/quote-backup.service" "$1/deploy/quote-backup.timer" /etc/systemd/system/ &&
+    install -m 0755 "$1/deploy/quote-mcp" /usr/local/bin/quote-mcp &&
+    systemctl daemon-reload
 }
 # From the switch on, any failure puts the previous release (and its units) back, and the store as it was
 # before a migration that changed its schema. Otherwise the store is left as it is, even after a failed
@@ -146,15 +147,24 @@ rollback() {
   journalctl -u quote-mcp.service -n 20 --no-pager || true
   if [ -n "$previous" ]; then
     ln -sfn "$previous" /opt/quote-mcp/current
-    install_units "$previous" || echo "couldn't reinstall the units of $previous" >&2
+    units=1
+    install_units "$previous" || units=""
     if [ -f "$pre_migrate" ]; then
       systemctl stop quote-mcp.service quote-import.service || true
-      mv "$QUOTE_DB" "$QUOTE_DB.rolled-back" && rm -f "$QUOTE_DB-wal" "$QUOTE_DB-shm"
-      mv "$pre_migrate" "$QUOTE_DB" && chown quote:quote "$QUOTE_DB"
-      echo "restored the store from before the migration; the migrated one is $QUOTE_DB.rolled-back"
+      # Chained, so the copy never replaces a migrated store that couldn't be set aside.
+      if mv "$QUOTE_DB" "$QUOTE_DB.rolled-back" && rm -f "$QUOTE_DB-wal" "$QUOTE_DB-shm" &&
+        mv "$pre_migrate" "$QUOTE_DB" && chown quote:quote "$QUOTE_DB"; then
+        echo "restored the store from before the migration; the migrated one is $QUOTE_DB.rolled-back"
+      else
+        echo "store_restore_failed: the copy from before the migration is $pre_migrate"
+      fi
     fi
-    systemctl restart quote-mcp.service || true
-    echo "rolled_back=$previous"
+    if [ -n "$units" ]; then
+      systemctl restart quote-mcp.service || echo "quote-mcp didn't restart on $previous"
+      echo "rolled_back=$previous"
+    else
+      echo "rollback_incomplete=$previous: its units couldn't all be put back"
+    fi
   fi
   exit "$status"
 }
