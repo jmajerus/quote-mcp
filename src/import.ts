@@ -60,7 +60,7 @@ interface QuoteRow { id: number; work_id: number | null; edited: number; locator
 
 const RELATION = { B: "broader", N: "narrower", R: "related", I: "inverse" } as const;
 
-function creators(data: ApiItem["data"]): string[] {
+export function creators(data: ApiItem["data"]): string[] {
   const all = data.creators ?? [];
   const authors = all.filter((c) => c.creatorType === "author");
   return (authors.length ? authors : all).map((c) => c.name ?? [c.lastName, c.firstName].filter(Boolean).join(", "));
@@ -344,14 +344,14 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
       if (id) resolveKwic.run(id, k.quote_id, k.phrase, k.tag);
     }
 
-    // --- OCR check over every quote nobody has edited -------------------------------------------
+    // --- OCR check over every quote nobody has edited, and that wasn't checked against a book's text ---
     const all = db.prepare("SELECT id, text, status, flags, edited FROM quotes WHERE kind = 'quote'").all() as { id: number; text: string; status: string; flags: string; edited: number }[];
     const suspects = new Map<string, Suspect[]>();
     if (opts.dictionary) for (const q of all) suspects.set(String(q.id), suspectTokens(q.text, opts.dictionary));
     const kept = dropCommonUnknowns(suspects);
     const setOcr = db.prepare("UPDATE quotes SET suspects = ?, flags = ?, grade = ? WHERE id = ?");
     for (const q of all) {
-      if (q.edited) continue;
+      if (q.edited || q.status === "verified") continue;
       const found = kept.get(String(q.id)) ?? [];
       const flags = (JSON.parse(q.flags) as string[]).filter((f) => f !== "ocr_suspect");
       if (found.length) flags.push("ocr_suspect");
