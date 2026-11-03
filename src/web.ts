@@ -55,7 +55,7 @@ type Listed = ReturnType<typeof searchQuotes>["quotes"][number];
 
 function quoteCard(q: Listed): string {
   const words = q.kind === "note" ? q.note ?? "" : q.text;
-  const text = q.snippet ? esc(q.snippet).replace(/«/g, "<mark>").replace(/»/g, "</mark>") : emphasisHtml(words.length > 420 ? `${words.slice(0, 420)}…` : words);
+  const text = q.snippet ? emphasisHtml(q.snippet).replace(/«/g, "<mark>").replace(/»/g, "</mark>") : emphasisHtml(words.length > 420 ? `${words.slice(0, 420)}…` : words);
   return `<div class="result"><p class="text"><a href="/admin/quotes/${q.id}">#${q.id}</a> ${q.kind === "note" ? '<span class="kind">note</span>' : ""}${text}</p>
 <div class="meta">${workLine(q.work, q.attribution)}${q.locator ? ` · ${esc(q.locator)}` : ""}${q.chapter_author ? ` · by ${esc(q.chapter_author)}` : ""}</div>
 <div>${tagChips(q.tags)}${q.flags.map((f) => `<span class="flag">${esc(f)}</span>`).join("")}</div></div>`;

@@ -123,6 +123,7 @@ describe("proposals", () => {
     expect(renderAdmin(db, "/admin/worklists", new URLSearchParams())).toContain("Proposed changes to review");
     editQuote(db, { id, text: "Everyone deserves *dignity* [emphasis added]." }, "jo@example.org");
     expect(renderAdmin(db, `/admin/quotes/${id}`, new URLSearchParams())).toContain("Everyone deserves <em>dignity</em> [emphasis added].");
+    expect(renderAdmin(db, "/admin/quotes", new URLSearchParams({ q: "dignity" }))).toContain("<em><mark>dignity</mark></em>");
   });
 
   it("rejects, refuses a stale accept, and keeps a verified quote's text the book's", () => {
@@ -200,6 +201,15 @@ describe("delete_quote", () => {
 });
 
 describe("editing on the admin pages", () => {
+  it("checks against the newest anchor's passage", () => {
+    const id = byText("Everyone deserves dignity");
+    db.prepare("UPDATE quotes SET status = 'verified' WHERE id = ?").run(id);
+    db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, raw, imported_at) VALUES ('agent', 'a', ?, ?, '2026-01-01')").run(id, JSON.stringify({ anchor: { text: "An old wording." } }));
+    db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, raw, imported_at) VALUES ('corpus', 'c', ?, ?, '2026-02-01')").run(id, JSON.stringify({ anchor: { text: "Everyone deserves dignity." } }));
+    expect(editQuote(db, { id, text: "Everyone deserves *dignity* [emphasis added]." }, "jo@example.org").changed).toEqual(["text"]);
+    fails(() => editQuote(db, { id, text: "An old wording." }, "jo@example.org"), /Anything else that changes the words is refused/);
+  });
+
   it("fixes a typo as a person's edit, with history, and leaves a verified quote's text alone", () => {
     const id = byText("Abuse at work rarely");
     const q = getQuote(db, id);
@@ -278,5 +288,15 @@ describe("a reader's marks in a verified quote", () => {
     ["nothing but an ellipsis", "…", false],
   ])("%s", (_, text, ok) => {
     expect(fromBook(text, book)).toBe(ok);
+  });
+
+  it("keeps the book's own asterisks, and matches whole words beside an ellipsis", () => {
+    expect(fromBook("2 3", "2 * 3")).toBe(false);
+    expect(fromBook("2 * 3", "2 * 3")).toBe(true);
+    expect(fromBook("*2* * 3", "2 * 3")).toBe(true);
+    expect(fromBook("on … two", "one two")).toBe(false);
+    expect(fromBook("one … two", "one and two")).toBe(true);
+    expect(fromBook("ne … two", "one and two")).toBe(false);
+    expect(fromBook("I flatter myself … curiosity", book)).toBe(true);
   });
 });

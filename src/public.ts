@@ -36,6 +36,11 @@ export function plainText(text: string): string {
 /** *emphasis* as the old site wrote it: a pair of asterisks around words, not a lone one. */
 const EMPHASIS = /(^|[\s(“"'‘—–-])\*(?=\S)([^*\n]+?)(?<=\S)\*(?=$|[\s).,;:!?”"'’—–-])/gm;
 
+/** Text with each *emphasis* pair's asterisks taken out; a lone or spaced asterisk (5 * 3) stays. */
+export function withoutEmphasis(t: string): string {
+  return t.replace(EMPHASIS, (_, before: string, words: string) => `${before}${words}`);
+}
+
 /** Quote text as HTML: escaped, with the old site's emphasis as <em>. */
 export function quoteHtml(text: string): string {
   return emphasisHtml(plainText(text));

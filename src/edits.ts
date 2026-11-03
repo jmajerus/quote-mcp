@@ -1,6 +1,7 @@
 import { type CorpusClient, conceptOf } from "./capture.js";
 import { ToolError } from "./common.js";
 import { type DB, now } from "./db.js";
+import { withoutEmphasis } from "./public.js";
 import { type ProposalFields as Fields, getQuote, locatorText, proposal } from "./queries.js";
 import { quoteKey } from "./text.js";
 
@@ -152,37 +153,50 @@ function applyFields(db: DB, q: Record<string, unknown>, c: Fields & { comment?:
   refreshFts(db, id);
 }
 
-/** Text compared loosely: spacing collapsed, and *emphasis* asterisks dropped, since they're a reader's mark. */
-const plain = (t: string) => t.replace(/\*/g, "").replace(/\s+/g, " ").trim();
+/** Text compared loosely: spacing collapsed, and *emphasis* pairs' asterisks dropped, since they're a reader's mark. */
+const plain = (t: string) => withoutEmphasis(t).replace(/\s+/g, " ").trim();
 /** An omission: …, ..., or either in brackets. */
 const ELLIPSIS = /\s*(?:\[\s*(?:…|\.\s?\.\s?\.)\s*\]|…|\.\s?\.\s?\.)\s*/g;
+/** Punctuation a quoter drops beside an ellipsis ("facts, … men" for "facts, about daily men"). */
+const EDGE = /^[\p{P}]+|[\p{P}]+$/gu;
 
 /**
  * Whether a verified quote's text, as a person edited it, is still the book's words with only their own marks: [any
- * bracketed text] (a clarification, [sic], [emphasis added]), *asterisks* for emphasis, and an ellipsis for words left
- * out. Taking out the brackets and asterisks must leave the book's text, exactly, or with an ellipsis, its words in
- * order with the omitted ones between. Spacing and line breaks don't count.
+ * bracketed text] (a clarification, [sic], [emphasis added]), *emphasis* pairs, and an ellipsis for words left out.
+ * Taking out the brackets and emphasis must leave the book's text, exactly, or with an ellipsis, whole words of it in
+ * order with the omitted ones between (a word beside an ellipsis may lose its punctuation). Spacing doesn't count.
  */
 export function fromBook(text: string, book: string): boolean {
   const parts = text.replace(ELLIPSIS, "\u0000").replace(/\s*\[[^\]]*\]/g, "").split("\u0000").map(plain);
   const whole = plain(book);
   if (parts.length === 1) return parts[0] === whole;
+  const words = whole.split(" ");
+  // Each part is a run of the book's words, after the previous part's; a word beside an ellipsis matches without its edge punctuation.
+  const runAt = (part: string[], at: number, cutStart: boolean, cutEnd: boolean) => part.every((w, k) => {
+    const loose = (k === 0 && cutStart) || (k === part.length - 1 && cutEnd);
+    return loose ? w.replace(EDGE, "") === words[at + k]?.replace(EDGE, "") : w === words[at + k];
+  });
   let from = 0;
-  for (const part of parts.filter(Boolean)) {
-    const at = whole.indexOf(part, from);
-    if (at < 0) return false;
+  let found = 0;
+  for (let n = 0; n < parts.length; n++) {
+    if (!parts[n]) continue;
+    const part = parts[n].split(" ");
+    let at = from;
+    while (at + part.length <= words.length && !runAt(part, at, n > 0, n < parts.length - 1)) at++;
+    if (at + part.length > words.length) return false;
     from = at + part.length;
+    found++;
   }
-  return parts.some(Boolean);
+  return found > 0;
 }
 
 /**
- * A verified quote's text as the book has it: the passage corpus-mcp matched when it was saved (kept with its
- * anchor), so an edit is checked against the book, not against an earlier edit that left words out.
+ * A verified quote's text as the book has it: the passage kept with its newest anchor (the one followAnchors keeps
+ * current), so an edit is checked against the book, not against an earlier edit that left words out.
  */
 function bookText(db: DB, id: number, current: string): string {
   const raw = db.prepare(`SELECT raw FROM quote_origins WHERE quote_id = ? AND kind IN ('agent', 'corpus')
-    AND json_extract(raw, '$.anchor.text') IS NOT NULL ORDER BY imported_at LIMIT 1`).pluck().get(id) as string | undefined;
+    AND json_extract(raw, '$.anchor.text') IS NOT NULL ORDER BY imported_at DESC, rowid DESC LIMIT 1`).pluck().get(id) as string | undefined;
   const anchored = raw ? (JSON.parse(raw) as { anchor: { text: string } }).anchor.text : undefined;
   if (anchored) return anchored;
   const added = db.prepare("SELECT after FROM history WHERE quote_id = ? AND kind = 'added' ORDER BY id LIMIT 1").pluck().get(id) as string | null | undefined;
