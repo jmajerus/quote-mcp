@@ -1,4 +1,5 @@
 import type { DB } from "./db.js";
+import { editQuote } from "./edits.js";
 import {
   type Proposal, QUEUES, type Queue, ToolError, type WorkSummary, citeQuote, getConcept, getQuote, listConcepts, overview, searchQuotes, worklist,
 } from "./queries.js";
@@ -128,7 +129,7 @@ function quotePage(db: DB, id: number): string {
   const rows = (pairs: [string, string][]) => pairs.filter(([, v]) => v).map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join("");
   const note = q.kind === "note";
   const name = `${note ? "Note" : "Quote"} ${id}`;
-  return page(name, "quotes", `<h1>${name}</h1><p class="sub">${note ? "your own words, no quoted text" : `${esc(q.status)} · grade ${esc(q.grade)}`}${q.edited ? " · edited" : ""}</p>
+  return page(name, "quotes", `<h1>${name}</h1><p class="sub">${note ? "your own words, no quoted text" : `${esc(q.status)} · grade ${esc(q.grade)}`}${q.edited ? " · edited" : ""} · <a href="/admin/quotes/${id}/edit">Edit</a></p>
 ${note ? (q.note ? `<div class="words">${esc(q.note)}</div>` : '<p class="note">Tags only.</p>') : `<blockquote>${esc(q.text)}</blockquote>`}
 <div class="meta">${workLine(q.work, q.attribution)}${q.locator ? ` · ${esc(q.locator)}` : ""}</div>
 <p>${tagChips(q.tags)}${q.flags.map((f) => `<span class="flag">${esc(f)}</span>`).join("")}</p>
@@ -195,12 +196,53 @@ ${(r.proposals as (Proposal & { quote: { id: number; text: string; work: string 
   return page(QUEUE_LABEL[queue], "worklists", `<h1>${QUEUE_LABEL[queue]}</h1><p class="sub"><a href="/admin/worklists">All worklists</a></p>${body}${"tags" in r ? "" : pager(`/admin/worklists/${queue}`, {}, r.total, r.offset, r.limit)}`);
 }
 
+/** The form for fixing a quote: its text (a verified quote's is the book's, shown but not edited), locator, chapter author, and comment. */
+function editPage(db: DB, id: number, error?: string, sent?: URLSearchParams): string {
+  const q = getQuote(db, id);
+  const note = q.kind === "note";
+  const locked = q.status === "verified";
+  const value = (name: string, now: string | null) => esc(sent?.get(name) ?? now ?? "");
+  const name = `Edit ${note ? "note" : "quote"} ${id}`;
+  return page(name, "quotes", `<h1>${name}</h1><p class="sub"><a href="/admin/quotes/${id}">Back to the ${note ? "note" : "quote"}</a> · ${workLine(q.work, q.attribution)}</p>
+${error ? `<p class="error">${esc(error)}</p>` : ""}
+<form class="edit" method="post" action="/admin/quotes/${id}/edit">
+<input type="hidden" name="updated_at" value="${esc(sent?.get("updated_at") ?? (q.updated_at as string))}">
+${note ? "" : `<label for="text">Text</label><textarea id="text" name="text"${locked ? " readonly" : ""}>${value("text", q.text)}</textarea>
+${locked ? '<p class="note">Checked against its Calibre book: the text is the book\'s, so it isn\'t edited here.</p>' : ""}`}
+<label for="locator">Page or location</label><input id="locator" name="locator" value="${value("locator", q.locator)}" placeholder="211, 211-212, or Kindle loc. 208">
+${note ? "" : `<label for="chapter_author">Chapter author</label><input id="chapter_author" name="chapter_author" value="${value("chapter_author", q.chapter_author)}" placeholder="In an edited volume">`}
+<label for="comment">${note ? "Note" : "Comment"}</label><textarea id="comment" name="comment">${value("comment", q.comment)}</textarea>
+<label for="reason">Why (for the history)</label><input id="reason" name="reason" value="${value("reason", null)}" placeholder="Typo fixed">
+<div class="actions"><button>Save</button><a href="/admin/quotes/${id}">Cancel</a></div>
+</form>`);
+}
+
+/** Saves the edit form posted to /admin/quotes/<id>/edit: a redirect to the quote, or the form again with what was wrong. */
+export function saveAdminEdit(writer: DB, path: string, form: URLSearchParams, editor: string): { redirect: string } | { status: number; html: string } | null {
+  const m = /^\/admin\/quotes\/(\d+)\/edit$/.exec(path);
+  if (!m) return null;
+  const id = Number(m[1]);
+  const field = (name: string) => (form.has(name) ? form.get(name)! : undefined);
+  try {
+    editQuote(writer, { id, text: field("text"), locator: field("locator"), chapter_author: field("chapter_author"), comment: field("comment"), reason: field("reason"), updated_at: field("updated_at") }, editor);
+    return { redirect: `/admin/quotes/${id}` };
+  } catch (error) {
+    if (!(error instanceof ToolError)) throw error;
+    if (/^No quote or note/.test(error.message)) return { status: 404, html: page("Not found", "quotes", `<h1>Not found</h1><p>${esc(error.message)}</p>`) };
+    // Changed by someone else meanwhile: a fresh form, showing the quote as it is now. Otherwise what was sent, to correct.
+    const stale = /changed after this form was opened/.test(error.message);
+    return { status: stale ? 409 : 400, html: editPage(writer, id, error.message, stale ? undefined : form) };
+  }
+}
+
 /** The HTML for an /admin path, or null when there is no such page. */
 export function renderAdmin(db: DB, path: string, params: URLSearchParams): string | null {
   if (path === "/admin" || path === "/admin/") return overviewPage(db);
   if (path === "/admin/quotes") return quotesPage(db, params);
   let m = /^\/admin\/quotes\/(\d+)$/.exec(path);
   if (m) return quotePage(db, Number(m[1]));
+  m = /^\/admin\/quotes\/(\d+)\/edit$/.exec(path);
+  if (m) return editPage(db, Number(m[1]));
   if (path === "/admin/concepts") return conceptsPage(db, params);
   m = /^\/admin\/concepts\/([^/]+)$/.exec(path);
   if (m) return conceptPage(db, decodeURIComponent(m[1]), params);

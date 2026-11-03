@@ -22,7 +22,7 @@ quote-atlas, whose concept maps open the quotes tagged with each concept.
   snapshot holding only what's public, on the LAN or from a Cloudflare Worker:
   [quotes.majerus.us](https://quotes.majerus.us).
 
-quote-mcp never changes Zotero, and its MCP tools are read-only for now.
+quote-mcp never changes Zotero. Its MCP tools save quotes and change tags and comments; changes to quoted text are proposals a person accepts, and a person can edit a quote on the admin pages.
 
 ## Documentation
 
