@@ -135,7 +135,10 @@ new quotes landing in corpus-mcp soonest:
    stored anchors), saves it as `add_quote` does with origin `corpus` (ref:
    its corpus-mcp id, so a re-run skips it; its record kept in the raw),
    its note as the comment and its labels as tags, and posts the new
-   anchor. It prints the old and new ids for corpus-mcp, which then
+   anchor. A quote whose words the work already has (say, saved by an
+   agent) is still checked, and taken over: it gains the `corpus` origin
+   and the tags, keeps its own text, and gets the new anchor. It prints
+   the old and new ids for corpus-mcp, which then
    deletes its rows. `--dry-run` shows what it would take.
 4. **Follow the anchors.** corpus-mcp's `GET /api/anchors/changes?since=N`
    reports re-anchored, orphaned, and found-again quotes. An orphaned anchor

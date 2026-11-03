@@ -252,6 +252,23 @@ describe("taking over corpus-mcp's quotes", () => {
     expect(again.filter((x) => x.skipped === "already taken").map((x) => [x.corpus_id, x.quote_id])).toEqual([[1, one], [3, three]]);
   });
 
+  it("takes over a quote whose words the work already has: checked again, origin and tags added, anchor posted", async () => {
+    const mine = saved(await addQuote(db, { work: "main:42", text: "It begins when an individual becomes the target", tags: ["mobbing"] }, options())).id;
+    corpus.anchors.clear();
+    const before = corpus.verified.length;
+    const [r] = await importCorpusQuotes(db, corpus, [quotes[0]], { primary: PRIMARY });
+    expect(r).toMatchObject({ corpus_id: 1, quote_id: mine, taken_over: true, anchored: true, status: "verified" });
+    expect(corpus.verified.length).toBe(before + 1);
+    expect(corpus.anchors.has(mine)).toBe(true);
+    expect(db.prepare("SELECT kind FROM quote_origins WHERE quote_id = ? ORDER BY kind").pluck().all(mine)).toEqual(["agent", "corpus"]);
+    expect(db.prepare("SELECT tag FROM quote_tags WHERE quote_id = ? ORDER BY tag").pluck().all(mine)).toEqual(["confirmation bias", "mobbing"]);
+    expect(db.prepare("SELECT flags FROM quotes WHERE id = ?").pluck().get(mine)).toBe("[]");
+    expect(db.prepare("SELECT COUNT(*) FROM history WHERE quote_id = ? AND kind = 'taken_over'").pluck().get(mine)).toBe(1);
+    expect(db.prepare("SELECT tags FROM quotes_fts WHERE rowid = ?").pluck().get(mine)).toMatch(/confirmation bias/);
+    const [again] = await importCorpusQuotes(db, corpus, [quotes[0]], { primary: PRIMARY });
+    expect(again).toMatchObject({ quote_id: mine, skipped: "already taken" });
+  });
+
   it("changes nothing on a dry run", async () => {
     const before = db.prepare("SELECT COUNT(*) FROM quotes").pluck().get();
     const r = await importCorpusQuotes(db, corpus, quotes, { primary: PRIMARY, dryRun: true });
