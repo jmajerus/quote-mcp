@@ -242,16 +242,20 @@ export interface AddQuoteOptions {
   origin?: "agent" | "corpus";
   /** Kept with the origin, beside the request: corpus-mcp's record of a quote taken over. */
   source?: Record<string, unknown>;
-  /** Brings the Zotero mirror up to date, for a work filed in Zotero since the last import (zoteroRefresher). */
-  refreshZotero?: () => Promise<void>;
+  /**
+   * Brings the Zotero mirror up to date, for a work filed in Zotero since the last import (zoteroRefresher).
+   * Resolves to a note when part of it failed, which add_quote adds to a work still missing.
+   */
+  refreshZotero?: () => Promise<string | undefined | void>;
 }
 
 /**
  * Refreshes the Zotero mirror on demand: asks holdings-mcp to refresh its copy first when QUOTE_ZOTERO_API is
  * that copy, then syncs each library from its stored version, as the import does. Concurrent calls share one
- * run. Undefined when Zotero isn't set up.
+ * run. holdings-mcp's answer doesn't stop the sync: its copy may have the item already, and its errors cover
+ * feeds other than Zotero. Nothing is held while it waits. Undefined when Zotero isn't set up.
  */
-export function zoteroRefresher(writer: () => DB, env: NodeJS.ProcessEnv = process.env, fetchImpl: typeof fetch = fetch): (() => Promise<void>) | undefined {
+export function zoteroRefresher(writer: () => DB, env: NodeJS.ProcessEnv = process.env, fetchImpl: typeof fetch = fetch): (() => Promise<string | undefined>) | undefined {
   let config: ReturnType<typeof zoteroConfig>;
   try {
     config = zoteroConfig(env);
@@ -259,20 +263,27 @@ export function zoteroRefresher(writer: () => DB, env: NodeJS.ProcessEnv = proce
     return undefined;
   }
   const sources = [...new Set([config.library, ...(env.QUOTE_ZOTERO_SOURCES ?? "").split(",").map((s) => s.trim()).filter(Boolean)])];
-  let running: Promise<void> | undefined;
+  let running: Promise<string | undefined> | undefined;
   const run = async () => {
+    const notes: string[] = [];
     if (!needsKey(config.apiBase)) {
       const url = new URL("/api/refresh", config.apiBase);
-      let res: Response;
       try {
-        res = await fetchImpl(url, { method: "POST", signal: AbortSignal.timeout(60_000) });
+        const res = await fetchImpl(url, { method: "POST", signal: AbortSignal.timeout(60_000) });
+        await res.body?.cancel();
+        if (!res.ok) notes.push(`holdings-mcp answered ${res.status} to the refresh`);
       } catch (error) {
-        throw new Error(`holdings-mcp didn't answer ${url.href}: ${(error as Error).message}`);
+        notes.push(`holdings-mcp didn't answer the refresh: ${(error as Error).message}`);
       }
-      await res.body?.cancel();
-      if (!res.ok) throw new Error(`holdings-mcp answered ${res.status} for ${url.href}`);
     }
-    for (const library of sources) await syncLibrary(writer(), new ZoteroClient({ ...config, library, timeoutMs: 30_000 }), library);
+    for (const library of sources) {
+      try {
+        await syncLibrary(writer(), new ZoteroClient({ ...config, library, timeoutMs: 30_000 }), library);
+      } catch (error) {
+        notes.push(`${library} didn't sync: ${(error as Error).message}`);
+      }
+    }
+    return notes.length ? `${notes.join("; ")}, so the mirror may be behind` : undefined;
   };
   return () => (running ??= run().finally(() => { running = undefined; }));
 }
@@ -305,13 +316,20 @@ export async function addQuote(db: DB, args: AddQuoteArgs, o: AddQuoteOptions): 
     return await addQuoteOnce(db, args, o);
   } catch (error) {
     // A work filed in Zotero since the last import: bring the mirror up to date and try once more.
+    // Tried whatever the refresh says; what it couldn't do is added only to a work still missing.
     if (!(error instanceof MirrorMiss) || !o.refreshZotero) throw error;
+    let note: string | undefined;
     try {
-      await o.refreshZotero();
+      note = (await o.refreshZotero()) || undefined;
     } catch (refresh) {
-      throw new MirrorMiss(`${error.message} (Refreshing the mirror now failed: ${(refresh as Error).message})`);
+      note = `the refresh failed: ${(refresh as Error).message}`;
     }
-    return addQuoteOnce(db, args, o);
+    try {
+      return await addQuoteOnce(db, args, o);
+    } catch (again) {
+      if (again instanceof MirrorMiss && note) throw new MirrorMiss(`${again.message} (Refreshing the mirror just now: ${note}.)`);
+      throw again;
+    }
   }
 }
 
