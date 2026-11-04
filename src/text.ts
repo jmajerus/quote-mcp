@@ -1,3 +1,5 @@
+import { decodeHTMLStrict } from "entities";
+
 /**
  * A value read from outside as text: numbers and buffers as what they say, empty as null. A database column's type
  * isn't ours to assume, so anything else throws, rather than reading as "nothing there".
@@ -9,20 +11,9 @@ export function textOf(value: unknown): string | null {
   return text.trim() || null;
 }
 
-const ENTITIES: Record<string, string> = { amp: "&", quot: '"', apos: "'", lt: "<", gt: ">", nbsp: " " };
-
-/** HTML escapes as their characters: a title or name pasted from a web page can keep them ("Previews &amp; Premises", "O&#039;Neil"). */
-function unescaped(text: string): string {
-  return text.replace(/&(?:#(\d+)|#x([\da-f]+)|(\w+));/gi, (whole, dec, hex, name) => {
-    if (name) return ENTITIES[name.toLowerCase()] ?? whole;
-    const code = dec ? Number(dec) : parseInt(hex, 16);
-    return code <= 0x10ffff ? String.fromCodePoint(code) : whole;
-  });
-}
-
-/** Words compared loosely: case, accents, punctuation, HTML escapes, a leading article, and & against "and" don't count. */
+/** Words compared loosely: case, accents, punctuation, HTML escapes (a title or name pasted from a web page can keep them), a leading article, and & against "and" don't count. */
 function loose(text: string): string {
-  return unescaped(text).toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/&/g, " and ")
+  return decodeHTMLStrict(text).toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/&/g, " and ")
     .replace(/[^a-z0-9]+/g, " ").trim().replace(/^(the|a|an) /, "");
 }
 
@@ -34,7 +25,7 @@ const SUBTITLE = /[:?!]\s|\s[-–—]\s|—|(?<=[\p{L}\d]{4})\.\s/u;
 
 /** A title compared loosely, with its subtitle left off. */
 export function normalizedTitle(title: string | null | undefined): string {
-  const whole = unescaped(String(title ?? ""));
+  const whole = decodeHTMLStrict(String(title ?? ""));
   return loose(whole.split(SUBTITLE)[0]) || loose(whole);
 }
 

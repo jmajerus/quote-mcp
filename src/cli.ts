@@ -4,7 +4,7 @@ import { userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { corpusClient, corpusConfig, followAnchors, importCorpusQuotes, retryAnchors, storeWriter, zoteroRefresher } from "./capture.js";
-import { SCHEMA_VERSION, openDb } from "./db.js";
+import { SCHEMA_VERSION, openDb, openExisting } from "./db.js";
 import { reviewProposal } from "./edits.js";
 import { ToolError } from "./common.js";
 import { listProposals, openReadOnly } from "./queries.js";
@@ -71,11 +71,11 @@ const option = (name: string) => (argv.includes(name) ? argv[argv.indexOf(name) 
 const say = (text: string) => process.stderr.write(text);
 
 async function importCommand() {
-  const db = openDb();
+  // A dry run saves nothing, the mirror and the schema included, so it reads the store as the last sync left it.
+  const dryRun = flag("--dry-run");
+  const db = dryRun ? openExisting() : openDb();
   const config = zoteroConfig();
   const sources = [...new Set([config.library, ...(process.env.QUOTE_ZOTERO_SOURCES ?? "").split(",").map((s) => s.trim()).filter(Boolean)])];
-  // A dry run writes nothing, the mirror included, so it reads the mirror as the last sync left it.
-  const dryRun = flag("--dry-run");
   if (!flag("--no-zotero") && !dryRun) {
     for (const library of sources) {
       const r = await syncLibrary(db, new ZoteroClient({ ...config, library }, (t) => say(`\n${t}`)), library, say);

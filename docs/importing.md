@@ -67,8 +67,8 @@ To see what a full import would do, without saving anything:
 
     quote-mcp import --dry-run
 
-It reads the mirror as the last sync left it, and needs `QUOTE_DRUPAL_URL`. Dry run or not, an import lists each work that
-moves, and each match whose item shares no author with the work, which may be another book. It warns if no work on the old
+It reads the store and mirror as they are, so it needs a store at this build's schema, and `QUOTE_DRUPAL_URL`. Dry run or not, an import lists each work that
+moves, and each match whose item shares no author with the work, or has none, since it may be another book. It warns if no work on the old
 site has a year or authors, since that means a column has changed, not that the site has none. A value it can't read as text
 stops the import rather than reading as empty.
 

@@ -47,7 +47,7 @@ export interface ImportStats {
   works: Record<string, number>;
   /** Old-site works that matched something different from last time. */
   workChanges: WorkChange[];
-  /** Works matched by title to an item with none of their authors: worth a look, since it may be another book. */
+  /** Works matched by title to an item with none of their authors, or none at all: worth a look, since it may be another book. */
   authorMismatches: { title: string; authors: string[]; zotero: string; creators: string[] }[];
   unresolvedTags: [string, number][];
   ocrSuspects: number;
@@ -170,7 +170,7 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
       if (hits.length === 1) {
         const { key, data } = hits[0];
         const made = creators(data);
-        if (w.authors.length && made.length && !shareAuthor(w.authors, made)) stats.authorMismatches.push({ title: w.title, authors: w.authors, zotero: key, creators: made });
+        if (w.authors.length && !shareAuthor(w.authors, made)) stats.authorMismatches.push({ title: w.title, authors: w.authors, zotero: key, creators: made });
         id = zoteroWork(opts.primary, key, data);
       } else {
         const match = hits.length ? "ambiguous" : "unmatched";

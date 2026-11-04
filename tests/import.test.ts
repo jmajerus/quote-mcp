@@ -1,7 +1,9 @@
-import { rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import Database from "better-sqlite3";
-import { type DB, SCHEMA_VERSION, openDb } from "../src/db.js";
+import { type DB, SCHEMA_VERSION, openDb, openExisting } from "../src/db.js";
 import { type DrupalSite, emptyFields, workFromRow } from "../src/drupal.js";
 import { exportAll } from "../src/export.js";
 import { holdingsCounts } from "../src/holdings.js";
@@ -226,6 +228,12 @@ describe("import", () => {
       expect(keyOf(LONG)).toBe("SAMENAME");
     });
 
+    it("reports a match to an item with no authors, when the work has some", () => {
+      addItem(db, PRIMARY, "NOBODY01", { itemType: "book", title: "Unsigned", date: "2000" });
+      const { authorMismatches } = runImport(db, withWork(work(36, "Unsigned", null, ["Doe, Jane"], LONG), work(37, "Unsigned", null, [], "Another sentence that is long enough to count")));
+      expect(authorMismatches).toEqual([{ title: "Unsigned", authors: ["Doe, Jane"], zotero: "NOBODY01", creators: [] }]);
+    });
+
     it("reports what a dry run would move, and leaves everything as it was", () => {
       const o = withWork(work(34, "Later Filed", null, [], LONG));
       runImport(db, o);
@@ -267,7 +275,10 @@ describe("import", () => {
       for (const t of ["Shame & Guilt", "Shame &amp; Guilt", "Shame and Guilt", "SHAME AND GUILT: x"]) expect(normalizedTitle(t)).toBe("shame and guilt");
       expect(fullTitle("Shame & Guilt: x")).toBe(fullTitle("shame and guilt x"));
       expect(normalizedTitle("Previews &#38; Premises &#x26; More")).toBe("previews and premises and more");
-      expect(normalizedTitle("Work &bogus; x &#99999999; y")).toBe("work and bogus x and 99999999 y");
+      expect(normalizedTitle("Work &bogus; x &#99999999; y")).toBe("work and bogus x y");
+      expect(normalizedTitle("Caf&eacute; &ldquo;Life&rdquo;")).toBe("cafe life");
+      expect(normalizedTitle("Work &ndash; why")).toBe("work");
+      expect(normalizedTitle("AT&T and Me")).toBe("at and t and me");
       expect(shareAuthor(["O&#039;Neil, Judy"], ["O'Neil, Judy"])).toBe(true);
     });
 
@@ -323,6 +334,26 @@ describe("import", () => {
 });
 
 describe("schema", () => {
+  it("leaves a store alone for a dry run: it won't create one or migrate one", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "quote-mcp-existing-"));
+    try {
+      const file = path.join(dir, "quotes.db");
+      expect(() => openExisting(file)).toThrow();
+      expect(existsSync(file)).toBe(false);
+      openDb(file).close();
+      openExisting(file).close();
+      const old = new Database(file);
+      old.pragma(`user_version = ${SCHEMA_VERSION - 1}`);
+      old.close();
+      expect(() => openExisting(file)).toThrow(/Run migrate first/);
+      const after = new Database(file, { readonly: true });
+      expect(after.pragma("user_version", { simple: true })).toBe(SCHEMA_VERSION - 1);
+      after.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("adds kind to a store made before notes, keeping its quotes as quotes", () => {
     const path = `${process.env.TMPDIR ?? "/tmp"}/quote-mcp-v1-${process.pid}.db`;
     const v1 = new Database(path);
