@@ -3,7 +3,7 @@ import { type Routes, answerApi, publishedRoutes } from "./api-routes.js";
 import type { DB } from "./db.js";
 import type { Published } from "./published.js";
 import { conceptGraph, findConcept, getConcept, searchQuotes } from "./queries.js";
-import { type ConceptSet, listSets, setGraph } from "./sets.js";
+import { listSets, setGraph } from "./sets.js";
 
 /**
  * A read-only JSON API at /api, for the concept maps (quote-atlas, served at /map/ from the same
@@ -30,11 +30,11 @@ async function send(res: http.ServerResponse, routes: Routes, req: http.Incoming
 }
 
 /** Answers an /api request from the store. */
-export function handleApi(db: DB, req: http.IncomingMessage, res: http.ServerResponse, url: URL, sets: ConceptSet[] = []): Promise<void> {
+export function handleApi(db: DB, req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
   return send(res, {
     graph: () => conceptGraph(db),
-    sets: () => listSets(db, sets),
-    set: (slug) => setGraph(db, sets, slug),
+    sets: () => listSets(db),
+    set: (slug) => setGraph(db, slug),
     concept: (slug) => getConcept(db, slug),
     quotes: (slug, narrower, limit, offset) => {
       const concept = findConcept(db, slug);

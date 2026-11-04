@@ -9,29 +9,27 @@ import { readIntro } from "../src/intro.js";
 import type { Published } from "../src/published.js";
 import { openSnapshot, snapshotReader } from "../src/published-sqlite.js";
 import { servePublic, serveHttp } from "../src/server.js";
-import type { ConceptSet } from "../src/sets.js";
 import { bibtex, plainText, quoteHtml } from "../src/public.js";
 import { renderSite } from "../src/site.js";
 import { type SnapshotOptions, buildSnapshot, readMapsFile } from "../src/snapshot.js";
-import { PRIVATE_NOTE, QUOTED, SHARED_NOTE, makeStore } from "./fixture.js";
+import { PRIVATE_NOTE, QUOTED, SHARED_NOTE, addSet, makeStore } from "./fixture.js";
 
 let db: DB;
 let mapDir: string;
 const servers: http.Server[] = [];
 
-const SETS: ConceptSet[] = [{ slug: "harm", scheme: "human-work", label: "Harm", description: "Abuse and what it includes", concepts: ["abuse"], narrower: ["abuse"] }];
 let built = 0;
 
 /** A snapshot of the test store with these settings, opened as the public pages read it. */
 async function site(rest: Partial<SnapshotOptions> = {}): Promise<Published> {
   const file = path.join(mapDir, `public-${built++}.db`);
-  buildSnapshot(db, { level: "catalogue", notes: false, intro: readIntro("# Work quotes\n\nQuotes about work."), collections: {}, sets: SETS, maps: readMapsFile(mapDir), ...rest }, file);
+  buildSnapshot(db, { level: "catalogue", notes: false, intro: readIntro("# Work quotes\n\nQuotes about work."), collections: {}, maps: readMapsFile(mapDir), ...rest }, file);
   return openSnapshot(file);
 }
 
 async function start(options: Partial<SnapshotOptions> | null, publicPort = true) {
   const published = options && (await site(options));
-  const base = { host: "127.0.0.1", port: 0, mapDir, sets: SETS, snapshot: published ? async () => published : undefined };
+  const base = { host: "127.0.0.1", port: 0, mapDir, snapshot: published ? async () => published : undefined };
   const url = (server: http.Server) => {
     const a = server.address();
     return `http://127.0.0.1:${typeof a === "object" && a ? a.port : 0}`;
@@ -46,6 +44,7 @@ async function start(options: Partial<SnapshotOptions> | null, publicPort = true
 
 beforeAll(() => {
   db = makeStore();
+  addSet(db, { slug: "harm", label: "Harm", description: "Abuse and what it includes", concepts: ["abuse"], narrower: ["abuse"] });
   mapDir = fs.mkdtempSync(path.join(os.tmpdir(), "quote-mcp-site-"));
   fs.writeFileSync(path.join(mapDir, "maps.json"), JSON.stringify([{ name: "human-work", title: "Human work", description: "The 2014 diagram", scheme: "human-work" }]));
 });
@@ -304,7 +303,7 @@ describe("the quotes level", () => {
 
 describe("the public snapshot", () => {
   const options = (rest: Partial<SnapshotOptions> = {}): SnapshotOptions =>
-    ({ level: "quotes", notes: false, intro: readIntro("# Work quotes"), collections: {}, sets: SETS, maps: [], ...rest });
+    ({ level: "quotes", notes: false, intro: readIntro("# Work quotes"), collections: {}, maps: [], ...rest });
   const build = (rest: Partial<SnapshotOptions> = {}) => {
     const file = path.join(mapDir, `check-${built++}.db`);
     const summary = buildSnapshot(db, options(rest), file);

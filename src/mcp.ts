@@ -5,7 +5,7 @@ import { type AddQuoteOptions, MAX_QUOTE, addQuote } from "./capture.js";
 import type { DB } from "./db.js";
 import { deleteQuote, proposeFix, updateQuote } from "./edits.js";
 import { QUEUES, ToolError, citeQuote, getConcept, getQuote, listConcepts, overview, searchQuotes, worklist } from "./queries.js";
-import { type ConceptSet, listSets, setConcepts } from "./sets.js";
+import { listSets, setConcepts } from "./sets.js";
 
 export const VERSION = "0.3.0";
 
@@ -46,8 +46,8 @@ export interface Capture extends Omit<AddQuoteOptions, "actor"> { writer: () => 
 const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
 const quoteId = z.number().int().min(1).describe("Quote id from search_quotes");
 
-export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture): McpServer {
-  const within = (set: string | undefined) => (set ? setConcepts(db, sets, set) : undefined);
+export function createServer(db: DB, capture?: Capture): McpServer {
+  const within = (set: string | undefined) => (set ? setConcepts(db, set) : undefined);
   const server = new McpServer({ name: "quote-mcp", version: VERSION }, { instructions: INSTRUCTIONS });
 
   server.registerTool("search_quotes", {
@@ -100,7 +100,7 @@ export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture)
     description: "Named concept sets: parts of a scheme picked for a map or a theme (despair and its neighbours, say), with how many concepts and quotes each has. Pass a set's slug as set to search_quotes or list_concepts.",
     inputSchema: {},
     annotations: readOnly,
-  }, () => run(() => listSets(db, sets)));
+  }, () => run(() => listSets(db)));
 
   server.registerTool("get_concept", {
     title: "Get a concept",

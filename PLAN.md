@@ -425,7 +425,7 @@ its `/quotes`, and filters `/api/graph` by each concept's `scheme`, so
   resolves outside the folder is 404; `index.html` is revalidated on every
   load, and files with a build hash in their names are cached for a year.
   Without `QUOTE_MAP_DIR`, `/map/` is 404.
-- **Concept sets** (built 2026-10-28). Named parts of one scheme, so a map can show less than a whole scheme, search can stay
+- **Concept sets** (built 2026-10-28; since 2026-11-04 terminology-mcp is their master, and the file described here is gone: see docs/concepts.md). Named parts of one scheme, so a map can show less than a whole scheme, search can stay
   within one, and themes (quote-atlas's plan) have something to draw on.
   They're editorial, so they live here, not in quote-atlas, and in a file in
   git (`vocab/sets.json`, or `QUOTE_SETS`), not the store, so they're

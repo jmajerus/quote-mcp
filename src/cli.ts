@@ -19,7 +19,7 @@ import { snapshotReader } from "./published-sqlite.js";
 import { d1ConfigFrom, d1Http } from "./d1-http.js";
 import { openReplicaState, pending, startDrain, tick } from "./drain.js";
 import { replicaScript } from "./replica.js";
-import { type ConceptSet, listSets, loadSets } from "./sets.js";
+import { listSets } from "./sets.js";
 import { configReport, siteSetting } from "./settings.js";
 import { type SnapshotOptions, buildSnapshot, readMapsFile } from "./snapshot.js";
 import { syncLibrary } from "./sync.js";
@@ -157,11 +157,6 @@ function statsCommand() {
 /** A file in the checkout's vocab/ folder (one level up from src/ and dist/). */
 const vocab = (name: string) => fileURLToPath(new URL(`../vocab/${name}`, import.meta.url));
 
-/** The concept sets: QUOTE_SETS, or the checkout's vocab/sets.json when there is one. */
-function sets(): ConceptSet[] {
-  if (process.env.QUOTE_SETS) return loadSets(process.env.QUOTE_SETS);
-  return existsSync(vocab("sets.json")) ? loadSets(vocab("sets.json")) : [];
-}
 
 /** The front page's file, whose settings header holds the public site's choices: QUOTE_INTRO, or vocab/site.md. */
 const introFile = () => process.env.QUOTE_INTRO || vocab("site.md");
@@ -192,7 +187,7 @@ function snapshotOptions(): SnapshotOptions | null {
   const notes = siteSetting("QUOTE_PUBLIC_NOTES", process.env, loadSiteSettings(intro));
   if (notes !== "none" && notes !== "all") throw new Error(`The notes setting is "${notes}"; it should be none or all (QUOTE_PUBLIC_NOTES, or notes: in vocab/site.md).`);
   return { level: public_, notes: notes === "all", intro: loadIntro(intro), collections: loadCollections(join(dirname(intro), "collections")),
-    sets: sets(), maps: readMapsFile(process.env.QUOTE_MAP_DIR || undefined) };
+    maps: readMapsFile(process.env.QUOTE_MAP_DIR || undefined) };
 }
 
 const snapshotLine = (s: ReturnType<typeof buildSnapshot>) =>
@@ -241,7 +236,6 @@ function configCommand() {
 }
 
 async function serveCommand() {
-  const conceptSets = sets();
   const snapshot = level() === "none" ? undefined : snapshotReader(snapshotFile());
   const replica = snapshot ? startDrain(snapshotFile(), replicaStateFile(), process.env, wranglerFile()) : undefined;
   // The concepts changed: rebuild the public snapshot, which the drain then ships.
@@ -255,15 +249,15 @@ async function serveCommand() {
       store.close();
     }
   };
-  const terms = startTermSync({ file: process.env.QUOTE_DB ?? "data/quotes.db", sets: conceptSets, onApplied: rebuild });
-  const options = { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010), mapDir: process.env.QUOTE_MAP_DIR || undefined, sets: conceptSets, snapshot, replica, terms, capture: capture() };
+  const terms = startTermSync({ file: process.env.QUOTE_DB ?? "data/quotes.db", onApplied: rebuild });
+  const options = { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010), mapDir: process.env.QUOTE_MAP_DIR || undefined, snapshot, replica, terms, capture: capture() };
   await serveHttp(openReadOnly(), options);
   if (process.env.QUOTE_PUBLIC_PORT) await servePublic({ ...options, port: Number(process.env.QUOTE_PUBLIC_PORT) });
 }
 
 /** Each concept set as the store has it now; fails when a set names a concept the scheme doesn't have. */
 function setsCommand() {
-  const listed = listSets(openReadOnly(), sets());
+  const listed = listSets(openReadOnly());
   console.log(JSON.stringify(listed, null, 2));
   const missing = listed.filter((s) => s.missing.length);
   if (missing.length) throw new Error(`Concepts not in their scheme: ${missing.map((s) => `${s.slug} (${s.missing.join(", ")})`).join("; ")}.`);
@@ -305,7 +299,7 @@ async function termsCommand() {
     return;
   }
   const apply = flag("--apply");
-  const result = await runTermSync({ db, client, sets: sets(), apply });
+  const result = await runTermSync({ db, client, apply });
   console.log(`Concepts from terminology-mcp ${apply ? "" : "(dry run) "}${result.outcome} against ${client.baseUrl}: through ${result.through}, head ${result.head ?? "?"}.`);
   print(apply ? "Applied:" : "Would apply:", result.lines);
   print("Problems (reported, not applied):", result.problems?.map((p) => `${p.code}: ${p.reason}`));
@@ -398,7 +392,7 @@ function proposalsCommand() {
 const commands: Record<string, () => unknown> = {
   import: importCommand, migrate: migrateCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, sets: setsCommand, publish: publishCommand, config: configCommand, serve: serveCommand,
   terms: termsCommand, propose: proposeCommand, "take-corpus-quotes": takeCorpusQuotesCommand, proposals: proposalsCommand,
-  stdio: () => serveStdio(openReadOnly(), sets(), capture()),
+  stdio: () => serveStdio(openReadOnly(), capture()),
 };
 const command = commands[process.argv[2] ?? ""];
 if (!command) {

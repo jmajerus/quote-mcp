@@ -81,13 +81,12 @@ relations, both ways. Its children's rows are theirs and stay.
 | `merged`, or `retired` with one replacement | Applied, and the retired concept's tags and keyword marks are re-pointed to the replacement, keeping their words, with a `concept_replaced` history entry per quote. |
 | `retired` with no replacement, or several | Applied when no quote uses the concept; otherwise **held** (`retire-ambiguous`). |
 | `split` | Applied when no quote uses the concept; otherwise **held** (`split`). |
-| `slugged` | Applied: the old slug goes to `former_slugs`, so `/api/concepts/<old>` keeps resolving, on the LAN and on the public site. **Held** (`slug-in-sets`) when `vocab/sets.json` names the old slug, while that file is in effect (the store has no sets). |
+| `slugged` | Applied: the old slug goes to `former_slugs`, so `/api/concepts/<old>` keeps resolving, on the LAN and on the public site. |
 | `set-added`, `set-changed`, `set-deleted` | Applied from `afterSets`, for this scheme. Any other kind's `afterSets` is applied too: a merge rewrites the sets that name the merged term. A set names terms by id, so it never holds; an id that isn't a live concept here shows as `missing`. |
 | `scheme-added`, `scheme-changed` | Ignored, apart from any `afterSets`. |
 | anything else | **Held** (`unknown-change`). |
 
-A slug check runs for every kind, not only `slugged`, so no change can
-rename a slug the sets use. A write that would break `UNIQUE (scheme_id,
+A write that would break `UNIQUE (scheme_id,
 slug)`, or a broader term that isn't here, is held too (`slug-clash`,
 `unknown-term`). A related or opposite term that isn't here is in another
 scheme, which isn't followed, so that link is skipped.
@@ -98,8 +97,6 @@ terminology-mcp's **Subscribers** panel shows the hold with its code and
 reason; `/health` shows it as `terms.blocked`. Either change it back in
 terminology-mcp, or handle it here and accept it:
 
-- `slug-in-sets`: edit `vocab/sets.json` to the new slug, deploy, then
-  `npm run terms -- --accept <n>`.
 - `split`, `retire-ambiguous`: decide where the quotes go.
   `npm run terms -- --accept <n> --repoint <slug>` writes the change and
   re-points every quote of the retired concept to that one; without

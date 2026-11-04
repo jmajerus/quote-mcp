@@ -45,7 +45,7 @@ function setup() {
   const work = path.join(dir, `run-${n++}`);
   fs.mkdirSync(work);
   const file = path.join(work, "public.db");
-  const build = () => buildSnapshot(store, { level: "quotes", notes: false, intro: readIntro("# Work quotes"), collections: {}, sets: [], maps: [] }, file);
+  const build = () => buildSnapshot(store, { level: "quotes", notes: false, intro: readIntro("# Work quotes"), collections: {}, maps: [] }, file);
   build();
   const replica = new Database(":memory:");
   replica.exec(MIGRATION);

@@ -1,7 +1,6 @@
 import Database from "better-sqlite3";
 import { type DB, getMeta, now, setMeta } from "./db.js";
 import { SCHEME } from "./import.js";
-import { type ConceptSet, storedSets } from "./sets.js";
 
 /**
  * Follows terminology-mcp's `human-work` scheme, which is the master of its concepts, labels, slugs,
@@ -19,7 +18,6 @@ import { type ConceptSet, storedSets } from "./sets.js";
  *
  *   split              a concept that quotes use was split
  *   retire-ambiguous   a concept that quotes use was retired with no replacement, or several
- *   slug-in-sets       a slug changed that vocab/sets.json names, while that file is in effect
  *
  * Concept sets follow the same way. Any change can carry them in afterSets, not only the set-* kinds: a merge
  * rewrites the definitions that name the merged term. A set names its terms by id, so it needs no hold: an id
@@ -206,11 +204,6 @@ function repoint(db: DB, from: Local, to: Local, why: string): number {
   return quotes.length;
 }
 
-/** The sets in vocab/sets.json that name a slug of the scheme. */
-function setsNaming(sets: ConceptSet[], slug: string): string[] {
-  return sets.filter((s) => s.scheme === SCHEME_ID && [s.concepts, s.around, s.narrower, s.exclude].some((l) => l?.includes(slug))).map((s) => s.slug);
-}
-
 /** Writes a set's snapshot, keeping the slug it had as a former one; a deleted set's row goes. */
 function writeSet(db: DB, set: TermSet): void {
   if (set.deleted) {
@@ -253,22 +246,16 @@ const quotes = (n: number) => `${n} quote${n === 1 ? "" : "s"}`;
  * Applies one change to the store, or throws Hold for one that needs a person. Run it in a transaction:
  * a hold thrown after some writes leaves nothing behind. Returns a line for each thing it did.
  */
-export function applyChange(db: DB, change: Change, sets: ConceptSet[]): string[] {
+export function applyChange(db: DB, change: Change): string[] {
   // These carry no terms to apply, but any change can carry sets, and a change passed isn't seen again.
   if (IGNORED.has(change.kind) || SET_KINDS.has(change.kind)) return applySets(db, change);
   if (!APPLIED.has(change.kind)) throw new Hold("unknown-change", `Change kind "${change.kind}" isn't one Quote MCP knows`);
   const terms = snapshotsOf(change);
   const lines: string[] = [];
   const replacing: [Local, string][] = [];
-  // The file names slugs, and is in effect only while the store has no sets of its own.
-  const fileSets = storedSets(db).length ? [] : sets;
   for (const t of terms) {
     const row = byTerm(db, t.id);
     if (!row) continue;
-    if (row.slug !== t.slug) {
-      const named = setsNaming(fileSets, row.slug);
-      if (named.length) throw new Hold("slug-in-sets", `The slug ${row.slug} became ${t.slug}, and vocab/sets.json names it (${named.join(", ")})`);
-    }
     if (row.status === "retired" || t.status !== "retired") continue;
     const used = usedBy(db, row.id).length;
     const into = t.replacedBy ?? [];
@@ -433,7 +420,7 @@ const ROLLBACK = new Error("dry run");
  * first that needs a person. With apply false the same work runs and is rolled back, so `lines` says
  * exactly what a pass would do and `blocked` where it would stop.
  */
-export async function runTermSync({ db, client, sets, apply = true }: { db: DB; client: TerminologyClient; sets: ConceptSet[]; apply?: boolean }): Promise<SyncResult> {
+export async function runTermSync({ db, client, apply = true }: { db: DB; client: TerminologyClient; apply?: boolean }): Promise<SyncResult> {
   const cursor = readCursor(db);
   if (!cursor) return bootstrap(db, client, apply);
   let response: Awaited<ReturnType<TerminologyClient["changes"]>> | null;
@@ -456,7 +443,7 @@ export async function runTermSync({ db, client, sets, apply = true }: { db: DB; 
     for (const change of response.changes) {
       try {
         lines.push(...db.transaction(() => {
-          const done = applyChange(db, change, sets);
+          const done = applyChange(db, change);
           writeCursor(db, { log, through: change.n, blocked: null }, through);
           return done;
         }).immediate().map((l) => `${change.n} ${l}`));
@@ -550,8 +537,8 @@ export const termSyncEnabled = (env: NodeJS.ProcessEnv = process.env) => env.QUO
  * runs after a pass that changed the store (the public snapshot is rebuilt then). Returns its status for
  * /health.
  */
-export function startTermSync({ file, sets, env = process.env, onApplied, client, intervalMs = TERMS_INTERVAL_MS }: {
-  file: string; sets: ConceptSet[]; env?: NodeJS.ProcessEnv; onApplied?: () => void; client?: TerminologyClient; intervalMs?: number;
+export function startTermSync({ file, env = process.env, onApplied, client, intervalMs = TERMS_INTERVAL_MS }: {
+  file: string; env?: NodeJS.ProcessEnv; onApplied?: () => void; client?: TerminologyClient; intervalMs?: number;
 }): () => TermSyncStatus {
   const status: TermSyncStatus = { phase: "off", through: null, head: null, blocked: null, error: null, at: null };
   const config = terminologyConfig(env);
@@ -571,7 +558,7 @@ export function startTermSync({ file, sets, env = process.env, onApplied, client
     if (running) return;
     running = true;
     try {
-      const result = await runTermSync({ db, client: target, sets });
+      const result = await runTermSync({ db, client: target });
       for (const line of result.lines) if (result.outcome !== "current") console.error(`Concepts from terminology-mcp: ${line}`);
       if (result.outcome === "bootstrap-held") throw new Error(`the bootstrap is held: ${result.problems!.filter((p) => BLOCKING.has(p.code)).map((p) => p.reason).join("; ")}`);
       if (result.outcome === "held") say(`Concepts from terminology-mcp held at change ${result.blocked!.at} (${result.blocked!.code}): ${result.blocked!.reason}`);

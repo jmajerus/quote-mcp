@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import type { DB } from "./db.js";
 import { type Visibility, bibtex, plainText, visible } from "./public.js";
 import { citeQuote, locatorText, workSummary } from "./queries.js";
-import { type ConceptSet, currentSets, definitionOf, resolveSet } from "./sets.js";
+import { definitionOf, resolveSet, storedSets } from "./sets.js";
 import type { Intro } from "./intro.js";
 
 /**
@@ -46,11 +46,10 @@ CREATE TABLE set_concepts (set_slug TEXT NOT NULL, concept_id INTEGER NOT NULL, 
 CREATE TABLE maps (name TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT, scheme TEXT, set_slug TEXT, svg TEXT, position INTEGER NOT NULL);
 `;
 
-/** What goes into a snapshot, besides the store: the level, the introductions, the sets, and the maps. */
+/** What goes into a snapshot, besides the store: the level, the introductions and the maps. */
 export interface SnapshotOptions extends Visibility {
   intro: Intro;
   collections: Record<string, Intro>;
-  sets: ConceptSet[];
   /** The maps, as quote-atlas's maps.json lists them. */
   maps: MapEntry[];
 }
@@ -146,7 +145,7 @@ function fill(store: DB, snap: Database.Database, o: SnapshotOptions): void {
     concepts: concepts.map((c) => ({ slug: c.slug as string, scheme: schemes.find((s) => s.id === c.scheme_id)!.slug as string })),
     relations: (snap.prepare(`SELECT a.slug AS "from", b.slug AS "to", r.type FROM relations r JOIN concepts a ON a.id = r.from_id JOIN concepts b ON b.id = r.to_id`).all()) as { from: string; to: string; type: string }[],
   };
-  currentSets(store, o.sets).forEach((set, position) => {
+  storedSets(store).forEach((set, position) => {
     const scheme = schemes.find((s) => s.slug === set.scheme);
     if (!scheme) return;
     const { members, missing } = resolveSet(set, graph as never);

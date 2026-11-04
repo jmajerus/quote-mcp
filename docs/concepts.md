@@ -28,7 +28,6 @@ a card for each. "Collection" is the readers' word only: in the code and the sto
 
 A concept set names a part of one scheme, for a map, a theme, or search. terminology-mcp is their master: make
 and change them on its `/sets` page, and quote-mcp's subscriber keeps a copy in the store, within a minute.
-[vocab/sets.json](../vocab/sets.json) is used only while the store has no sets, and goes once they've moved.
 Search and `list_concepts` take a set (`set`), the public site has a page per set (as "starting points"), and
 the API serves each one in the graph's shape for the maps.
 

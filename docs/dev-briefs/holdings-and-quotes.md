@@ -234,11 +234,10 @@ As built:
   public snapshot read the store's sets. `list_sets` and the server's
   `/api/sets` add quote counts.
 
-The cutover, in order: deploy this; create the sets in terminology-mcp;
-check that `GET /api/sets/<id>/expand` gives the members quote-mcp lists; then,
-in a later release, remove `vocab/sets.json`, `QUOTE_SETS`, and the
-`slug-in-sets` hold. Until the store has a set, the file stays in effect and
-the hold applies.
+The cutover is done: `despair` was created in terminology-mcp on 2026-11-04,
+and `GET /api/sets/<id>/expand` gave the 8 members quote-mcp listed. Then
+`vocab/sets.json`, `QUOTE_SETS`, and the `slug-in-sets` hold were removed, so the
+store's sets are the only ones. A store with none shows none.
 
 ## 4. One Zotero mirror (holdings phase 4)
 

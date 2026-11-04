@@ -44,3 +44,9 @@ export function makeStore(): DB {
   runImport(db, { drupal, primary: PRIMARY, sources: [PRIMARY] });
   return db;
 }
+
+/** A concept set in the store, as the subscriber keeps it. The store's concepts have no term ids here, so the recipe names slugs. */
+export function addSet(db: DB, set: { slug: string; label: string; description?: string; concepts?: string[]; narrower?: string[] }): void {
+  db.prepare("INSERT INTO concept_sets (id, scheme, slug, label, description, kind, ordered, members, recipe, former_slugs, updated_at) VALUES (?, 'human-work', ?, ?, ?, 'theme', 0, '[]', ?, '[]', '2026-01-01')")
+    .run(`s_${set.slug}`, set.slug, set.label, set.description ?? null, JSON.stringify({ concepts: set.concepts ?? [], narrower: set.narrower ?? [], around: [], exclude: [] }));
+}

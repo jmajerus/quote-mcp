@@ -7,12 +7,12 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type DB, openDb } from "../src/db.js";
+import { addSet } from "./fixture.js";
 import type { DrupalSite } from "../src/drupal.js";
 import { runImport } from "../src/import.js";
 import { citeQuote, ftsQuery, getConcept, searchQuotes } from "../src/queries.js";
 import { holdingsCounts } from "../src/holdings.js";
 import { serveHttp } from "../src/server.js";
-import type { ConceptSet } from "../src/sets.js";
 
 const PRIMARY = "users/1";
 
@@ -57,11 +57,9 @@ beforeAll(async () => {
   fs.writeFileSync(path.join(mapDir, "assets", "index.html"), "<p>assets</p>");
   fs.writeFileSync(path.join(mapRoot, "secret.txt"), "secret");
   fs.symlinkSync(path.join(mapRoot, "secret.txt"), path.join(mapDir, "link.txt"));
-  const sets: ConceptSet[] = [
-    { slug: "harm", scheme: "human-work", label: "Harm", concepts: ["abuse"], narrower: ["abuse"] },
-    { slug: "worth", scheme: "human-work", label: "Worth", description: "with a typo", concepts: ["dignity", "dignty"] },
-  ];
-  server = await serveHttp(db, { host: "127.0.0.1", port: 0, mapDir, sets });
+  addSet(db, { slug: "harm", label: "Harm", concepts: ["abuse"], narrower: ["abuse"] });
+  addSet(db, { slug: "worth", label: "Worth", description: "with a typo", concepts: ["dignity", "dignty"] });
+  server = await serveHttp(db, { host: "127.0.0.1", port: 0, mapDir });
   const a = server.address();
   base = `http://127.0.0.1:${typeof a === "object" && a ? a.port : 0}`;
 });

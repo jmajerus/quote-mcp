@@ -16,7 +16,7 @@ import { serveMap } from "./map.js";
 import type { DrainStatus } from "./drain.js";
 import type { Published } from "./published.js";
 import type { TermSyncStatus } from "./terminology.js";
-import { type ConceptSet, currentSets } from "./sets.js";
+import { storedSets } from "./sets.js";
 import { isSitePath, renderSite } from "./site.js";
 import { VERSION, createServer } from "./mcp.js";
 import { ToolError, overview } from "./queries.js";
@@ -41,8 +41,6 @@ export interface ServeOptions {
   port: number;
   /** The concept map's built files, served at /map/; without it /map/ is 404. */
   mapDir?: string;
-  /** The concept sets (src/sets.ts), for the API and the MCP tools. */
-  sets?: ConceptSet[];
   /** The public snapshot, reread when it's rebuilt; without it (QUOTE_PUBLIC=none), / redirects to /admin. */
   snapshot?: () => Promise<Published | null>;
   /** The drain that keeps the snapshot's replica in D1 in step (src/drain.ts), for /health. */
@@ -173,7 +171,7 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
         return;
       }
       if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
-        await handleApi(db, req, res, url, options.sets);
+        await handleApi(db, req, res, url);
         return;
       }
       if (url.pathname === "/map" || url.pathname.startsWith("/map/")) {
@@ -216,7 +214,7 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
         }));
         return;
       }
-      const mcp = createServer(db, options.sets, options.capture);
+      const mcp = createServer(db, options.capture);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       res.on("close", () => {
         void transport.close();
@@ -233,7 +231,7 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
       if (!res.headersSent) res.writeHead(500).end();
     }
   });
-  const setCount = currentSets(db, options.sets).length;
+  const setCount = storedSets(db).length;
   const sets = setCount ? ` with ${setCount} concept set${setCount === 1 ? "" : "s"}` : "";
   const site = options.snapshot ? ", the public site's preview at /" : "";
   return listen(server, options.port, options.host, `/mcp, /admin, /api${sets}${options.mapDir ? `, /map/ from ${options.mapDir}` : ""}${site}`);
@@ -267,6 +265,6 @@ export function servePublic(options: ServeOptions): Promise<http.Server> {
   return listen(server, options.port, options.host, `public, from the snapshot: /${options.mapDir ? ", /map/" : ""}, /api/graph, /api/concepts, /api/sets`);
 }
 
-export async function serveStdio(db: DB, sets: ConceptSet[] = [], capture?: Capture): Promise<void> {
-  await createServer(db, sets, capture).connect(new StdioServerTransport());
+export async function serveStdio(db: DB, capture?: Capture): Promise<void> {
+  await createServer(db, capture).connect(new StdioServerTransport());
 }
