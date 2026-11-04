@@ -16,7 +16,7 @@ import { serveMap } from "./map.js";
 import type { DrainStatus } from "./drain.js";
 import type { Published } from "./published.js";
 import type { TermSyncStatus } from "./terminology.js";
-import type { ConceptSet } from "./sets.js";
+import { type ConceptSet, currentSets } from "./sets.js";
 import { isSitePath, renderSite } from "./site.js";
 import { VERSION, createServer } from "./mcp.js";
 import { ToolError, overview } from "./queries.js";
@@ -233,7 +233,8 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
       if (!res.headersSent) res.writeHead(500).end();
     }
   });
-  const sets = options.sets?.length ? ` with ${options.sets.length} concept set${options.sets.length === 1 ? "" : "s"}` : "";
+  const setCount = currentSets(db, options.sets).length;
+  const sets = setCount ? ` with ${setCount} concept set${setCount === 1 ? "" : "s"}` : "";
   const site = options.snapshot ? ", the public site's preview at /" : "";
   return listen(server, options.port, options.host, `/mcp, /admin, /api${sets}${options.mapDir ? `, /map/ from ${options.mapDir}` : ""}${site}`);
 }

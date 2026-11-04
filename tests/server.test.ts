@@ -58,7 +58,7 @@ beforeAll(async () => {
   fs.writeFileSync(path.join(mapRoot, "secret.txt"), "secret");
   fs.symlinkSync(path.join(mapRoot, "secret.txt"), path.join(mapDir, "link.txt"));
   const sets: ConceptSet[] = [
-    { slug: "harm", scheme: "human-work", label: "Harm", narrower: ["abuse"] },
+    { slug: "harm", scheme: "human-work", label: "Harm", concepts: ["abuse"], narrower: ["abuse"] },
     { slug: "worth", scheme: "human-work", label: "Worth", description: "with a typo", concepts: ["dignity", "dignty"] },
   ];
   server = await serveHttp(db, { host: "127.0.0.1", port: 0, mapDir, sets });
@@ -181,8 +181,8 @@ describe("MCP over HTTP", () => {
       return { isError: result.isError, value: (result.content as { text: string }[])[0].text };
     };
     expect(JSON.parse((await call("list_sets", {})).value)).toEqual([
-      { slug: "harm", scheme: "human-work", label: "Harm", description: null, concepts: 2, missing: [] },
-      { slug: "worth", scheme: "human-work", label: "Worth", description: "with a typo", concepts: 1, missing: ["dignty"] },
+      { slug: "harm", scheme: "human-work", label: "Harm", description: null, concepts: 2, quotes: 2, missing: [] },
+      { slug: "worth", scheme: "human-work", label: "Worth", description: "with a typo", concepts: 1, quotes: 1, missing: ["dignty"] },
     ]);
     expect(JSON.parse((await call("search_quotes", { set: "harm" })).value).total).toBe(2);
     expect(JSON.parse((await call("search_quotes", { set: "worth" })).value).quotes[0].text).toBe("Everyone deserves dignity.");

@@ -19,7 +19,7 @@ terminology-mcp's [docs/following-changes.md](https://github.com/jmajerus/termin
 |---|---|
 | Which concepts exist, their labels, alternative labels, slugs, definitions (scope notes), status, and broader, related, and opposite relations | Quotes, notes, and their tags: the words a quote was tagged with, which never change |
 | Merges, splits, retirements, slug changes, with impact previews | Which concept each tag resolves to, and re-pointing a tag when its concept is replaced |
-| Links to other vocabularies (WordNet as a `closeMatch`) | Concept sets (`vocab/sets.json`), the maps, and the public site |
+| Links to other vocabularies (WordNet as a `closeMatch`), and concept sets | The maps and the public site |
 
 Quote MCP stops minting concepts. A tag that isn't a concept is proposed to
 terminology-mcp with the quote as evidence, and arrives back as a
@@ -81,14 +81,16 @@ relations, both ways. Its children's rows are theirs and stay.
 | `merged`, or `retired` with one replacement | Applied, and the retired concept's tags and keyword marks are re-pointed to the replacement, keeping their words, with a `concept_replaced` history entry per quote. |
 | `retired` with no replacement, or several | Applied when no quote uses the concept; otherwise **held** (`retire-ambiguous`). |
 | `split` | Applied when no quote uses the concept; otherwise **held** (`split`). |
-| `slugged` | Applied: the old slug goes to `former_slugs`, so `/api/concepts/<old>` keeps resolving, on the LAN and on the public site. **Held** (`slug-in-sets`) when `vocab/sets.json` names the old slug. |
-| `scheme-added`, `scheme-changed`, `set-added`, `set-changed`, `set-deleted` | Ignored for now. |
+| `slugged` | Applied: the old slug goes to `former_slugs`, so `/api/concepts/<old>` keeps resolving, on the LAN and on the public site. **Held** (`slug-in-sets`) when `vocab/sets.json` names the old slug, while that file is in effect (the store has no sets). |
+| `set-added`, `set-changed`, `set-deleted` | Applied from `afterSets`, for this scheme. Any other kind's `afterSets` is applied too: a merge rewrites the sets that name the merged term. A set names terms by id, so it never holds; an id that isn't a live concept here shows as `missing`. |
+| `scheme-added`, `scheme-changed` | Ignored. |
 | anything else | **Held** (`unknown-change`). |
 
 A slug check runs for every kind, not only `slugged`, so no change can
 rename a slug the sets use. A write that would break `UNIQUE (scheme_id,
-slug)`, or a relation to a term that isn't here, is held too (`slug-clash`,
-`unknown-term`).
+slug)`, or a broader term that isn't here, is held too (`slug-clash`,
+`unknown-term`). A related or opposite term that isn't here is in another
+scheme, which isn't followed, so that link is skipped.
 
 ### Handling a hold
 

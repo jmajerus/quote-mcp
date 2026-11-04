@@ -7,9 +7,9 @@ import { readIntro } from "../src/intro.js";
 import { openSnapshot } from "../src/published-sqlite.js";
 import { buildSnapshot } from "../src/snapshot.js";
 import { findConcept } from "../src/queries.js";
-import type { ConceptSet } from "../src/sets.js";
+import { type ConceptSet, currentSets, listSets, setConcepts, setGraph, storedSets } from "../src/sets.js";
 import {
-  type Change, type Term, type TerminologyClient, TerminologyError, acceptHeldChange, proposal, readCursor, reportProgress, runTermSync,
+  type Change, type Term, type TermSet, type TerminologyClient, TerminologyError, acceptHeldChange, proposal, readCursor, reportProgress, runTermSync,
 } from "../src/terminology.js";
 import { runImport } from "../src/import.js";
 import { drupal, makeStore } from "./fixture.js";
@@ -218,5 +218,204 @@ describe("proposals", () => {
     expect(() => proposal(db, "no such tag")).toThrow(/No quote has the tag/);
     expect(() => proposal(db, "conspiracy theory", { quote: 2 })).toThrow(/Quote 2 doesn't have the tag/);
     expect(proposal(db, "conspiracy theory", { quote: 1 })).toMatchObject({ evidence: { quote: 1 } });
+  });
+});
+
+describe("concept sets from terminology-mcp", () => {
+  const ALL = ["broader", "narrower", "related", "opposite"];
+  const recipe = (rest: Record<string, unknown>) => ({ concepts: [], narrower: [], around: [], exclude: [], ...rest });
+  const set = (id: string, slug: string, rest: Partial<TermSet> = {}): TermSet => ({ id, scheme: "human-work", slug, label: slug, description: "", kind: "theme", ordered: false, members: [], ...rest });
+  const harm = set("s_harm", "harm", { recipe: recipe({ around: [{ term: "t_abuse", depth: 1, types: ALL }] }) });
+  const members = (slug: string) => setConcepts(db, [], slug).slugs;
+  const slugs = () => storedSets(db).map((s) => s.slug);
+
+  it("applies set-added, set-changed, and set-deleted, keyed on the id, and keeps a former slug", async () => {
+    const client = await bootstrapped([
+      { n: 11, kind: "set-added", afterSets: [harm] },
+      { n: 12, kind: "set-changed", afterSets: [{ ...harm, slug: "harms", label: "Harms" }] },
+    ]);
+    const result = await runTermSync({ db, client, sets: SETS });
+    expect(result).toMatchObject({ outcome: "applied", through: 12 });
+    expect(result.lines).toEqual(["11 set-added: set harm", "12 set-changed: set harms"]);
+    expect(slugs()).toEqual(["harms"]);
+    expect(setGraph(db, [], "harm")).toMatchObject({ slug: "harms", label: "Harms" });
+    client.list = [...client.list, { n: 13, kind: "set-deleted", afterSets: [{ ...harm, slug: "harms", deleted: true }] },
+      { n: 14, kind: "set-added", afterSets: [set("s_new", "harms", { members: ["t_dignity"] })] }];
+    await runTermSync({ db, client, sets: SETS });
+    expect(storedSets(db).map((s) => s.formerSlugs)).toEqual([[]]);
+    expect(members("harms")).toEqual(["dignity"]);
+    expect(() => setGraph(db, [], "harm")).toThrow(/No concept set "harm"/);
+  });
+
+  it("takes sets from afterSets on any kind, and doesn't read a term in after as a set", async () => {
+    const after = imported();
+    const client = await bootstrapped([
+      { n: 11, kind: "set-added", afterSets: [set("s_list", "list", { members: ["t_abuse"] }), set("s_two", "two", { members: ["t_dignity"] })] },
+      // A term edit that changes only its explicit membership: the term is in before and after.
+      { n: 12, kind: "set-changed", after: { ...after[0], label: "not applied from here" }, afterSets: [set("s_list", "list", { members: ["t_abuse", "t_mobbing"] })] },
+      { n: 13, kind: "updated", afterTerms: [{ ...after[2], label: "worth" }], afterSets: [set("s_two", "two", { members: ["t_dignity", "t_abuse"] })] },
+    ]);
+    await runTermSync({ db, client, sets: SETS });
+    expect(members("list")).toEqual(["abuse", "mobbing"]);
+    expect(members("two")).toEqual(["abuse", "dignity"]);
+    expect(concept(db, "abuse").label).toBe("abuse");
+    expect(concept(db, "dignity").label).toBe("worth");
+  });
+
+  it("leaves out another scheme's sets", async () => {
+    const client = await bootstrapped([{ n: 11, kind: "set-added", afterSets: [harm, set("s_other", "other", { scheme: "cc-subjects" })] }]);
+    await runTermSync({ db, client, sets: SETS });
+    expect(slugs()).toEqual(["harm"]);
+  });
+
+  it("works a recipe out as terminology-mcp does, against the store as it is now", async () => {
+    const after = imported();
+    const client = await bootstrapped([
+      { n: 11, kind: "set-added", afterSets: [
+        harm,
+        set("s_rel", "rel", { recipe: recipe({ around: [{ term: "t_abuse", depth: 1, types: ["opposite"] }] }) }),
+        set("s_zero", "zero", { recipe: recipe({ around: [{ term: "t_abuse", depth: 0, types: ALL }] }) }),
+        set("s_below", "below", { recipe: recipe({ narrower: ["t_abuse"] }) }),
+        set("s_excl", "excl", { recipe: recipe({ around: [{ term: "t_abuse", depth: 1, types: ALL }], exclude: ["t_abuse"] }) }),
+      ] },
+    ]);
+    await runTermSync({ db, client, sets: SETS });
+    expect(members("harm")).toEqual(["abuse", "dignity", "mobbing"]);
+    expect(members("rel")).toEqual(["abuse", "dignity"]);
+    expect(members("zero")).toEqual(["abuse"]);
+    expect(members("below")).toEqual(["mobbing"]);
+    expect(members("excl")).toEqual(["dignity", "mobbing"]);
+    // A concept added later joins without a set-changed; a retired one drops out and shows as missing.
+    client.list = [...client.list, { n: 12, kind: "added", after: { ...after[0], id: "t_new", slug: "newcomer", label: "newcomer", broader: ["t_abuse"], relations: [], aliases: [] } }];
+    await runTermSync({ db, client, sets: SETS });
+    expect(members("below")).toEqual(["mobbing", "newcomer"]);
+    client.list = [...client.list, { n: 13, kind: "retired", afterTerms: [{ ...after[1], status: "retired", replacedBy: ["t_abuse"] }] }];
+    await runTermSync({ db, client, sets: SETS });
+    expect(members("below")).toEqual(["newcomer"]);
+    const list = [{ n: 14, kind: "set-added", afterSets: [set("s_gone", "gone", { members: ["t_mobbing", "t_abuse", "t_elsewhere"] })] }];
+    client.list = [...client.list, ...list];
+    await runTermSync({ db, client, sets: SETS });
+    expect(listSets(db).find((s) => s.slug === "gone")).toMatchObject({ concepts: 1, missing: ["mobbing", "t_elsewhere"] });
+  });
+
+  it("expands nested and ordered explicit sets, and survives a loop", async () => {
+    const client = await bootstrapped([{ n: 11, kind: "set-added", afterSets: [
+      set("s_inner", "inner", { recipe: recipe({ narrower: ["t_abuse"] }) }),
+      set("s_outer", "outer", { ordered: true, members: ["t_dignity", "s_inner", "t_abuse"] }),
+      set("s_a", "loop-a", { members: ["s_b", "t_abuse"] }),
+      set("s_b", "loop-b", { members: ["s_a", "t_dignity"] }),
+    ] }]);
+    await runTermSync({ db, client, sets: SETS });
+    expect(members("outer")).toEqual(["dignity", "mobbing", "abuse"]);
+    expect(setGraph(db, [], "outer").concepts.map((c) => c.slug)).toEqual(["dignity", "mobbing", "abuse"]);
+    expect(setGraph(db, [], "outer").definition.members).toEqual(["dignity", "inner", "abuse"]);
+    expect(members("loop-a")).toEqual(["abuse", "dignity"]);
+  });
+
+  it("uses the store's sets once it has any, the file's until then, and counts their quotes", async () => {
+    const client = await bootstrapped([{ n: 11, kind: "set-added", afterSets: [harm] }]);
+    expect(currentSets(db, SETS)).toEqual(SETS);
+    await runTermSync({ db, client, sets: SETS });
+    expect(currentSets(db, SETS).map((s) => s.slug)).toEqual(["harm"]);
+    expect(listSets(db, SETS)).toMatchObject([{ slug: "harm", concepts: 3 }]);
+    expect(listSets(db, SETS)[0].quotes).toBeGreaterThan(0);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quote-mcp-sets-"));
+    try {
+      const file = path.join(dir, "public.db");
+      buildSnapshot(db, { level: "catalogue", notes: false, intro: readIntro("# Work quotes"), collections: {}, sets: [{ slug: "file-set", scheme: "human-work", label: "File", concepts: ["abuse"] }], maps: [] }, file);
+      const site = await openSnapshot(file);
+      expect((await site.sets()).map((s) => s.slug)).toEqual(["harm"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("holds on slug-in-sets only while the file is in effect", async () => {
+    const after = imported();
+    const client = await bootstrapped([
+      { n: 11, kind: "set-added", afterSets: [harm] },
+      { n: 12, kind: "slugged", afterTerms: [{ ...after[0], slug: "maltreatment", formerSlugs: ["abuse"] }] },
+    ]);
+    const result = await runTermSync({ db, client, sets: SETS });
+    expect(result).toMatchObject({ outcome: "applied", through: 12 });
+    expect(members("harm")).toEqual(["dignity", "maltreatment", "mobbing"]);
+  });
+
+  it("bootstraps a store's sets from the state", async () => {
+    const client = server(imported());
+    client.state = async () => ({ log: client.log, version: 10, terms: imported(), sets: [harm, set("s_x", "elsewhere", { scheme: "cc-subjects" })] });
+    await runTermSync({ db, client, sets: SETS });
+    expect(slugs()).toEqual(["harm"]);
+  });
+
+  describe("the backfill, for a store already following when this build arrived", () => {
+    const SEEDED = "terminology:human-work:sets-seeded";
+    const following = async () => {
+      const client = await bootstrapped();
+      db.prepare("DELETE FROM meta WHERE key = ?").run(SEEDED);
+      return client;
+    };
+
+    it("takes the sets a change it passed carried, once, and counts as applied", async () => {
+      const client = await following();
+      let reads = 0;
+      client.state = async () => { reads++; return { log: client.log, version: 10, terms: imported(), sets: [harm] }; };
+      const dry = await runTermSync({ db, client, sets: SETS, apply: false });
+      expect(dry.lines).toEqual(["set harm, from the state"]);
+      expect(slugs()).toEqual([]);
+      const first = await runTermSync({ db, client, sets: SETS });
+      expect(first).toMatchObject({ outcome: "applied", through: 10 });
+      expect(slugs()).toEqual(["harm"]);
+      const before = reads;
+      expect((await runTermSync({ db, client, sets: SETS })).outcome).toBe("current");
+      expect(reads).toBe(before);
+    });
+
+    it("waits until the state is at the cursor, and past a failed read", async () => {
+      const client = await following();
+      client.state = async () => ({ log: client.log, version: 11, terms: imported(), sets: [harm] });
+      expect((await runTermSync({ db, client, sets: SETS })).outcome).toBe("current");
+      expect(slugs()).toEqual([]);
+      client.state = async () => { throw new TerminologyError(0, "unreachable"); };
+      expect((await runTermSync({ db, client, sets: SETS })).outcome).toBe("current");
+      client.state = async () => ({ log: client.log, version: 10, terms: imported(), sets: [harm] });
+      await runTermSync({ db, client, sets: SETS });
+      expect(slugs()).toEqual(["harm"]);
+    });
+
+    it("waits past a hold", async () => {
+      const after = imported();
+      const client = await following();
+      client.state = async () => ({ log: client.log, version: 12, terms: imported(), sets: [harm] });
+      client.list = [{ n: 11, kind: "split", afterTerms: [{ ...after[1], status: "retired", replacedBy: ["t_a", "t_b"] }] }];
+      expect((await runTermSync({ db, client, sets: SETS })).blocked).toMatchObject({ at: 11 });
+      expect(slugs()).toEqual([]);
+    });
+  });
+
+  it("applies a held change's sets when it's accepted", async () => {
+    const after = imported();
+    const client = await bootstrapped([{ n: 11, kind: "split", afterTerms: [{ ...after[1], status: "retired", replacedBy: ["t_a", "t_b"] }], afterSets: [harm] }]);
+    await runTermSync({ db, client, sets: SETS });
+    await acceptHeldChange({ db, client, n: 11 });
+    expect(slugs()).toEqual(["harm"]);
+  });
+});
+
+describe("a link to a term in another scheme", () => {
+  it("is skipped for related and opposite, and still holds for broader", async () => {
+    const after = imported();
+    const client = await bootstrapped([{ n: 11, kind: "updated", afterTerms: [{ ...after[2], relations: [...after[2].relations!, { type: "related", target: "t_foreign" }] }] }]);
+    expect(await runTermSync({ db, client, sets: SETS })).toMatchObject({ outcome: "applied", through: 11 });
+    expect(relations(db)).not.toContainEqual(expect.stringContaining("foreign"));
+    client.list = [...client.list, { n: 12, kind: "updated", afterTerms: [{ ...after[2], broader: ["t_foreign"] }] }];
+    expect((await runTermSync({ db, client, sets: SETS })).blocked).toMatchObject({ at: 12, code: "unknown-term" });
+  });
+
+  it("doesn't show as a change in a bootstrap", async () => {
+    const terms = imported();
+    terms[2].relations = [...terms[2].relations!, { type: "related", target: "t_foreign" }];
+    const result = await runTermSync({ db, client: server(terms), sets: SETS, apply: false });
+    expect(result.lines.join("\n")).not.toContain("undefined");
   });
 });

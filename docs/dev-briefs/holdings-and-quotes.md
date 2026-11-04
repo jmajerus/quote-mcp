@@ -199,15 +199,36 @@ routes serve it, on the LAN only (a 404 through Access), in `src/corpus-api.ts`:
 
 ## 3. Concept sets to terminology-mcp (holdings phase 5)
 
-terminology-mcp holds `human-work`, and already stores concept sets with
-versioned expansion. Its `list_sets` and this repo's `list_sets` now serve
-different sets under one name. Moving `vocab/sets.json` there would:
+terminology-mcp holds `human-work` and is the master of its concept sets.
+As built:
 
-- import the sets into terminology-mcp as `human-work`'s sets;
-- have the subscriber apply `set-added`, `set-changed`, and `set-deleted`
-  instead of ignoring them, so the `slug-in-sets` hold goes away;
-- keep this repo's `list_sets` and `search_quotes`'s `set` argument, reading
-  the replica, with quote counts added.
+- The store's `concept_sets` (schema 5) is a replica, keyed by the set's id,
+  in terminology-mcp's shape: `members` and `recipe` name terms by id.
+- The subscriber applies `afterSets` from every change kind, not only
+  `set-*`: a merge rewrites the definitions that name the merged term, and a
+  term edit can change a set's explicit members. On a `set-changed` of that
+  kind `after` is the term, so sets are read from `afterSets` only. A deleted
+  set's row goes, and its slug can come back on a new id.
+- terminology-mcp keeps no former slugs for sets, so the store does, by
+  comparing each snapshot's slug with its own. `search_quotes`, `list_concepts`
+  and the server's `/api/sets/<slug>` still find a set by an old slug. The
+  public snapshot doesn't carry them, so a renamed set's public URL changes.
+- Membership is worked out on each request against the store, by
+  terminology-mcp's rules, since a recipe's members changing with its terms
+  emits no change. `narrower` now leaves out its anchor, as terminology-mcp's
+  does.
+- A store already following when this build arrived passed any earlier set
+  changes without keeping them, so it takes the sets from `/api/state` once,
+  when it has caught up and the state is at its cursor.
+- `list_sets`, `search_quotes`'s `set`, `list_concepts`, `/api/sets`, and the
+  public snapshot read the store's sets. `list_sets` and the server's
+  `/api/sets` add quote counts.
+
+The cutover, in order: deploy this; create the sets in terminology-mcp;
+check that `GET /api/sets/<id>/expand` gives the members quote-mcp lists; then,
+in a later release, remove `vocab/sets.json`, `QUOTE_SETS`, and the
+`slug-in-sets` hold. Until the store has a set, the file stays in effect and
+the hold applies.
 
 ## 4. One Zotero mirror (holdings phase 4)
 

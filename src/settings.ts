@@ -34,7 +34,7 @@ export const SETTINGS: Setting[] = [
   { name: "QUOTE_HOST", group: "Service", about: "the address to listen on", fallback: "0.0.0.0" },
   { name: "QUOTE_PORT", group: "Service", about: "the port for MCP, the admin pages, and the API", fallback: "8010" },
   { name: "ACCESS_TEAM_DOMAIN", group: "Service", about: "the Cloudflare Access team whose tokens proxied requests need (https://<team>.cloudflareaccess.com); unset, they are refused" },
-  { name: "QUOTE_SETS", group: "Service", about: "the concept sets", fallback: "vocab/sets.json" },
+  { name: "QUOTE_SETS", group: "Service", about: "the concept sets, used only while the store has none from terminology-mcp", fallback: "vocab/sets.json" },
   { name: "QUOTE_TERMS_SYNC", group: "Concepts from terminology-mcp", about: "on: the server follows terminology-mcp's human-work scheme every minute", fallback: "off" },
   { name: "TERMINOLOGY_BASE", group: "Concepts from terminology-mcp", about: "terminology-mcp on the LAN, where progress reports name the caller; off turns following off", fallback: "http://terminology-mcp.localdomain:8000" },
   { name: "CORPUS_BASE", group: "Saving quotes", about: "corpus-mcp on the LAN, which checks add_quote's words against a Calibre book; off saves every quote transcribed, by work key", fallback: "http://corpus-mcp.localdomain:8000" },

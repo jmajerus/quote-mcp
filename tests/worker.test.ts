@@ -34,7 +34,7 @@ let n = 0;
 /** A snapshot of the test store, and an empty replica (the migration applied) loaded from it by the SQL file. */
 function publish(rest: Partial<SnapshotOptions> = {}) {
   const file = path.join(dir, `public-${n++}.db`);
-  buildSnapshot(store, { level: "quotes", notes: false, intro: readIntro("# Work quotes\n\nQuotes about work."), collections: {}, sets: [{ slug: "harm", scheme: "human-work", label: "Harm", narrower: ["abuse"] }], maps: [], ...rest }, file);
+  buildSnapshot(store, { level: "quotes", notes: false, intro: readIntro("# Work quotes\n\nQuotes about work."), collections: {}, sets: [{ slug: "harm", scheme: "human-work", label: "Harm", concepts: ["abuse"], narrower: ["abuse"] }], maps: [], ...rest }, file);
   const snap = new Database(file, { readonly: true });
   const replica = new Database(":memory:");
   replica.exec(MIGRATION);
