@@ -149,22 +149,36 @@ rollback() {
     ln -sfn "$previous" /opt/quote-mcp/current
     units=1
     install_units "$previous" || units=""
+    store=1
     if [ -f "$pre_migrate" ]; then
       systemctl stop quote-mcp.service quote-import.service || true
-      # Chained, so the copy never replaces a migrated store that couldn't be set aside. Its -wal and -shm
-      # go with it, renamed alike, since committed writes can still be only in the -wal.
-      if mv "$QUOTE_DB" "$QUOTE_DB.rolled-back" &&
+      # The copy is owned by quote before anything moves, so a failed chown leaves both stores where they
+      # were. The moves are chained, so the copy never replaces a migrated store that couldn't be set aside,
+      # and nothing more moves after a failure. The -wal and -shm go with the migrated store, renamed alike,
+      # since committed writes can still be only in the -wal.
+      if chown quote:quote "$pre_migrate" &&
+        mv "$QUOTE_DB" "$QUOTE_DB.rolled-back" &&
         { [ ! -f "$QUOTE_DB-wal" ] || mv "$QUOTE_DB-wal" "$QUOTE_DB.rolled-back-wal"; } &&
         { [ ! -f "$QUOTE_DB-shm" ] || mv "$QUOTE_DB-shm" "$QUOTE_DB.rolled-back-shm"; } &&
-        mv "$pre_migrate" "$QUOTE_DB" && chown quote:quote "$QUOTE_DB"; then
+        mv "$pre_migrate" "$QUOTE_DB"; then
         echo "restored the store from before the migration; the migrated one, with anything written since the migration, is $QUOTE_DB.rolled-back"
       else
-        echo "store_restore_failed: the copy from before the migration is $pre_migrate; anything written since the migration is only in the migrated store"
+        store=""
+        # Nothing may open or create a store until a person has put the right one back: an import on a
+        # missing store would start a new one.
+        systemctl stop quote-import.timer quote-mcp.service quote-import.service || true
+        echo "store_restore_failed: quote-mcp and the import timer are stopped. Where the stores are now:"
+        for f in "$QUOTE_DB" "$QUOTE_DB-wal" "$QUOTE_DB.rolled-back" "$QUOTE_DB.rolled-back-wal" "$QUOTE_DB.rolled-back-shm" "$pre_migrate"; do
+          [ -e "$f" ] && echo "  $f"
+        done
+        echo "  ($pre_migrate is the store from before the migration; the migrated one has anything written since)"
       fi
     fi
-    if [ -n "$units" ]; then
+    if [ -n "$units" ] && [ -n "$store" ]; then
       systemctl restart quote-mcp.service || echo "quote-mcp didn't restart on $previous"
       echo "rolled_back=$previous"
+    elif [ -z "$store" ]; then
+      echo "rollback_incomplete=$previous: the store couldn't be put back, so quote-mcp wasn't restarted"
     else
       echo "rollback_incomplete=$previous: its units couldn't all be put back"
     fi
