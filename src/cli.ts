@@ -146,6 +146,10 @@ function statsCommand() {
     origins: one("SELECT kind, COUNT(*) AS n FROM quote_origins GROUP BY kind"),
     works: one("SELECT match, COUNT(*) AS n FROM works GROUP BY match"),
     concepts: one("SELECT s.slug AS scheme, COUNT(c.id) AS n FROM schemes s LEFT JOIN concepts c ON c.scheme_id = s.id GROUP BY s.slug"),
+    // The Zotero mirror, by library: the version the next import carries on from, and what it holds.
+    zotero: one(`SELECT z.library, (SELECT value FROM meta WHERE key = 'zotero_version:' || z.library) AS version,
+      SUM(z.deleted = 0) AS items, SUM(z.deleted = 0 AND z.item_type = 'note') AS notes, SUM(z.deleted = 1) AS deleted
+      FROM zotero_items z GROUP BY z.library`),
   }, null, 2));
 }
 

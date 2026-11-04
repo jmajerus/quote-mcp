@@ -11,7 +11,7 @@ How quote-mcp is run, configured, and deployed.
 | `npm run quotes -- stdio` | MCP over stdio. |
 | `npm run quotes -- migrate` | Brings the store up to this build's schema. Deploy runs it with `--backup`, which copies the store first when its schema will change, so a rolled-back deploy can put the old store back. If that restore fails, the rollback leaves quote-mcp and the import timer stopped, prints `store_restore_failed` with where each store is, and a person puts the right one back. |
 | `npm run quotes -- config` | Every setting, where it came from, and what each feature still needs; secrets show only as set. |
-| `npm run quotes -- stats` | Counts by status, origin, work match, and scheme. |
+| `npm run quotes -- stats` | Counts by status, origin, work match, and scheme, and the Zotero mirror by library: the version the next import carries on from, items, notes, and deleted. |
 | `npm run quotes -- sets` | Each concept set as the store has it now; fails on a concept its scheme doesn't have. |
 | `npm run quotes -- publish --dry-run` | Builds the public snapshot (see [the public site](public-site.md#the-snapshot)). |
 | `npm run quotes -- publish` | Builds it and ships what changed to the replica in D1, as the drain does; `--status` shows the queue. |
@@ -89,7 +89,7 @@ The **Deploy Quotes** button in VS Code's status bar runs the deploys, as `npm r
 |---|---|---|
 | Deploy this checkout | `npm run deploy` | Builds, tests, installs this checkout as a new release, migrates the store, builds the public snapshot, restarts, checks `/health`, and rolls back to the previous release if it fails. |
 | Deploy this checkout without tests | `npm run deploy -- --skip-tests` | The same, without the tests. |
-| Push the server's settings | `npm run deploy -- --env` | Copies the server's settings from `.env` into `/etc/quote-mcp/env` and restarts, waiting until the server answers: the Zotero and old-site settings and the D1 proxy's. Only those set in `.env` are replaced. |
+| Push the server's settings | `npm run deploy -- --env` | Copies the server's settings from `.env` into `/etc/quote-mcp/env` and restarts, waiting until the server answers: the Zotero settings (`QUOTE_ZOTERO_API` among them), the old site's, and the D1 proxy's. Only those set in `.env` are replaced. |
 | Deploy the public Worker | `npm run worker:deploy` | Tests, then deploys the public Worker with `CLOUDFLARE_API_TOKEN` from `.env`. |
 | Import with the old site | `npm run deploy -- --import-drupal` | Runs an import on the server with the old site included. |
 

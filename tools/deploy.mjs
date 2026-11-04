@@ -21,7 +21,7 @@ const USAGE = `Usage: npm run deploy -- [--provision | --env | --import-drupal] 
   --provision      one-time setup of the LXC (Node 22, build tools, word list, quote user, directories)
   --env            copy the server's settings from .env into its /etc/quote-mcp/env (mode 0640) and
                    restart: QUOTE_ZOTERO_LIBRARY, QUOTE_ZOTERO_API_KEY, QUOTE_ZOTERO_SOURCES,
-                   QUOTE_DRUPAL_URL, QUOTE_D1_PROXY_URL, and QUOTE_D1_PROXY_TOKEN. Only those set
+                   QUOTE_ZOTERO_API, QUOTE_DRUPAL_URL, QUOTE_D1_PROXY_URL, and QUOTE_D1_PROXY_TOKEN. Only those set
                    in .env are replaced; the server's others are left as they are
   --import-drupal  run an import on the server with the old site included (the timer leaves it out)
   --skip-tests     deploy without running the test suite first
@@ -71,7 +71,7 @@ async function provision() {
  * it) never deletes the server's.
  */
 async function pushEnv() {
-  const all = ["QUOTE_ZOTERO_LIBRARY", "QUOTE_ZOTERO_API_KEY", "QUOTE_ZOTERO_SOURCES", "QUOTE_DRUPAL_URL", "QUOTE_D1_PROXY_URL", "QUOTE_D1_PROXY_TOKEN"];
+  const all = ["QUOTE_ZOTERO_LIBRARY", "QUOTE_ZOTERO_API_KEY", "QUOTE_ZOTERO_SOURCES", "QUOTE_ZOTERO_API", "QUOTE_DRUPAL_URL", "QUOTE_D1_PROXY_URL", "QUOTE_D1_PROXY_TOKEN"];
   const library = process.env.QUOTE_ZOTERO_LIBRARY ?? "";
   if (library && !/^(users|groups)\/\d+$/.test(library)) throw new Error(`QUOTE_ZOTERO_LIBRARY should be "users/<user id>" or "groups/<group id>", not "${library}".`);
   const names = all.filter((n) => process.env[n]?.trim());
