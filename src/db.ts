@@ -121,6 +121,22 @@ export function openDb(path = process.env.QUOTE_DB ?? "data/quotes.db"): DB {
   return db;
 }
 
+/**
+ * The store as it is, for a run that will roll back: unlike openDb it creates and migrates nothing, so it refuses a
+ * store that's missing or not at this build's schema.
+ */
+export function openExisting(path = process.env.QUOTE_DB ?? "data/quotes.db"): DB {
+  const db = new Database(path, { fileMustExist: true });
+  db.pragma("busy_timeout = 30000");
+  db.pragma("foreign_keys = ON");
+  const version = Number(db.pragma("user_version", { simple: true }));
+  if (version !== SCHEMA_VERSION) {
+    db.close();
+    throw new Error(`${path} has schema ${version}; this build needs ${SCHEMA_VERSION}. Run migrate first.`);
+  }
+  return db;
+}
+
 /** Brings a store made by an earlier schema up to date; a new store already has everything. */
 function migrate(db: DB): void {
   const columns = (table: string) => new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name));

@@ -1,4 +1,5 @@
 import mysql from "mysql2/promise";
+import { textOf, yearOf } from "./text.js";
 
 /**
  * Reads the old workcreatively.org Drupal site from its database dump, read-only: Biblio works with
@@ -46,7 +47,21 @@ export function drupalUrl(env: NodeJS.ProcessEnv = process.env): string {
   return url;
 }
 
-const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+const text = textOf;
+
+/** A row of the works query as a work. Biblio's year is an integer, with placeholders like 9999 for "submitted", which yearOf turns down. */
+export function workFromRow(w: Record<string, unknown>, authors: string[] = [], keywords: string[] = []): DrupalWork {
+  return {
+    nid: Number(w.nid), title: String(w.title), type: text(w.type) ?? "Unknown", year: yearOf(text(w.biblio_year)), isbn: text(w.biblio_isbn),
+    url: text(w.biblio_url), citekey: text(w.biblio_citekey), notes: String(w.biblio_notes ?? ""), authors, keywords,
+  };
+}
+
+/** Fields no work has at all: a sign the query or a column's type has changed, not that the site has none. */
+export function emptyFields(works: DrupalWork[]): string[] {
+  if (!works.length) return [];
+  return (["year", "authors"] as const).filter((f) => !works.some((w) => w[f]?.length));
+}
 
 export async function loadDrupal(url: string): Promise<DrupalSite> {
   const db = await mysql.createConnection({ uri: url, charset: "utf8mb4" });
@@ -78,11 +93,7 @@ export async function loadDrupal(url: string): Promise<DrupalSite> {
     const authorsOf = byNid(authors, (r) => r.name);
     const keywordsOf = byNid(keywords, (r) => r.word);
     return {
-      works: works.map((w) => ({
-        nid: Number(w.nid), title: String(w.title), type: text(w.type) ?? "Unknown", year: text(w.biblio_year), isbn: text(w.biblio_isbn),
-        url: text(w.biblio_url), citekey: text(w.biblio_citekey), notes: String(w.biblio_notes ?? ""),
-        authors: authorsOf.get(Number(w.nid)) ?? [], keywords: keywordsOf.get(Number(w.nid)) ?? [],
-      })),
+      works: works.map((w) => workFromRow(w, authorsOf.get(Number(w.nid)), keywordsOf.get(Number(w.nid)))),
       concepts: concepts.map((c) => ({
         kid: Number(c.kid), word: String(c.word),
         altLabels: (text(c.altlabel) ?? "").split(",").map((s) => s.trim()).filter(Boolean),

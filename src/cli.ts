@@ -4,12 +4,12 @@ import { userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { corpusClient, corpusConfig, followAnchors, importCorpusQuotes, retryAnchors, storeWriter, zoteroRefresher } from "./capture.js";
-import { SCHEMA_VERSION, openDb } from "./db.js";
+import { SCHEMA_VERSION, openDb, openExisting } from "./db.js";
 import { reviewProposal } from "./edits.js";
 import { ToolError } from "./common.js";
 import { listProposals, openReadOnly } from "./queries.js";
 import { servePublic, serveHttp, serveStdio } from "./server.js";
-import { drupalUrl, loadDrupal } from "./drupal.js";
+import { drupalUrl, emptyFields, loadDrupal } from "./drupal.js";
 import { exportAll } from "./export.js";
 import { runImport } from "./import.js";
 import { loadDictionary } from "./ocr.js";
@@ -27,7 +27,7 @@ import { acceptHeldChange, clearCursor, proposal, readCursor, reportProgress, ru
 import { ZoteroClient, zoteroConfig } from "./zotero.js";
 
 /**
- *   quote-mcp import [--no-drupal] [--no-zotero]
+ *   quote-mcp import [--no-drupal] [--no-zotero] [--dry-run]
  *       Syncs the Zotero mirror (QUOTE_ZOTERO_LIBRARY plus QUOTE_ZOTERO_SOURCES), reads the old site
  *       (QUOTE_DRUPAL_URL, when set), and imports. Safe to run again; run it on a timer to pick up new
  *       quote notes typed into Zotero.
@@ -71,10 +71,12 @@ const option = (name: string) => (argv.includes(name) ? argv[argv.indexOf(name) 
 const say = (text: string) => process.stderr.write(text);
 
 async function importCommand() {
-  const db = openDb();
+  // A dry run saves nothing, the mirror and the schema included, so it reads the store as the last sync left it.
+  const dryRun = flag("--dry-run");
+  const db = dryRun ? openExisting() : openDb();
   const config = zoteroConfig();
   const sources = [...new Set([config.library, ...(process.env.QUOTE_ZOTERO_SOURCES ?? "").split(",").map((s) => s.trim()).filter(Boolean)])];
-  if (!flag("--no-zotero")) {
+  if (!flag("--no-zotero") && !dryRun) {
     for (const library of sources) {
       const r = await syncLibrary(db, new ZoteroClient({ ...config, library }, (t) => say(`\n${t}`)), library, say);
       say(`${library}: ${r.changed} changed, ${r.deleted} deleted, now at version ${r.version}.\n`);
@@ -82,13 +84,15 @@ async function importCommand() {
   }
   const useDrupal = !flag("--no-drupal") && !!process.env.QUOTE_DRUPAL_URL;
   const drupal = useDrupal ? await loadDrupal(drupalUrl()) : undefined;
+  if (drupal) for (const field of emptyFields(drupal.works)) say(`Warning: none of the old site's ${drupal.works.length} works has ${field === "year" ? "a year" : "authors"}, so matching can't use them. Has a column changed?\n`);
+  else if (dryRun) say("The old site isn't being read (--no-drupal, or no QUOTE_DRUPAL_URL), so works aren't matched again.\n");
   let dictionary: Set<string> | undefined;
   try {
     dictionary = loadDictionary();
   } catch (error) {
     say(`No word list (${(error as Error).message}); the OCR check is skipped.\n`);
   }
-  const s = runImport(db, { drupal, primary: config.library, sources, dictionary });
+  const s = runImport(db, { drupal, primary: config.library, sources, dictionary, dryRun });
   const counts = db.prepare("SELECT kind, status, COUNT(*) AS n FROM quotes GROUP BY kind, status ORDER BY kind DESC, status").all() as { kind: string; status: string; n: number }[];
   console.log([
     `Concepts: ${s.concepts.added} added, ${s.concepts.relations} relations added.`,
@@ -98,6 +102,12 @@ async function importCommand() {
     `Skipped: ${Object.entries(s.skipped).map(([k, n]) => `${n} ${k}`).join(", ") || "nothing"}.`,
     `Tags not in a concept scheme: ${s.unresolvedTags.length}${s.unresolvedTags.length ? ` (${s.unresolvedTags.slice(0, 25).map(([t, n]) => `${t} ${n}`).join(", ")}${s.unresolvedTags.length > 25 ? ", …" : ""})` : ""}.`,
   ].join("\n"));
+  for (const c of s.workChanges) console.log(`Work ${dryRun ? "would move" : "moved"}: ${c.title} (${c.from} → ${c.to}, ${c.quotes} quote${c.quotes === 1 ? "" : "s"}).`);
+  for (const m of s.authorMismatches) console.log(`Check this match, no author in common: ${m.title} (${m.authors.join("; ")}) and Zotero ${m.zotero} (${m.creators.join("; ")}).`);
+  if (dryRun) {
+    console.log("Dry run: nothing was saved.");
+    return;
+  }
   const corpus = corpusConfig();
   if (corpus) {
     try {
