@@ -6,7 +6,8 @@ import { creators } from "./import.js";
 import { citekeyOf } from "./csl.js";
 import { calibreSource, getQuote } from "./queries.js";
 import { quoteKey, yearOf } from "./text.js";
-import type { ApiItem } from "./zotero.js";
+import { syncLibrary } from "./sync.js";
+import { type ApiItem, ZoteroClient, needsKey, zoteroConfig } from "./zotero.js";
 
 /**
  * add_quote: a quote saved by an agent (docs/dev-briefs/holdings-and-quotes.md §2.1). For a work with a
@@ -115,6 +116,9 @@ export function storeWriter(file: string): () => DB {
 
 // --- Works ---------------------------------------------------------------------------------------
 
+/** A work key that names nothing in the Zotero mirror, which a sync may bring in. */
+export class MirrorMiss extends ToolError {}
+
 interface Item { library: string; key: string; data: ApiItem["data"] & Record<string, unknown> }
 
 /** A Zotero item in the mirror by citekey or bare item key, the primary library first. */
@@ -146,7 +150,7 @@ function zoteroWork(db: DB, library: string, key: string): number {
   const id = knownZoteroWork(db, library, key);
   if (id !== undefined) return id;
   const it = item(db, library, key);
-  if (!it) throw new ToolError(`zotero:${library}/${key} isn't in the Zotero mirror yet; the next import (every 30 minutes) brings it in.`);
+  if (!it) throw new MirrorMiss(`zotero:${library}/${key} isn't in the Zotero mirror yet; the next import (every 30 minutes) brings it in.`);
   const stamp = now();
   const work = db.prepare(`INSERT INTO works (title, authors, year, item_type, isbn, url, zotero_library, zotero_key, match, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'zotero', ?, ?) RETURNING id`).pluck()
@@ -209,7 +213,7 @@ function target(db: DB, key: string, primary: string | null): Target {
     return { ...(known !== undefined ? { work: () => known, known } : {}), book: k, label: k };
   }
   if (/^[\w-]+:\d+$/.test(k)) return { book: k, label: k };
-  throw new ToolError(`No work for "${k}": pass a key from find_work (quote:<id> or zotero:<library>/<key>), a citekey, a Zotero item key, or a Calibre book id.`);
+  throw new MirrorMiss(`No work for "${k}": pass a key from find_work (quote:<id> or zotero:<library>/<key>), a citekey, a Zotero item key, or a Calibre book id.`);
 }
 
 /** How to name a Zotero item to corpus-mcp: by item, in the library it mirrors; by citekey from another. */
@@ -238,6 +242,39 @@ export interface AddQuoteOptions {
   origin?: "agent" | "corpus";
   /** Kept with the origin, beside the request: corpus-mcp's record of a quote taken over. */
   source?: Record<string, unknown>;
+  /** Brings the Zotero mirror up to date, for a work filed in Zotero since the last import (zoteroRefresher). */
+  refreshZotero?: () => Promise<void>;
+}
+
+/**
+ * Refreshes the Zotero mirror on demand: asks holdings-mcp to refresh its copy first when QUOTE_ZOTERO_API is
+ * that copy, then syncs each library from its stored version, as the import does. Concurrent calls share one
+ * run. Undefined when Zotero isn't set up.
+ */
+export function zoteroRefresher(writer: () => DB, env: NodeJS.ProcessEnv = process.env, fetchImpl: typeof fetch = fetch): (() => Promise<void>) | undefined {
+  let config: ReturnType<typeof zoteroConfig>;
+  try {
+    config = zoteroConfig(env);
+  } catch {
+    return undefined;
+  }
+  const sources = [...new Set([config.library, ...(env.QUOTE_ZOTERO_SOURCES ?? "").split(",").map((s) => s.trim()).filter(Boolean)])];
+  let running: Promise<void> | undefined;
+  const run = async () => {
+    if (!needsKey(config.apiBase)) {
+      const url = new URL("/api/refresh", config.apiBase);
+      let res: Response;
+      try {
+        res = await fetchImpl(url, { method: "POST", signal: AbortSignal.timeout(60_000) });
+      } catch (error) {
+        throw new Error(`holdings-mcp didn't answer ${url.href}: ${(error as Error).message}`);
+      }
+      await res.body?.cancel();
+      if (!res.ok) throw new Error(`holdings-mcp answered ${res.status} for ${url.href}`);
+    }
+    for (const library of sources) await syncLibrary(writer(), new ZoteroClient({ ...config, library, timeoutMs: 30_000 }), library);
+  };
+  return () => (running ??= run().finally(() => { running = undefined; }));
 }
 
 /** Tags resolve to concepts by label, then alternative label, then slug, ignoring case, as the import does. */
@@ -264,6 +301,21 @@ interface Plan {
  * quote, or throws ToolError when nothing was saved (no match, several books, an unknown work).
  */
 export async function addQuote(db: DB, args: AddQuoteArgs, o: AddQuoteOptions): Promise<Record<string, unknown>> {
+  try {
+    return await addQuoteOnce(db, args, o);
+  } catch (error) {
+    // A work filed in Zotero since the last import: bring the mirror up to date and try once more.
+    if (!(error instanceof MirrorMiss) || !o.refreshZotero) throw error;
+    try {
+      await o.refreshZotero();
+    } catch (refresh) {
+      throw new MirrorMiss(`${error.message} (Refreshing the mirror now failed: ${(refresh as Error).message})`);
+    }
+    return addQuoteOnce(db, args, o);
+  }
+}
+
+async function addQuoteOnce(db: DB, args: AddQuoteArgs, o: AddQuoteOptions): Promise<Record<string, unknown>> {
   const text = args.text?.trim() ?? "";
   if (!text) throw new ToolError("The quote has no text.");
   if (text.length > MAX_QUOTE) throw new ToolError(`The quote is ${text.length} characters; the limit is ${MAX_QUOTE}. Quote less, or save two.`);

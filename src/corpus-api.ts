@@ -99,7 +99,7 @@ export async function handleCorpusQuotes(db: DB, capture: Capture | undefined, r
     if (!capture) return send(res, 503, { error: "no-capture", message: "Saving quotes isn't set up on this server." });
     if (!(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) return send(res, 415, { error: "bad-request", message: "Send application/json." });
     const { by, ...args } = quoteArgs(await readJson(req));
-    const answer = await addQuote(capture.writer(), args, { corpus: capture.corpus, primary: capture.primary, actor: `corpus-mcp${by ? `:${by}` : ""}` });
+    const answer = await addQuote(capture.writer(), args, { corpus: capture.corpus, primary: capture.primary, refreshZotero: capture.refreshZotero, actor: `corpus-mcp${by ? `:${by}` : ""}` });
     return send(res, answer.saved ? 201 : 200, answer);
   } catch (error) {
     if (!(error instanceof ToolError)) throw error;
