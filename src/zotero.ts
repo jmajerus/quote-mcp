@@ -6,7 +6,8 @@
 export interface ZoteroConfig {
   /** "users/<user id>" or "groups/<group id>". */
   library: string;
-  apiKey: string;
+  /** Needed for zotero.org; a LAN mirror such as holdings-mcp's ignores it. */
+  apiKey?: string;
   apiBase: string;
   /** Per request; the API can take tens of seconds. */
   timeoutMs?: number;
@@ -23,12 +24,25 @@ export interface ApiItem {
   };
 }
 
+export const ZOTERO_ORG = "https://api.zotero.org";
+
+/** Whether a base URL is zotero.org's own API, which needs a key (a mirror on the LAN doesn't). */
+export const needsKey = (apiBase: string | undefined) => {
+  try {
+    return new URL(apiBase?.trim() || ZOTERO_ORG).hostname.toLowerCase() === "api.zotero.org";
+  } catch {
+    return true;
+  }
+};
+
 export function zoteroConfig(env: NodeJS.ProcessEnv = process.env): ZoteroConfig {
   const library = env.QUOTE_ZOTERO_LIBRARY;
-  const apiKey = env.QUOTE_ZOTERO_API_KEY;
-  if (!library || !apiKey) throw new Error("Set QUOTE_ZOTERO_LIBRARY and QUOTE_ZOTERO_API_KEY (see .env.example).");
+  const apiKey = env.QUOTE_ZOTERO_API_KEY?.trim() || undefined;
+  const apiBase = env.QUOTE_ZOTERO_API?.trim() || ZOTERO_ORG;
+  if (!library) throw new Error("Set QUOTE_ZOTERO_LIBRARY (see .env.example).");
+  if (!apiKey && needsKey(apiBase)) throw new Error("Set QUOTE_ZOTERO_API_KEY (see .env.example); zotero.org needs a key.");
   if (!/^(users|groups)\/\d+$/.test(library)) throw new Error(`QUOTE_ZOTERO_LIBRARY must look like users/1234567, not "${library}".`);
-  return { library, apiKey, apiBase: env.QUOTE_ZOTERO_API ?? "https://api.zotero.org" };
+  return { library, apiKey, apiBase };
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -47,7 +61,7 @@ export class ZoteroClient {
       let res: Response;
       try {
         res = await fetch(url, {
-          headers: { "Zotero-API-Version": "3", "Zotero-API-Key": this.config.apiKey },
+          headers: { "Zotero-API-Version": "3", ...(this.config.apiKey ? { "Zotero-API-Key": this.config.apiKey } : {}) },
           signal: AbortSignal.timeout(this.config.timeoutMs ?? 90_000),
         });
       } catch (error) {

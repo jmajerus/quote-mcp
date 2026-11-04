@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { d1ConfigFrom } from "./d1-http.js";
+import { needsKey } from "./zotero.js";
 
 /**
  * Every setting quote-mcp reads, by what it's for, with its default, so `quote-mcp config` can say what's
@@ -24,11 +25,11 @@ export interface Setting {
 
 export const SETTINGS: Setting[] = [
   { name: "QUOTE_ZOTERO_LIBRARY", group: "Zotero (required)", about: "the Zotero library to read: users/<id> or groups/<id>" },
-  { name: "QUOTE_ZOTERO_API_KEY", group: "Zotero (required)", about: "a Zotero API key; read-only is enough", secret: true },
+  { name: "QUOTE_ZOTERO_API_KEY", group: "Zotero (required)", about: "a Zotero API key; read-only is enough. Not needed when QUOTE_ZOTERO_API is a LAN mirror (holdings-mcp)", secret: true },
   { name: "QUOTE_ZOTERO_SOURCES", group: "Import", about: "other Zotero libraries to import quote notes from, comma-separated" },
   { name: "QUOTE_DRUPAL_URL", group: "Import", about: "the old Drupal site's database (mysql://…), read-only", secret: true },
   { name: "QUOTE_DICTIONARY", group: "Import", about: "a word list for the OCR check", fallback: "/usr/share/dict/words" },
-  { name: "QUOTE_ZOTERO_API", group: "Import", about: "the Zotero API", fallback: "https://api.zotero.org" },
+  { name: "QUOTE_ZOTERO_API", group: "Import", about: "the Zotero API, or holdings-mcp's copy of it (http://<host>:8000/zotero)", fallback: "https://api.zotero.org" },
   { name: "QUOTE_DB", group: "Service", about: "the quote store", fallback: "data/quotes.db" },
   { name: "QUOTE_HOST", group: "Service", about: "the address to listen on", fallback: "0.0.0.0" },
   { name: "QUOTE_PORT", group: "Service", about: "the port for MCP, the admin pages, and the API", fallback: "8010" },
@@ -87,7 +88,7 @@ function features(env: NodeJS.ProcessEnv, site: Record<string, string>, wrangler
   } catch (error) {
     d1 = { name: "Public replica in D1", on: false, note: (error as Error).message };
   }
-  const zotero = missing(["QUOTE_ZOTERO_LIBRARY", "QUOTE_ZOTERO_API_KEY"]);
+  const zotero = missing(needsKey(env.QUOTE_ZOTERO_API) ? ["QUOTE_ZOTERO_LIBRARY", "QUOTE_ZOTERO_API_KEY"] : ["QUOTE_ZOTERO_LIBRARY"]);
   const mapDir = env.QUOTE_MAP_DIR?.trim();
   const terminology = env.TERMINOLOGY_BASE?.trim().toLowerCase() === "off";
   const following = env.QUOTE_TERMS_SYNC?.trim().toLowerCase() === "on";

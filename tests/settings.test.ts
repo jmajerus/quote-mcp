@@ -52,3 +52,20 @@ describe("D1 through the REST API", () => {
     expect(d1ConfigFrom({ CLOUDFLARE_API_TOKEN: "t" })).toBeNull();
   });
 });
+
+describe("the Zotero API key", () => {
+  it("is required for zotero.org and optional for a LAN mirror", async () => {
+    const { zoteroConfig } = await import("../src/zotero.js");
+    expect(() => zoteroConfig({ QUOTE_ZOTERO_LIBRARY: "users/1" })).toThrow(/QUOTE_ZOTERO_API_KEY/);
+    expect(() => zoteroConfig({ QUOTE_ZOTERO_LIBRARY: "users/1", QUOTE_ZOTERO_API: "https://api.zotero.org/" })).toThrow(/QUOTE_ZOTERO_API_KEY/);
+    const mirror = zoteroConfig({ QUOTE_ZOTERO_LIBRARY: "users/1", QUOTE_ZOTERO_API: "http://holdings-mcp.localdomain:8000/zotero" });
+    expect(mirror).toMatchObject({ library: "users/1", apiBase: "http://holdings-mcp.localdomain:8000/zotero" });
+    expect(mirror.apiKey).toBeUndefined();
+  });
+
+  it("counts as set up for import without a key when reading a mirror", () => {
+    const report = configReport({ QUOTE_ZOTERO_LIBRARY: "users/1", QUOTE_ZOTERO_API: "http://holdings-mcp.localdomain:8000/zotero" }, {}, "/nowhere");
+    expect(report).not.toMatch(/needs QUOTE_ZOTERO_API_KEY/);
+    expect(configReport({ QUOTE_ZOTERO_LIBRARY: "users/1" }, {}, "/nowhere")).toMatch(/needs QUOTE_ZOTERO_API_KEY/);
+  });
+});

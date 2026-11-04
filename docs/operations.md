@@ -35,12 +35,12 @@ Settings come from the environment: `.env` in the checkout on your computer (see
 [.env.example](../.env.example)), and `/etc/quote-mcp/env` on the server, which the services read. They're
 separate files; Deploy Quotes → Push the server's settings copies the server's from `.env` (see below).
 
-Only `QUOTE_ZOTERO_LIBRARY` and `QUOTE_ZOTERO_API_KEY` are needed. The public site's choices are in
+Only `QUOTE_ZOTERO_LIBRARY` and `QUOTE_ZOTERO_API_KEY` are needed, and the key only when reading zotero.org. The public site's choices are in
 `vocab/site.md`, not here (see [the public site](public-site.md#turning-it-on)).
 
 | Setting | Default | What it is |
 |---|---|---|
-| `QUOTE_ZOTERO_LIBRARY`, `QUOTE_ZOTERO_API_KEY` | required | The Zotero library (`users/<id>` or `groups/<id>`) and an API key; read-only is enough. |
+| `QUOTE_ZOTERO_LIBRARY`, `QUOTE_ZOTERO_API_KEY` | required | The Zotero library (`users/<id>` or `groups/<id>`) and an API key; read-only is enough. The key isn't needed when `QUOTE_ZOTERO_API` is holdings-mcp's copy. |
 | `QUOTE_ZOTERO_SOURCES` | none | Other Zotero libraries to import quote notes from, comma-separated. |
 | `QUOTE_DRUPAL_URL` | none | The old Drupal site's database (`mysql://…`), read-only. |
 | `QUOTE_MAP_DIR` | none | quote-atlas's built maps, served at `/map/`. |
@@ -56,7 +56,7 @@ Only `QUOTE_ZOTERO_LIBRARY` and `QUOTE_ZOTERO_API_KEY` are needed. The public si
 | `QUOTE_INTRO` | `vocab/site.md` | The front page and the public site's choices. |
 | `QUOTE_SNAPSHOT` | `public.db` beside the store | The public snapshot. |
 | `QUOTE_DICTIONARY` | `/usr/share/dict/words` | The OCR check's word list. |
-| `QUOTE_ZOTERO_API` | `https://api.zotero.org` | The Zotero API. |
+| `QUOTE_ZOTERO_API` | `https://api.zotero.org` | The Zotero API, or holdings-mcp's copy of it on the LAN (`http://holdings-mcp.localdomain:8000/zotero`), which refreshes every 2 minutes and saves calls to zotero.org. The import carries on from the same library versions either way. |
 | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `QUOTE_D1_DATABASE_ID` | none; the database id from `worker/wrangler.jsonc` | Instead of the proxy, Cloudflare's REST API (slower). Only `CLOUDFLARE_ACCOUNT_ID` turns it on, since wrangler reads `CLOUDFLARE_API_TOKEN` too, to deploy the Workers. |
 | `AUTHORING_DEPLOY_PASSWORD` | none | The deploy account's SSH password. |
 | `QUOTE_DEPLOY_HOST` | `authoring@quote-mcp.localdomain` | Where `npm run deploy` installs. |
