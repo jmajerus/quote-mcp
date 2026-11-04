@@ -52,7 +52,7 @@ Only `QUOTE_ZOTERO_LIBRARY` and `QUOTE_ZOTERO_API_KEY` are needed, and the key o
 | `QUOTE_PUBLIC_PORT` | none | A port serving only the public site, for a hostname with no login. |
 | `QUOTE_DB` | `data/quotes.db` | The store. |
 | `QUOTE_HOST`, `QUOTE_PORT` | `0.0.0.0`, `8010` | Where the service listens. |
-| `QUOTE_SETS` | `vocab/sets.json` | The concept sets. |
+| `QUOTE_SETS` | `vocab/sets.json` | The concept sets, used only while the store has none from terminology-mcp. |
 | `QUOTE_INTRO` | `vocab/site.md` | The front page and the public site's choices. |
 | `QUOTE_SNAPSHOT` | `public.db` beside the store | The public snapshot. |
 | `QUOTE_DICTIONARY` | `/usr/share/dict/words` | The OCR check's word list. |

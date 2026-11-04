@@ -16,7 +16,7 @@ import Database from "better-sqlite3";
 
 export type DB = Database.Database;
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -95,6 +95,14 @@ CREATE TABLE IF NOT EXISTS history (
   id INTEGER PRIMARY KEY, quote_id INTEGER, at TEXT NOT NULL, kind TEXT NOT NULL, before TEXT, after TEXT, actor TEXT, reason TEXT
 );
 CREATE INDEX IF NOT EXISTS history_quote ON history (quote_id);
+
+-- terminology-mcp's concept sets for the scheme, a replica kept by the subscriber (src/terminology.ts). A set
+-- names its terms by id, so a concept's new slug needs nothing here; former_slugs is kept here, since
+-- terminology-mcp keeps none for sets.
+CREATE TABLE IF NOT EXISTS concept_sets (
+  id TEXT PRIMARY KEY, scheme TEXT NOT NULL, slug TEXT NOT NULL, label TEXT NOT NULL, description TEXT, kind TEXT NOT NULL DEFAULT 'theme',
+  ordered INTEGER NOT NULL DEFAULT 0, members TEXT NOT NULL DEFAULT '[]', recipe TEXT, former_slugs TEXT NOT NULL DEFAULT '[]', updated_at TEXT NOT NULL
+);
 
 -- Rebuilt from quotes after every import; rowid is the quote id.
 CREATE VIRTUAL TABLE IF NOT EXISTS quotes_fts USING fts5(text, comment, tags, tokenize = 'porter unicode61');

@@ -19,7 +19,7 @@ let db: DB;
 let mapDir: string;
 const servers: http.Server[] = [];
 
-const SETS: ConceptSet[] = [{ slug: "harm", scheme: "human-work", label: "Harm", description: "Abuse and what it includes", narrower: ["abuse"] }];
+const SETS: ConceptSet[] = [{ slug: "harm", scheme: "human-work", label: "Harm", description: "Abuse and what it includes", concepts: ["abuse"], narrower: ["abuse"] }];
 let built = 0;
 
 /** A snapshot of the test store with these settings, opened as the public pages read it. */

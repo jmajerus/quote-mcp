@@ -5,7 +5,7 @@ import Database from "better-sqlite3";
 import type { DB } from "./db.js";
 import { type Visibility, bibtex, plainText, visible } from "./public.js";
 import { citeQuote, locatorText, workSummary } from "./queries.js";
-import { type ConceptSet, resolveSet } from "./sets.js";
+import { type ConceptSet, currentSets, definitionOf, resolveSet } from "./sets.js";
 import type { Intro } from "./intro.js";
 
 /**
@@ -146,13 +146,13 @@ function fill(store: DB, snap: Database.Database, o: SnapshotOptions): void {
     concepts: concepts.map((c) => ({ slug: c.slug as string, scheme: schemes.find((s) => s.id === c.scheme_id)!.slug as string })),
     relations: (snap.prepare(`SELECT a.slug AS "from", b.slug AS "to", r.type FROM relations r JOIN concepts a ON a.id = r.from_id JOIN concepts b ON b.id = r.to_id`).all()) as { from: string; to: string; type: string }[],
   };
-  o.sets.forEach((set, position) => {
+  currentSets(store, o.sets).forEach((set, position) => {
     const scheme = schemes.find((s) => s.slug === set.scheme);
     if (!scheme) return;
     const { members, missing } = resolveSet(set, graph as never);
-    const { concepts: listed, around, depth, types, narrower, exclude } = set;
-    insert("sets", { slug: set.slug, scheme_id: scheme.id, label: set.label, description: set.description ?? null,
-      definition: JSON.stringify({ concepts: listed, around, depth, types, narrower, exclude }), missing: JSON.stringify(missing), position });
+    insert("sets", { slug: set.slug, scheme_id: scheme.id, label: set.label, description: set.description || null,
+      // set_concepts has no order, so an ordered set's order goes with its definition; src/published.ts takes it out again.
+      definition: JSON.stringify({ ...definitionOf(set), order: set.ordered ? members : undefined }), missing: JSON.stringify(missing), position });
     for (const slug of members) {
       const c = concepts.find((x) => x.scheme_id === scheme.id && x.slug === slug);
       if (c) insert("set_concepts", { set_slug: set.slug, concept_id: c.id });

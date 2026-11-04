@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { type DB, getMeta, now, setMeta } from "./db.js";
 import { SCHEME } from "./import.js";
-import type { ConceptSet } from "./sets.js";
+import { type ConceptSet, storedSets } from "./sets.js";
 
 /**
  * Follows terminology-mcp's `human-work` scheme, which is the master of its concepts, labels, slugs,
@@ -19,7 +19,11 @@ import type { ConceptSet } from "./sets.js";
  *
  *   split              a concept that quotes use was split
  *   retire-ambiguous   a concept that quotes use was retired with no replacement, or several
- *   slug-in-sets       a slug changed that vocab/sets.json names
+ *   slug-in-sets       a slug changed that vocab/sets.json names, while that file is in effect
+ *
+ * Concept sets follow the same way. Any change can carry them in afterSets, not only the set-* kinds: a merge
+ * rewrites the definitions that name the merged term. A set names its terms by id, so it needs no hold: an id
+ * that isn't a live concept here is left out of it and reported as missing (src/sets.ts).
  *
  * The bootstrap matches terms to concepts by the `quote-mcp:human-work:<slug>` alias that terminology-mcp's
  * import gave them, and refuses to apply if a slug differs, so public links never change by surprise.
@@ -31,6 +35,7 @@ const SUBSCRIBER_LABEL = "Quote MCP";
 export const DEFAULT_TERMINOLOGY_BASE = "http://terminology-mcp.localdomain:8000";
 const ACTOR = "terminology-mcp";
 const CURSOR = `terminology:${SCHEME_ID}`;
+const SETS_SEEDED = `${CURSOR}:sets-seeded`;
 const ALIAS = `quote-mcp:${SCHEME_ID}:`;
 export const TERMS_INTERVAL_MS = 60_000;
 const HEARTBEAT_MS = 5 * 60_000;
@@ -40,7 +45,11 @@ export interface Term {
   status?: "provisional" | "active" | "retired"; replacedBy?: string[]; broader?: string[]; relations?: { type: string; target: string }[];
   links?: { uri: string; match: string }[]; aliases?: string[];
 }
-export interface Change { n: number; kind: string; terms?: string[]; after?: Term | null; afterTerms?: Term[]; reason?: string | null }
+export interface TermSet {
+  id: string; scheme: string; slug: string; label: string; description?: string | null; kind?: string; ordered?: boolean; members?: string[];
+  recipe?: Record<string, unknown> | null; deleted?: boolean;
+}
+export interface Change { n: number; kind: string; terms?: string[]; after?: Term | null; afterTerms?: Term[]; afterSets?: TermSet[]; reason?: string | null }
 export interface Blocked { at: number; code: string; reason: string }
 export interface Cursor { log: string; through: number; blocked: Blocked | null }
 export interface Problem { code: string; reason: string }
@@ -63,7 +72,7 @@ export class TerminologyError extends Error {
 
 export interface TerminologyClient {
   baseUrl: string;
-  state(): Promise<{ log: string; version: number; head?: number; terms: Term[] }>;
+  state(): Promise<{ log: string; version: number; head?: number; terms: Term[]; sets?: TermSet[] }>;
   changes(since: number): Promise<{ log: string; version: number; changes: Change[] }>;
   reportProgress(report: Record<string, unknown>): Promise<unknown>;
   propose(proposal: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -172,7 +181,9 @@ function writeTerms(db: DB, terms: Term[]): void {
     for (const r of t.relations ?? []) {
       const type = RELATION[r.type];
       if (!type) continue;
-      const other = idOf(r.target, t);
+      // A related or opposite term may be in another scheme, which isn't followed here. Broader stays in the scheme.
+      const other = db.prepare("SELECT id FROM concepts WHERE term_id = ?").pluck().get(r.target) as number | undefined;
+      if (other === undefined) continue;
       add.run(id, other, type);
       add.run(other, id, type);
     }
@@ -200,7 +211,41 @@ function setsNaming(sets: ConceptSet[], slug: string): string[] {
   return sets.filter((s) => s.scheme === SCHEME_ID && [s.concepts, s.around, s.narrower, s.exclude].some((l) => l?.includes(slug))).map((s) => s.slug);
 }
 
-const IGNORED = new Set(["scheme-added", "scheme-changed", "set-added", "set-changed", "set-deleted"]);
+/** Writes a set's snapshot, keeping the slug it had as a former one; a deleted set's row goes. */
+function writeSet(db: DB, set: TermSet): void {
+  if (set.deleted) {
+    db.prepare("DELETE FROM concept_sets WHERE id = ?").run(set.id);
+    return;
+  }
+  const row = db.prepare("SELECT slug, former_slugs FROM concept_sets WHERE id = ?").get(set.id) as { slug: string; former_slugs: string } | undefined;
+  const former = new Set(JSON.parse(row?.former_slugs ?? "[]") as string[]);
+  if (row && row.slug !== set.slug) former.add(row.slug);
+  former.delete(set.slug);
+  db.prepare(`INSERT INTO concept_sets (id, scheme, slug, label, description, kind, ordered, members, recipe, former_slugs, updated_at)
+    VALUES (@id, @scheme, @slug, @label, @description, @kind, @ordered, @members, @recipe, @former, @stamp)
+    ON CONFLICT (id) DO UPDATE SET slug = excluded.slug, label = excluded.label, description = excluded.description, kind = excluded.kind, ordered = excluded.ordered,
+      members = excluded.members, recipe = excluded.recipe, former_slugs = excluded.former_slugs, updated_at = excluded.updated_at`).run({
+    id: set.id, scheme: set.scheme, slug: set.slug, label: set.label, description: set.description || null, kind: set.kind ?? "theme", ordered: set.ordered ? 1 : 0,
+    members: JSON.stringify(set.members ?? []), recipe: set.recipe ? JSON.stringify(set.recipe) : null, former: JSON.stringify([...former]), stamp: now(),
+  });
+}
+
+/** Applies the set snapshots a change carries, whatever its kind; its `after` may be a term even on a set-changed, so only afterSets is read. */
+function applySets(db: DB, change: Change): string[] {
+  const sets = (change.afterSets ?? []).filter((s) => s.scheme === SCHEME_ID);
+  for (const set of sets) writeSet(db, set);
+  return sets.map((s) => `${change.kind}: set ${s.slug}${s.deleted ? " (deleted)" : ""}`);
+}
+
+/** Makes the store's sets exactly these (a bootstrap, or the one backfill), keeping former slugs of the ones that stay. */
+function replaceSets(db: DB, sets: TermSet[]): void {
+  const keep = new Set(sets.map((s) => s.id));
+  for (const id of db.prepare("SELECT id FROM concept_sets").pluck().all() as string[]) if (!keep.has(id)) db.prepare("DELETE FROM concept_sets WHERE id = ?").run(id);
+  for (const set of sets) writeSet(db, set);
+}
+
+const IGNORED = new Set(["scheme-added", "scheme-changed"]);
+const SET_KINDS = new Set(["set-added", "set-changed", "set-deleted"]);
 const APPLIED = new Set(["imported", "added", "noted", "labelled", "updated", "moved", "slugged", "merged", "retired", "split"]);
 const quotes = (n: number) => `${n} quote${n === 1 ? "" : "s"}`;
 
@@ -209,16 +254,19 @@ const quotes = (n: number) => `${n} quote${n === 1 ? "" : "s"}`;
  * a hold thrown after some writes leaves nothing behind. Returns a line for each thing it did.
  */
 export function applyChange(db: DB, change: Change, sets: ConceptSet[]): string[] {
-  if (IGNORED.has(change.kind)) return [];
+  // These carry no terms to apply, but any change can carry sets, and a change passed isn't seen again.
+  if (IGNORED.has(change.kind) || SET_KINDS.has(change.kind)) return applySets(db, change);
   if (!APPLIED.has(change.kind)) throw new Hold("unknown-change", `Change kind "${change.kind}" isn't one Quote MCP knows`);
   const terms = snapshotsOf(change);
   const lines: string[] = [];
   const replacing: [Local, string][] = [];
+  // The file names slugs, and is in effect only while the store has no sets of its own.
+  const fileSets = storedSets(db).length ? [] : sets;
   for (const t of terms) {
     const row = byTerm(db, t.id);
     if (!row) continue;
     if (row.slug !== t.slug) {
-      const named = setsNaming(sets, row.slug);
+      const named = setsNaming(fileSets, row.slug);
       if (named.length) throw new Hold("slug-in-sets", `The slug ${row.slug} became ${t.slug}, and vocab/sets.json names it (${named.join(", ")})`);
     }
     if (row.status === "retired" || t.status !== "retired") continue;
@@ -236,6 +284,7 @@ export function applyChange(db: DB, change: Change, sets: ConceptSet[]): string[
     const n = repoint(db, from, to, `terminology-mcp change ${change.n} (${change.kind}): ${from.slug} became ${to.slug}`);
     if (n) lines.push(`re-pointed ${quotes(n)} from ${from.slug} to ${to.slug}`);
   }
+  lines.push(...applySets(db, change));
   return lines;
 }
 
@@ -304,7 +353,7 @@ export function planBootstrap(db: DB, terms: Term[]) {
   const want = new Set<string>();
   for (const t of terms) {
     for (const b of t.broader ?? []) want.add(`${t.slug} broader ${slugOf.get(b)}`).add(`${slugOf.get(b)} narrower ${t.slug}`);
-    for (const r of t.relations ?? []) if (RELATION[r.type]) want.add(`${t.slug} ${RELATION[r.type]} ${slugOf.get(r.target)}`).add(`${slugOf.get(r.target)} ${RELATION[r.type]} ${t.slug}`);
+    for (const r of t.relations ?? []) if (RELATION[r.type] && slugOf.has(r.target)) want.add(`${t.slug} ${RELATION[r.type]} ${slugOf.get(r.target)}`).add(`${slugOf.get(r.target)} ${RELATION[r.type]} ${t.slug}`);
   }
   const have = new Set((db.prepare(`SELECT a.slug || ' ' || r.type || ' ' || b.slug FROM concept_relations r JOIN concepts a ON a.id = r.from_id JOIN concepts b ON b.id = r.to_id
     JOIN schemes s ON s.id = a.scheme_id WHERE s.slug = ?`).pluck().all(SCHEME_ID) as string[]));
@@ -333,16 +382,48 @@ async function bootstrap(db: DB, client: TerminologyClient, apply: boolean): Pro
   const terms = state.terms.filter(inScheme);
   const plan = planBootstrap(db, terms);
   const base = { log: state.log, through: state.version, head: state.head ?? state.version, problems: plan.problems };
-  const lines = [`${plan.matches.length} terms matched to concepts, ${plan.added.length} new`, ...plan.added.map((t) => `add ${t.slug}`), ...plan.changes];
+  const sets = (state.sets ?? []).filter((set) => set.scheme === SCHEME_ID && !set.deleted);
+  const lines = [`${plan.matches.length} terms matched to concepts, ${plan.added.length} new`, ...plan.added.map((t) => `add ${t.slug}`), ...plan.changes, ...sets.map((set) => `set ${set.slug}`)];
   if (plan.blocked) return { outcome: "bootstrap-held", ...base, lines };
   if (!apply) return { outcome: "bootstrap", ...base, lines };
   db.transaction(() => {
     const attach = db.prepare("UPDATE concepts SET term_id = ? WHERE id = ?");
     for (const [row, t] of plan.matches) attach.run(t.id, row.id);
     writeTerms(db, terms);
+    replaceSets(db, sets);
+    setMeta(db, SETS_SEEDED, state.log);
     writeCursor(db, { log: state.log, through: state.version, blocked: null }, null);
   }).immediate();
   return { outcome: "bootstrapped", ...base, lines, reset: true };
+}
+
+/**
+ * A store already following when this build arrived passed any set changes before it without keeping them, and
+ * can't see them again in the changelog. So once, when it has caught up, it takes the sets from the state. That
+ * waits for a pass where the state is at the cursor, since the state's sets can name terms not applied yet.
+ */
+async function seedSets(db: DB, client: TerminologyClient, result: SyncResult, apply: boolean): Promise<SyncResult> {
+  if (result.blocked || getMeta(db, SETS_SEEDED)) return result;
+  let state: Awaited<ReturnType<TerminologyClient["state"]>>;
+  try {
+    state = await client.state();
+  } catch (error) {
+    if (error instanceof TerminologyError) return result;
+    throw error;
+  }
+  if (state.log !== result.log || state.version !== result.through) return result;
+  const sets = (state.sets ?? []).filter((set) => set.scheme === SCHEME_ID && !set.deleted);
+  const lines = [...result.lines, ...sets.map((set) => `set ${set.slug}, from the state`)];
+  if (!apply) return { ...result, lines };
+  const seeded = db.transaction(() => {
+    const cursor = readCursor(db);
+    if (cursor?.log !== state.log || cursor.through !== state.version) return false;
+    replaceSets(db, sets);
+    setMeta(db, SETS_SEEDED, state.log);
+    return true;
+  }).immediate();
+  if (!seeded) return result;
+  return { ...result, lines, outcome: sets.length ? "applied" : result.outcome };
 }
 
 const ROLLBACK = new Error("dry run");
@@ -391,7 +472,7 @@ export async function runTermSync({ db, client, sets, apply = true }: { db: DB; 
     db.transaction(() => writeCursor(db, { log, through, blocked }, written)).immediate();
     return { outcome: blocked ? "held" as const : through > cursor.through ? "applied" as const : "current" as const, log, through, head: version, blocked, lines };
   };
-  if (apply) return pass();
+  if (apply) return seedSets(db, client, pass(), true);
   let result: SyncResult | undefined;
   try {
     db.transaction(() => {
@@ -401,7 +482,7 @@ export async function runTermSync({ db, client, sets, apply = true }: { db: DB; 
   } catch (error) {
     if (error !== ROLLBACK) throw error;
   }
-  return result!;
+  return seedSets(db, client, result!, false);
 }
 
 /**
@@ -430,6 +511,7 @@ export async function acceptHeldChange({ db, client, n, repointTo }: { db: DB; c
         lines.push(`re-pointed ${quotes(count)} from ${from.slug} to ${to.slug}`);
       }
     }
+    lines.push(...applySets(db, change));
     writeCursor(db, { log: cursor.log, through: n, blocked: null }, cursor.through);
   }).immediate();
   return { log: cursor.log, through: n, change, lines };

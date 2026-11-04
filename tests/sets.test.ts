@@ -31,8 +31,8 @@ describe("resolving a concept set", () => {
   });
 
   it("takes everything narrower, at any depth, and leaves out exclusions", () => {
-    expect(resolveSet(set({ narrower: ["work"] }), graph).members).toEqual(["burnout", "stress", "work"]);
-    expect(resolveSet(set({ narrower: ["work"], concepts: ["fear"], exclude: ["stress"] }), graph).members).toEqual(["burnout", "fear", "work"]);
+    expect(resolveSet(set({ narrower: ["work"] }), graph).members).toEqual(["burnout", "stress"]);
+    expect(resolveSet(set({ narrower: ["work"], concepts: ["work", "fear"], exclude: ["stress"] }), graph).members).toEqual(["burnout", "fear", "work"]);
   });
 
   it("reports slugs the scheme doesn't have, and keeps to its scheme", () => {

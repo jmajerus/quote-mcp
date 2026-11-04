@@ -97,7 +97,7 @@ export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture)
 
   server.registerTool("list_sets", {
     title: "List concept sets",
-    description: "Named concept sets: parts of a scheme picked for a map or a theme (despair and its neighbours, say), with how many concepts each has. Pass a set's slug as set to search_quotes or list_concepts.",
+    description: "Named concept sets: parts of a scheme picked for a map or a theme (despair and its neighbours, say), with how many concepts and quotes each has. Pass a set's slug as set to search_quotes or list_concepts.",
     inputSchema: {},
     annotations: readOnly,
   }, () => run(() => listSets(db, sets)));

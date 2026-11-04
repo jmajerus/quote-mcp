@@ -26,7 +26,9 @@ a card for each. "Collection" is the readers' word only: in the code and the sto
 
 ## Concept sets
 
-A concept set names a part of one scheme, for a map, a theme, or search: [vocab/sets.json](../vocab/sets.json).
+A concept set names a part of one scheme, for a map, a theme, or search. terminology-mcp is their master: make
+and change them on its `/sets` page, and quote-mcp's subscriber keeps a copy in the store, within a minute.
+[vocab/sets.json](../vocab/sets.json) is used only while the store has no sets, and goes once they've moved.
 Search and `list_concepts` take a set (`set`), the public site has a page per set (as "starting points"), and
 the API serves each one in the graph's shape for the maps.
 
@@ -36,9 +38,13 @@ sets that reach it:
 | Field | What it adds |
 |---|---|
 | `concepts` | These concepts. |
-| `around`, with `depth` (default 1) and `types` | These concepts and their neighbours, `depth` steps out along relations of `types` (`broader`, `narrower`, `related`, `opposite`; all by default). |
-| `narrower` | These concepts and everything narrower, at any depth. |
-| `exclude` | Minus these. |
+| `around`, with `depth` (default 1) and `types` | These concepts and their neighbours, `depth` steps out along relations of `types` (`broader`, `narrower`, `related`, `opposite`; all by default). In terminology-mcp each concept has its own depth and types. |
+| `narrower` | Everything narrower than these, at any depth, without these themselves (add them to `concepts` to keep them). |
+| `exclude` | Minus these, applied last. |
+
+A set in terminology-mcp can instead list its members: concepts or other sets, in order if it's ordered. A concept
+the scheme doesn't have, or one retired, is left out and listed as `missing`. `list_sets` and the server's
+`/api/sets` also say how many quotes a set's concepts have.
 
 They combine:
 
