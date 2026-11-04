@@ -84,6 +84,16 @@ new quotes landing in corpus-mcp soonest:
    - `add_quote(work, text, page?, comment?, tags?, request_id?)`. `work`
      is any key: `zotero:<library>/<key>`, `quote:<id>`, a citekey, a
      Zotero item key, or a Calibre book id or UUID.
+   - A Zotero key or citekey that isn't in the mirror yet (a book filed
+     since the last import) brings the mirror up to date and is tried
+     once more: `POST /api/refresh` to holdings-mcp when
+     `QUOTE_ZOTERO_API` is its copy, then the import's sync of each
+     library from its stored version. Concurrent misses share one
+     refresh. The lookup is tried again whatever holdings-mcp answers
+     (its errors cover feeds other than Zotero, and its copy may have the
+     item already); what failed is added only to a work still missing.
+     Nothing is held while add_quote waits, so holdings-mcp's refresh can
+     read the counts feed meanwhile.
    - `POST /api/verify` with `book` as `zotero:<library>/<key>` (or the
      citekey, for an item outside the library corpus-mcp mirrors). The
      answers carry the book as its books-feed entry. A match saves the

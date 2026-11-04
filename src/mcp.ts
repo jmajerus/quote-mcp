@@ -15,7 +15,7 @@ Typical flow: search_quotes (words, a concept, an author, or a work) → get_quo
 Beside quotes are notes: your own words at a page, or about a whole work, with no quoted text (kind "note"; the words are in note). Search finds both unless kind is given; cite_quote on a note gives the work and the place, not a quotation.
 Words in a search are looked for in the quote's text and comment only, so a phrase search finds sources that use the phrase; to find quotes tagged with a concept, use concept (or tag).
 A quote's status is "transcribed" (typed or OCR'd from the book, not checked against a text) or "unparsed" (not yet split from its note; left out of search by default). Flags such as ocr_suspect or no_locator say what to check before quoting. When a work has several editions in Zotero, cite_quote lists them under editions, each with its citekey; cite the one the page number belongs to.
-To save a quote, use add_quote with a work key from holdings-mcp's find_work (or a citekey): when the work has a Calibre book, the words are checked against its text and saved as the book has them (status "verified"); with no match nothing is saved and the closest passages come back. A paper book's quote is saved "transcribed". To change a saved quote, update_quote sets its tags and comment; its text, page, or chapter author change only by propose_quote_fix, which a person accepts. delete_quote removes a quote an agent saved. corpus-mcp's save_quote, update_quote, and delete_quote are retired: its quotes are here now.`;
+To save a quote, use add_quote with a work key from holdings-mcp's find_work (or a citekey): when the work has a Calibre book, the words are checked against its text and saved as the book has them (status "verified"); with no match nothing is saved and the closest passages come back. A paper book's quote is saved "transcribed". A book filed in Zotero moments ago works too: a key the mirror lacks brings it up to date first. To change a saved quote, update_quote sets its tags and comment; its text, page, or chapter author change only by propose_quote_fix, which a person accepts. delete_quote removes a quote an agent saved. corpus-mcp's save_quote, update_quote, and delete_quote are retired: its quotes are here now.`;
 
 function json(value: unknown): CallToolResult {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
@@ -134,7 +134,7 @@ export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture)
         request_id: z.string().max(200).optional().describe("Any id unique to this quote, so a retry doesn't save it twice"),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-    }, (args) => runAsync(() => addQuote(capture.writer(), args, { corpus: capture.corpus, primary: capture.primary })));
+    }, (args) => runAsync(() => addQuote(capture.writer(), args, { corpus: capture.corpus, primary: capture.primary, refreshZotero: capture.refreshZotero })));
 
     server.registerTool("update_quote", {
       title: "Change a quote's tags or comment",

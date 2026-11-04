@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { type AnchorChange, type Book, type CorpusClient, CorpusError, type CorpusQuote, type Verified, addQuote, followAnchors, importCorpusQuotes, retryAnchors } from "../src/capture.js";
+import { type AnchorChange, type Book, type CorpusClient, CorpusError, type CorpusQuote, type Verified, addQuote, followAnchors, importCorpusQuotes, retryAnchors, zoteroRefresher } from "../src/capture.js";
 import http from "node:http";
 import { ToolError } from "../src/common.js";
 import { handleCorpusQuotes } from "../src/corpus-api.js";
@@ -238,6 +238,101 @@ describe("add_quote", () => {
     const id = saved(await addQuote(db, { work: "main:42", text: "disrespectful behavior" }, options())).id;
     runImport(db, { drupal, primary: PRIMARY, sources: [PRIMARY], dictionary: new Set(["mobbing"]) });
     expect(db.prepare("SELECT flags FROM quotes WHERE id = ?").pluck().get(id)).toBe("[]");
+  });
+});
+
+describe("a work filed in Zotero since the last import", () => {
+  const fileBook = () => db.prepare("INSERT INTO zotero_items (library, key, version, item_type, parent_key, deleted, data) VALUES (?, 'NEWB0001', 2, 'book', NULL, 0, ?)")
+    .run(PRIMARY, JSON.stringify({ itemType: "book", title: "Just Filed", citationKey: "filed2026just", creators: [{ creatorType: "author", lastName: "Filer", firstName: "Ann" }] }));
+
+  it("refreshes the mirror once and saves the quote, by item key or citekey", async () => {
+    let refreshes = 0;
+    const refreshZotero = async () => { refreshes++; fileBook(); };
+    const r = await addQuote(db, { work: `zotero:${PRIMARY}/NEWB0001`, text: "Words from a paper book.", page: "3" }, { ...options(), refreshZotero });
+    expect(r).toMatchObject({ saved: true, status: "transcribed" });
+    expect(saved(r).work?.title).toBe("Just Filed");
+    expect(refreshes).toBe(1);
+    // Now in the mirror: the citekey finds it without another refresh.
+    await addQuote(db, { work: "filed2026just", text: "More words from it." }, { ...options(), refreshZotero });
+    expect(refreshes).toBe(1);
+  });
+
+  it("finds a citekey that only the refresh brings in", async () => {
+    const r = await addQuote(db, { work: "filed2026just", text: "Words from a paper book." }, { ...options(), refreshZotero: async () => { fileBook(); } });
+    expect(saved(r).work?.title).toBe("Just Filed");
+  });
+
+  it("still says what's missing when the refresh doesn't bring it, or fails", async () => {
+    await rejects(addQuote(db, { work: "nobody2000nothing", text: "words" }, { ...options(), refreshZotero: async () => {} }), /No work for/);
+    await rejects(addQuote(db, { work: `zotero:${PRIMARY}/NEWB0001`, text: "words" }, { ...options(), refreshZotero: async () => { throw new Error("holdings-mcp down"); } }),
+      /isn't in the Zotero mirror yet.*Refreshing the mirror just now: the refresh failed: holdings-mcp down/);
+    // A refresh that reports a failure still has its result looked at: the sync may have brought the book.
+    const r = await addQuote(db, { work: `zotero:${PRIMARY}/NEWB0001`, text: "words" }, { ...options(), refreshZotero: async () => { fileBook(); return "holdings-mcp answered 500 to the refresh, so the mirror may be behind"; } });
+    expect(r).toMatchObject({ saved: true });
+  });
+
+  it("doesn't refresh for a work that isn't a Zotero key", async () => {
+    let refreshes = 0;
+    await rejects(addQuote(db, { work: "quote:99999", text: "words" }, { ...options(), refreshZotero: async () => { refreshes++; } }), /No work quote:99999/);
+    expect(refreshes).toBe(0);
+  });
+
+  it("asks holdings-mcp to refresh, then syncs each library from its stored version", async () => {
+    const seen: string[] = [];
+    const server = http.createServer((req, res) => {
+      seen.push(`${req.method} ${req.url}`);
+      const url = new URL(req.url ?? "/", "http://x");
+      if (url.pathname === "/api/refresh") return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ changed: 1, errors: [] }));
+      if (url.pathname === `/zotero/${PRIMARY}/items`) {
+        const page = url.searchParams.get("start") === "0"
+          ? [{ key: "NEWB0001", version: 7, data: { itemType: "book", title: "Just Filed", citationKey: "filed2026just" } }] : [];
+        return res.writeHead(200, { "content-type": "application/json", "last-modified-version": "7", "total-results": "1" }).end(JSON.stringify(page));
+      }
+      if (url.pathname === `/zotero/${PRIMARY}/deleted`) return res.writeHead(200, { "content-type": "application/json", "last-modified-version": "7" }).end(JSON.stringify({ items: [] }));
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    try {
+      const { port } = server.address() as { port: number };
+      db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, '5')").run(`zotero_version:${PRIMARY}`);
+      const refresh = zoteroRefresher(() => db, { QUOTE_ZOTERO_LIBRARY: PRIMARY, QUOTE_ZOTERO_API: `http://127.0.0.1:${port}/zotero` });
+      expect(refresh).toBeDefined();
+      await Promise.all([refresh!(), refresh!()]);
+      expect(seen[0]).toBe("POST /api/refresh");
+      expect(seen.filter((s) => s.startsWith("POST")).length).toBe(1);
+      expect(seen.some((s) => s.startsWith(`GET /zotero/${PRIMARY}/items?`) && s.includes("since=5"))).toBe(true);
+      expect(db.prepare("SELECT value FROM meta WHERE key = ?").pluck().get(`zotero_version:${PRIMARY}`)).toBe("7");
+      const r = await addQuote(db, { work: "filed2026just", text: "Words from a paper book." }, options());
+      expect(saved(r).work?.title).toBe("Just Filed");
+    } finally {
+      server.close();
+    }
+  });
+
+  it("syncs even when holdings-mcp's refresh fails, and says what failed", async () => {
+    const server = http.createServer((req, res) => {
+      const url = new URL(req.url ?? "/", "http://x");
+      if (url.pathname === "/api/refresh") return res.writeHead(500).end("boom");
+      if (url.pathname === `/zotero/${PRIMARY}/items`) {
+        const page = url.searchParams.get("start") === "0" ? [{ key: "NEWB0001", version: 7, data: { itemType: "book", title: "Just Filed" } }] : [];
+        return res.writeHead(200, { "content-type": "application/json", "last-modified-version": "7", "total-results": "1" }).end(JSON.stringify(page));
+      }
+      if (url.pathname === `/zotero/${PRIMARY}/deleted`) return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ items: [] }));
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    try {
+      const { port } = server.address() as { port: number };
+      const refresh = zoteroRefresher(() => db, { QUOTE_ZOTERO_LIBRARY: PRIMARY, QUOTE_ZOTERO_API: `http://127.0.0.1:${port}/zotero` })!;
+      expect(await refresh()).toMatch(/holdings-mcp answered 500 to the refresh, so the mirror may be behind/);
+      expect(db.prepare("SELECT COUNT(*) FROM zotero_items WHERE key = 'NEWB0001'").pluck().get()).toBe(1);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("isn't set up without a Zotero library", () => {
+    expect(zoteroRefresher(() => db, {})).toBeUndefined();
   });
 });
 

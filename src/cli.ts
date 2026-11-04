@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { corpusClient, corpusConfig, followAnchors, importCorpusQuotes, retryAnchors, storeWriter } from "./capture.js";
+import { corpusClient, corpusConfig, followAnchors, importCorpusQuotes, retryAnchors, storeWriter, zoteroRefresher } from "./capture.js";
 import { SCHEMA_VERSION, openDb } from "./db.js";
 import { reviewProposal } from "./edits.js";
 import { ToolError } from "./common.js";
@@ -117,7 +117,8 @@ async function importCommand() {
 /** add_quote's writes: a writable connection to the store, corpus-mcp to check quotes against, and the primary library. */
 function capture() {
   const corpus = corpusConfig();
-  return { writer: storeWriter(process.env.QUOTE_DB ?? "data/quotes.db"), corpus: corpus ? corpusClient(corpus) : null, primary: process.env.QUOTE_ZOTERO_LIBRARY || null };
+  const writer = storeWriter(process.env.QUOTE_DB ?? "data/quotes.db");
+  return { writer, corpus: corpus ? corpusClient(corpus) : null, primary: process.env.QUOTE_ZOTERO_LIBRARY || null, refreshZotero: zoteroRefresher(writer) };
 }
 
 function exportCommand() {
