@@ -2,11 +2,12 @@ import { rmSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 import Database from "better-sqlite3";
 import { type DB, SCHEMA_VERSION, openDb } from "../src/db.js";
-import type { DrupalSite } from "../src/drupal.js";
+import { type DrupalSite, emptyFields, workFromRow } from "../src/drupal.js";
 import { exportAll } from "../src/export.js";
 import { holdingsCounts } from "../src/holdings.js";
 import { searchQuotes } from "../src/queries.js";
 import { type ImportOptions, runImport } from "../src/import.js";
+import { fullTitle, normalizedTitle, shareAuthor, textOf } from "../src/text.js";
 
 const PRIMARY = "users/1";
 const GROUP = "groups/2";
@@ -155,6 +156,139 @@ describe("import", () => {
     runImport(db, opts({ drupal: s }));
     expect(db.prepare("SELECT zotero_key FROM works WHERE id = ?").pluck().get(quoteLike("groupthink").work_id)).toBe("IMAGES98");
     expect(db.prepare("SELECT zotero_key FROM works WHERE id = ?").pluck().get(quoteLike("bureaucratic").work_id)).toBe("IMAGES86");
+  });
+
+  describe("matching old-site works", () => {
+    const work = (nid: number, title: string, year: string | null, authors: string[], words: string) => (
+      { nid, title, type: "Book", year, isbn: null, url: null, citekey: null, authors, keywords: [], notes: `<span class="quote" title="power">"${words}" (p. 1)</span>` });
+    const keyOf = (fragment: string) => db.prepare("SELECT zotero_key FROM works WHERE id = ?").pluck().get(quoteLike(fragment).work_id);
+    const withWork = (...more: ReturnType<typeof work>[]) => {
+      const s = site();
+      s.works.push(...more);
+      return opts({ drupal: s });
+    };
+    const LONG = "Everything worth saying has a long enough sentence";
+
+    it("matches & to and, with a different subtitle", () => {
+      addItem(db, PRIMARY, "SHAME001", book("Shame and guilt: the masters of disguise", "1992", "Bradshaw"));
+      runImport(db, withWork(work(30, "Shame &amp; Guilt: Masters of Disguise", null, ["Bradshaw, John"], LONG)));
+      expect(keyOf(LONG)).toBe("SHAME001");
+    });
+
+    it("tells editions apart by the year, and books with one title apart by the author", () => {
+      addItem(db, PRIMARY, "EDITION1", book("Images of organization", "1986", "Morgan"));
+      addItem(db, PRIMARY, "EDITION2", book("Images of organization", "2006", "Morgan"));
+      addItem(db, PRIMARY, "OTHERONE", book("Images of organization", "2006", "Other"));
+      runImport(db, withWork(work(31, "Images of Organization", "2006", ["Morgan, Gareth"], LONG)));
+      expect(keyOf(LONG)).toBe("EDITION2");
+    });
+
+    it("stays ambiguous when nothing tells real editions apart", () => {
+      addItem(db, PRIMARY, "EDITION1", book("Images of organization", "1986", "Morgan"));
+      addItem(db, PRIMARY, "EDITION2", book("Images of organization", "2006", "Morgan"));
+      runImport(db, withWork(work(31, "Images of Organization", null, ["Morgan, Gareth"], LONG)));
+      const row = db.prepare("SELECT match, candidates FROM works WHERE id = ?").get(quoteLike(LONG).work_id);
+      expect(row).toEqual({ match: "ambiguous", candidates: JSON.stringify(["EDITION1", "EDITION2"]) });
+    });
+
+    it("keeps a match when its title changes in Zotero or a second edition is filed, and lets it go when the item goes", () => {
+      const o = withWork(work(32, "Maps of Meaning", null, ["Peterson, Jordan"], LONG));
+      addItem(db, PRIMARY, "MAPS0001", book("Maps of meaning", "1999", "Peterson"));
+      runImport(db, o);
+      addItem(db, PRIMARY, "MAPS0001", book("Maps of meaning renamed", "1999", "Peterson"), 2);
+      expect(runImport(db, o).workChanges).toEqual([]);
+      expect(keyOf(LONG)).toBe("MAPS0001");
+      addItem(db, PRIMARY, "MAPS0001", book("Maps of meaning", "1999", "Peterson"), 3);
+      addItem(db, PRIMARY, "MAPS0002", book("Maps of meaning", "2002", "Peterson"));
+      expect(runImport(db, o).workChanges).toEqual([]);
+      expect(keyOf(LONG)).toBe("MAPS0001");
+      db.prepare("UPDATE zotero_items SET deleted = 1 WHERE key = 'MAPS0001'").run();
+      const { workChanges } = runImport(db, o);
+      expect(workChanges).toEqual([{ title: "Maps of Meaning", from: "zotero MAPS0001", to: "zotero MAPS0002", quotes: 1 }]);
+      expect(keyOf(LONG)).toBe("MAPS0002");
+    });
+
+    it("prefers the full title to the year, and doesn't move a match when a closer item appears", () => {
+      addItem(db, PRIMARY, "EXEC0001", book("Images of organization: the executive edition", "1998", "Morgan"));
+      addItem(db, PRIMARY, "PLAIN001", book("Images of organization", "2006", "Morgan"));
+      const o = withWork(work(35, "Images of Organization: The Executive Edition", "2006", ["Morgan, Gareth"], LONG));
+      runImport(db, o);
+      expect(keyOf(LONG)).toBe("EXEC0001");
+      addItem(db, PRIMARY, "EXACT001", book("Images of organization: the executive edition", "2006", "Morgan"));
+      expect(runImport(db, o).workChanges).toEqual([]);
+      expect(keyOf(LONG)).toBe("EXEC0001");
+    });
+
+    it("reports a match by title to a book with none of the work's authors, without undoing it", () => {
+      addItem(db, PRIMARY, "SAMENAME", book("Leadership", "1978", "Burns"));
+      const { authorMismatches } = runImport(db, withWork(work(33, "Leadership", null, ["Giuliani, Rudolph"], LONG)));
+      expect(authorMismatches).toEqual([{ title: "Leadership", authors: ["Giuliani, Rudolph"], zotero: "SAMENAME", creators: ["Burns, A."] }]);
+      expect(keyOf(LONG)).toBe("SAMENAME");
+    });
+
+    it("reports what a dry run would move, and leaves everything as it was", () => {
+      const o = withWork(work(34, "Later Filed", null, [], LONG));
+      runImport(db, o);
+      const dump = () => JSON.stringify([db.prepare("SELECT * FROM works ORDER BY id").all(), db.prepare("SELECT id, work_id FROM quotes ORDER BY id").all(), db.prepare("SELECT COUNT(*) FROM history").pluck().get()]);
+      addItem(db, PRIMARY, "LATER001", book("Later filed", "2000", "Anyone"));
+      const before = dump();
+      const { workChanges } = runImport(db, { ...o, dryRun: true });
+      expect(workChanges).toEqual([{ title: "Later Filed", from: "unmatched", to: "zotero LATER001", quotes: 1 }]);
+      expect(dump()).toBe(before);
+    });
+  });
+
+  describe("reading the old site's columns", () => {
+    const row = (biblio_year: unknown) => ({ nid: 1, title: "T", type: "Book", biblio_year, biblio_isbn: null, biblio_url: null, biblio_citekey: null, biblio_notes: null });
+
+    it("reads a year however the column gives it, and turns down placeholders", () => {
+      expect(workFromRow(row(1996)).year).toBe("1996");
+      expect(workFromRow(row("1996")).year).toBe("1996");
+      expect(workFromRow(row(Buffer.from("1996"))).year).toBe("1996");
+      for (const none of [9999, 9998, 0, null, ""]) expect(workFromRow(row(none)).year).toBeNull();
+    });
+
+    it("stops on a value it can't read, rather than taking it for nothing", () => {
+      expect(textOf(" x ")).toBe("x");
+      expect(textOf(12n)).toBe("12");
+      expect(textOf("  ")).toBeNull();
+      expect(() => workFromRow(row(new Date(0)))).toThrow(/Expected text, and found \[object Date\]/);
+    });
+
+    it("notices a field no work has", () => {
+      expect(emptyFields([workFromRow(row(null))])).toEqual(["year", "authors"]);
+      expect(emptyFields([workFromRow(row(1996), ["A"]), workFromRow(row(null))])).toEqual([]);
+      expect(emptyFields([])).toEqual([]);
+    });
+  });
+
+  describe("comparing titles and authors", () => {
+    it("treats & and and alike, however it's written", () => {
+      for (const t of ["Shame & Guilt", "Shame &amp; Guilt", "Shame and Guilt", "SHAME AND GUILT: x"]) expect(normalizedTitle(t)).toBe("shame and guilt");
+      expect(fullTitle("Shame & Guilt: x")).toBe(fullTitle("shame and guilt x"));
+      expect(normalizedTitle("Previews &#38; Premises &#x26; More")).toBe("previews and premises and more");
+      expect(normalizedTitle("Work &bogus; x &#99999999; y")).toBe("work and bogus x and 99999999 y");
+      expect(shareAuthor(["O&#039;Neil, Judy"], ["O'Neil, Judy"])).toBe(true);
+    });
+
+    it("leaves off a subtitle however it's set off, but not at an abbreviation", () => {
+      for (const t of ["Work: why", "Work? Why", "Work! Why", "Work - why", "Work – why", "Work — why", "Work—why", "Work. Why"]) expect(normalizedTitle(t)).toBe("work");
+      expect(normalizedTitle("Dr. Spock: a life")).toBe("dr spock");
+      expect(normalizedTitle("U.S. Labor History")).toBe("u s labor history");
+      expect(normalizedTitle("Work-Life Balance")).toBe("work life balance");
+    });
+
+    it("drops a leading article even after a quotation mark, and keeps a title that's all subtitle", () => {
+      expect(normalizedTitle("\u201cThe Fear of Work\u201d")).toBe("fear of work");
+      expect(normalizedTitle("?: Why")).toBe("why");
+    });
+
+    it("compares authors by surname, in either order of name", () => {
+      expect(shareAuthor(["Morgan, Gareth"], ["Gareth Morgan"])).toBe(true);
+      expect(shareAuthor(["Morgan, G."], ["Other, A.", "Morgan, Gareth"])).toBe(true);
+      expect(shareAuthor(["Morgan, Gareth"], ["Burns, James"])).toBe(false);
+      expect(shareAuthor([], ["Burns, James"])).toBe(false);
+    });
   });
 
   it("imports a quote it can't split as unparsed, out of the way", () => {

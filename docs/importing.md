@@ -51,9 +51,26 @@ inside a word, repeated words.
 
 ## Works
 
-Each quote cites a work, matched to a Zotero item by title, then by year where titles repeat. A work with
-several Zotero editions is `ambiguous` (cite_quote lists each edition); one with none is `unmatched`, cited
-from the old site's record until it's filed in Zotero. Both have worklists.
+Each quote cites a work. Only a full import, one that reads the old site, matches old-site works; the timer's doesn't, and a
+work made by `add_quote` is never re-matched.
+
+A work matches a primary-library item by its short title: case, accents, punctuation, HTML escapes, a leading article, `&`
+against "and", and any subtitle don't count. When several items have that title, they're narrowed by a shared author surname,
+then by the full title, then by year. One left is the match. Several is `ambiguous` (cite_quote lists each edition), and none
+is `unmatched`, cited from its own details.
+
+A match stands while its Zotero item does: editing the item's title, or filing another edition, doesn't move its quotes. When
+the item goes (merged into another, or deleted), the work is matched afresh. A move keeps each quote's id and history, and the
+work's old id still resolves.
+
+To see what a full import would do, without saving anything:
+
+    quote-mcp import --dry-run
+
+It reads the mirror as the last sync left it, and needs `QUOTE_DRUPAL_URL`. Dry run or not, an import lists each work that
+moves, and each match whose item shares no author with the work, which may be another book. It warns if no work on the old
+site has a year or authors, since that means a column has changed, not that the site has none. A value it can't read as text
+stops the import rather than reading as empty.
 
 ## Margin notes
 

@@ -3,7 +3,7 @@ import type { DrupalSite, DrupalWork } from "./drupal.js";
 import { type Suspect, dropCommonUnknowns, suspectTokens } from "./ocr.js";
 import { readMargin } from "./margin.js";
 import { type ParsedNote, noteText, parseNote, readLocator, splitQuotes } from "./parse.js";
-import { fullTitle, normalizedTitle, quoteKey, slugify, yearOf } from "./text.js";
+import { fullTitle, normalizedTitle, quoteKey, shareAuthor, slugify, yearOf } from "./text.js";
 import type { ApiItem } from "./zotero.js";
 
 /**
@@ -33,13 +33,22 @@ export interface ImportOptions {
   /** A word list for the OCR check; without one the check is skipped. */
   dictionary?: Set<string>;
   actor?: string;
+  /** Works it all out and reports it, then puts everything back. */
+  dryRun?: boolean;
 }
+
+/** An old-site work that now points somewhere else, which moves its quotes. */
+export interface WorkChange { title: string; from: string; to: string; quotes: number }
 
 export interface ImportStats {
   concepts: { added: number; relations: number };
   quotes: { added: number; updated: number; merged: number; unchanged: number; keptEdited: number };
   skipped: Record<string, number>;
   works: Record<string, number>;
+  /** Old-site works that matched something different from last time. */
+  workChanges: WorkChange[];
+  /** Works matched by title to an item with none of their authors: worth a look, since it may be another book. */
+  authorMismatches: { title: string; authors: string[]; zotero: string; creators: string[] }[];
   unresolvedTags: [string, number][];
   ocrSuspects: number;
 }
@@ -66,17 +75,19 @@ export function creators(data: ApiItem["data"]): string[] {
   return (authors.length ? authors : all).map((c) => c.name ?? [c.lastName, c.firstName].filter(Boolean).join(", "));
 }
 
+const ROLLBACK = new Error("dry run");
+
 export function runImport(db: DB, opts: ImportOptions): ImportStats {
   const actor = opts.actor ?? "import";
   const stamp = now();
   const stats: ImportStats = {
     concepts: { added: 0, relations: 0 },
     quotes: { added: 0, updated: 0, merged: 0, unchanged: 0, keptEdited: 0 },
-    skipped: {}, works: {}, unresolvedTags: [], ocrSuspects: 0,
+    skipped: {}, works: {}, workChanges: [], authorMismatches: [], unresolvedTags: [], ocrSuspects: 0,
   };
   const skip = (why: string) => (stats.skipped[why] = (stats.skipped[why] ?? 0) + 1);
 
-  db.transaction(() => {
+  const run = db.transaction(() => {
     // --- Concepts ---------------------------------------------------------------------------------
     db.prepare("INSERT OR IGNORE INTO schemes (slug, label, description, created_at) VALUES (?, ?, ?, ?)").run(SCHEME.slug, SCHEME.label, SCHEME.description, stamp);
     const schemeId = (db.prepare("SELECT id FROM schemes WHERE slug = ?").get(SCHEME.slug) as { id: number }).id;
@@ -109,17 +120,22 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
       AND item_type NOT IN ('note', 'attachment', 'annotation')`).all(library) as { key: string; data: string }[])
       .map((r) => ({ key: r.key, data: JSON.parse(r.data) as ApiItem["data"] }));
     const primaryIndex = new Map<string, { key: string; data: ApiItem["data"] }[]>();
-    for (const item of itemsOf(opts.primary)) {
+    const primaryByKey = new Map(itemsOf(opts.primary).map((item) => [item.key, item]));
+    for (const item of primaryByKey.values()) {
       const k = normalizedTitle(item.data.title);
       if (k) primaryIndex.set(k, [...(primaryIndex.get(k) ?? []), item]);
     }
-    /** Primary-library items with this title, narrowed when the title repeats: by year, then by the full title, subtitle included. */
-    const candidates = (title: string, year: string | null) => {
+    /** Primary-library items with this title, narrowed when the title repeats: by author, by the full title, subtitle included, then by year. */
+    const candidates = (title: string, year: string | null, authors: string[]) => {
       let hits = primaryIndex.get(normalizedTitle(title)) ?? [];
-      const sameYear = hits.filter((h) => year && yearOf(h.data.date) === year);
-      if (hits.length > 1 && sameYear.length) hits = sameYear;
-      const sameTitle = hits.filter((h) => fullTitle(h.data.title) === fullTitle(title));
-      return hits.length > 1 && sameTitle.length ? sameTitle : hits;
+      const narrow = (keep: (h: (typeof hits)[number]) => boolean) => {
+        const kept = hits.filter(keep);
+        if (hits.length > 1 && kept.length) hits = kept;
+      };
+      narrow((h) => shareAuthor(authors, creators(h.data)));
+      narrow((h) => fullTitle(h.data.title) === fullTitle(title));
+      narrow((h) => !!year && yearOf(h.data.date) === year);
+      return hits;
     };
 
     const workByOrigin = db.prepare("SELECT work_id FROM work_origins WHERE kind = ? AND ref = ?");
@@ -142,11 +158,20 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
 
     /** The work for an old-site work: its Zotero item when exactly one matches, else a work of its own. */
     const drupalWork = (w: DrupalWork): number => {
-      const hits = candidates(w.title, w.year);
+      let hits = candidates(w.title, w.year, w.authors);
       const existing = (workByOrigin.get("drupal", String(w.nid)) as { work_id: number } | undefined)?.work_id;
+      const before = existing === undefined ? undefined : db.prepare("SELECT match, zotero_library, zotero_key, (SELECT COUNT(*) FROM quotes WHERE work_id = works.id) AS quotes FROM works WHERE id = ?").get(existing) as
+        { match: string; zotero_library: string | null; zotero_key: string | null; quotes: number };
+      // A match stands while its item does: a title edited in Zotero, or another edition filed, doesn't move its quotes.
+      // When the item goes (a merge, say), the work is matched afresh.
+      const matched = before?.match === "zotero" && before.zotero_library === opts.primary ? primaryByKey.get(before.zotero_key!) : undefined;
+      if (matched) hits = [matched];
       let id: number;
       if (hits.length === 1) {
-        id = zoteroWork(opts.primary, hits[0].key, hits[0].data);
+        const { key, data } = hits[0];
+        const made = creators(data);
+        if (w.authors.length && made.length && !shareAuthor(w.authors, made)) stats.authorMismatches.push({ title: w.title, authors: w.authors, zotero: key, creators: made });
+        id = zoteroWork(opts.primary, key, data);
       } else {
         const match = hits.length ? "ambiguous" : "unmatched";
         const own = existing && (db.prepare("SELECT match FROM works WHERE id = ?").get(existing) as { match: string }).match !== "zotero" ? existing : undefined;
@@ -169,6 +194,12 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
         db.prepare("DELETE FROM works WHERE id = ? AND match != 'zotero' AND NOT EXISTS (SELECT 1 FROM quotes WHERE work_id = ?)").run(existing, existing);
       }
       setOrigin.run("drupal", String(w.nid), id);
+      if (before) {
+        const was = before.match === "zotero" ? `zotero ${before.zotero_key}` : before.match;
+        const now = db.prepare("SELECT match, zotero_key FROM works WHERE id = ?").get(id) as { match: string; zotero_key: string | null };
+        const is = now.match === "zotero" ? `zotero ${now.zotero_key}` : now.match;
+        if (was !== is) stats.workChanges.push({ title: w.title, from: was, to: is, quotes: before.quotes });
+      }
       return id;
     };
 
@@ -179,7 +210,7 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
       if (!parent) return null;
       const data = JSON.parse(parent.data) as ApiItem["data"];
       if (library === opts.primary) return zoteroWork(library, parentKey, data);
-      const hits = candidates(data.title ?? "", yearOf(data.date));
+      const hits = candidates(data.title ?? "", yearOf(data.date), creators(data));
       const id = hits.length === 1 ? zoteroWork(opts.primary, hits[0].key, hits[0].data) : zoteroWork(library, parentKey, data);
       setOrigin.run("zotero", `${library}:${parentKey}`, id);
       return id;
@@ -375,6 +406,12 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
     }
     stats.unresolvedTags = (db.prepare("SELECT tag, COUNT(*) AS n FROM quote_tags WHERE concept_id IS NULL GROUP BY tag COLLATE NOCASE ORDER BY n DESC, tag").all() as { tag: string; n: number }[])
       .map((r) => [r.tag, r.n]);
-  })();
+    if (opts.dryRun) throw ROLLBACK;
+  });
+  try {
+    run();
+  } catch (error) {
+    if (error !== ROLLBACK) throw error;
+  }
   return stats;
 }

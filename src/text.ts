@@ -1,12 +1,57 @@
-/** A title compared loosely: case, accents, punctuation, and a subtitle after ":" ignored (corpus-mcp's rule). */
+/**
+ * A value read from outside as text: numbers and buffers as what they say, empty as null. A database column's type
+ * isn't ours to assume, so anything else throws, rather than reading as "nothing there".
+ */
+export function textOf(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const text = typeof value === "string" ? value : typeof value === "number" || typeof value === "bigint" ? String(value) : Buffer.isBuffer(value) ? value.toString("utf8") : undefined;
+  if (text === undefined) throw new Error(`Expected text, and found ${Object.prototype.toString.call(value)}.`);
+  return text.trim() || null;
+}
+
+const ENTITIES: Record<string, string> = { amp: "&", quot: '"', apos: "'", lt: "<", gt: ">", nbsp: " " };
+
+/** HTML escapes as their characters: a title or name pasted from a web page can keep them ("Previews &amp; Premises", "O&#039;Neil"). */
+function unescaped(text: string): string {
+  return text.replace(/&(?:#(\d+)|#x([\da-f]+)|(\w+));/gi, (whole, dec, hex, name) => {
+    if (name) return ENTITIES[name.toLowerCase()] ?? whole;
+    const code = dec ? Number(dec) : parseInt(hex, 16);
+    return code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+  });
+}
+
+/** Words compared loosely: case, accents, punctuation, HTML escapes, a leading article, and & against "and" don't count. */
+function loose(text: string): string {
+  return unescaped(text).toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ").trim().replace(/^(the|a|an) /, "");
+}
+
+/**
+ * Where a subtitle starts: a colon, question or exclamation mark, or a spaced dash, and a bare em dash. A full stop
+ * only after a word of four or more, so "Dr. Spock" and "U.S. Labor" keep their words, and just compare whole.
+ */
+const SUBTITLE = /[:?!]\s|\s[-–—]\s|—|(?<=[\p{L}\d]{4})\.\s/u;
+
+/** A title compared loosely, with its subtitle left off. */
 export function normalizedTitle(title: string | null | undefined): string {
-  return String(title ?? "").split(/[:.?!]\s/)[0].toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "")
-    .replace(/[^a-z0-9]+/g, " ").replace(/^(the|a|an) /, "").trim();
+  const whole = unescaped(String(title ?? ""));
+  return loose(whole.split(SUBTITLE)[0]) || loose(whole);
 }
 
 /** A whole title, subtitle included, compared loosely: for telling editions apart once short titles collide. */
 export function fullTitle(title: string | null | undefined): string {
-  return String(title ?? "").toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, " ").replace(/^(the|a|an) /, "").trim();
+  return loose(String(title ?? ""));
+}
+
+/** The surnames in a list of authors: what's before the comma in "Last, First", else the last word. */
+function surnames(authors: string[]): Set<string> {
+  return new Set(authors.map((a) => loose(a.includes(",") ? a.split(",")[0] : a.trim().split(/\s+/).pop() ?? "")).filter(Boolean));
+}
+
+/** Whether two author lists share a surname. */
+export function shareAuthor(a: string[], b: string[]): boolean {
+  const theirs = surnames(b);
+  return [...surnames(a)].some((s) => theirs.has(s));
 }
 
 /** Quote text compared loosely, for finding one quote in two sources: its first 120 letters. */
