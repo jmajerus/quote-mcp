@@ -51,8 +51,7 @@ inside a word, repeated words.
 
 ## Works
 
-Each quote cites a work. Only a full import, one that reads the old site, matches old-site works; the timer's doesn't, and a
-work made by `add_quote` is never re-matched.
+Each quote cites a work. The old site is defunct, and its import was meant as one pass, so works are matched from the store with `rematch`, not by importing again.
 
 A work matches a primary-library item by its short title: case, accents, punctuation, HTML escapes, a leading article, `&`
 against "and", and any subtitle don't count. When several items have that title, they're narrowed by a shared author surname,
@@ -63,14 +62,18 @@ A match stands while its Zotero item does: editing the item's title, or filing a
 the item goes (merged into another, or deleted), the work is matched afresh. A move keeps each quote's id and history, and the
 work's old id still resolves.
 
-To see what a full import would do, without saving anything:
+To match works again, after filing or merging items in Zotero:
 
-    quote-mcp import --dry-run
+    quote-mcp rematch --dry-run     # lists what would move, and saves nothing
+    quote-mcp rematch
 
-It reads the store and mirror as they are, so it needs a store at this build's schema, and `QUOTE_DRUPAL_URL`. Dry run or not, an import lists each work that
-moves, and each match whose item shares no author with the work, or has none, since it may be another book. It warns if no work on the old
-site has a year or authors, since that means a column has changed, not that the site has none. A value it can't read as text
-stops the import rather than reading as empty.
+It brings the primary library's mirror up to date, except in a dry run, then checks each work that isn't matched and each
+whose item has gone. A move adds a `work_matched` history entry per quote. It also lists each match whose item shares no author
+with the work, or has none, since it may be another book. The timer's import doesn't match works, and a work made by `add_quote`
+is matched this way too.
+
+`quote-mcp take-old-site-years` saved the old site's years on works that keep their own details, which is what lets the year
+tell editions apart. It reads nothing else from the old site, and is safe to run again.
 
 ## Margin notes
 

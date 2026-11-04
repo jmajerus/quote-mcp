@@ -9,7 +9,7 @@ import { reviewProposal } from "./edits.js";
 import { ToolError } from "./common.js";
 import { listProposals, openReadOnly } from "./queries.js";
 import { servePublic, serveHttp, serveStdio } from "./server.js";
-import { drupalUrl, emptyFields, loadDrupal } from "./drupal.js";
+import { drupalUrl, emptyFields, loadDrupal, loadDrupalYears } from "./drupal.js";
 import { exportAll } from "./export.js";
 import { runImport } from "./import.js";
 import { loadDictionary } from "./ocr.js";
@@ -21,6 +21,7 @@ import { openReplicaState, pending, startDrain, tick } from "./drain.js";
 import { replicaScript } from "./replica.js";
 import { type ConceptSet, listSets, loadSets } from "./sets.js";
 import { configReport, siteSetting } from "./settings.js";
+import { takeOldSiteYears, rematchWorks } from "./rematch.js";
 import { type SnapshotOptions, buildSnapshot, readMapsFile } from "./snapshot.js";
 import { syncLibrary } from "./sync.js";
 import { acceptHeldChange, clearCursor, proposal, readCursor, reportProgress, runTermSync, startTermSync, terminologyClient, terminologyConfig } from "./terminology.js";
@@ -31,6 +32,11 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *       Syncs the Zotero mirror (QUOTE_ZOTERO_LIBRARY plus QUOTE_ZOTERO_SOURCES), reads the old site
  *       (QUOTE_DRUPAL_URL, when set), and imports. Safe to run again; run it on a timer to pick up new
  *       quote notes typed into Zotero.
+ *   quote-mcp take-old-site-years [--dry-run]
+ *       Saves the old site's years on works that keep their own details. Reads nothing else from the old site.
+ *   quote-mcp rematch [--dry-run]
+ *       Matches works to Zotero from the store: those not matched yet, and those whose item has gone. Reads no source
+ *       but Zotero. The dry run lists what would move, and saves nothing.
  *   quote-mcp migrate [--backup <file>] Brings the store up to this build's schema (the server opens it read-only);
  *                                       with --backup, copies it to <file> first when its schema will change, so
  *                                       a deploy that rolls back can put back a store the previous build opens.
@@ -361,6 +367,44 @@ async function migrateCommand() {
   console.log(`The store is at schema ${openDb().pragma("user_version", { simple: true })}.`);
 }
 
+/** Saves the old site's years, once, on works that keep their own details. Nothing else is read from the old site. */
+async function takeOldSiteYearsCommand() {
+  const dryRun = flag("--dry-run");
+  const years = await loadDrupalYears(drupalUrl());
+  const db = dryRun ? openExisting() : openDb();
+  try {
+    const r = takeOldSiteYears(db, years, { dryRun });
+    console.log(`Old-site works: ${r.read}, ${r.withYear} with a year. ${dryRun ? "Would save" : "Saved"} ${r.filled}; ${r.alreadySet} already had one, ${r.matched} are matched to Zotero and use its year, ${r.notHere} aren't in the store.`);
+    if (dryRun) console.log("Dry run: nothing was saved.");
+  } finally {
+    db.close();
+  }
+}
+
+/** Matches works to Zotero from the store, after bringing the primary library's mirror up to date. */
+async function rematchCommand() {
+  const dryRun = flag("--dry-run");
+  const config = zoteroConfig();
+  const db = dryRun ? openExisting() : openDb();
+  try {
+    if (dryRun) say("Reading the Zotero mirror as the last sync left it.\n");
+    else await syncLibrary(db, new ZoteroClient(config, (t) => say(`\n${t}`)), config.library, say);
+    const r = rematchWorks(db, { primary: config.library, dryRun });
+    console.log(`Checked ${r.checked} works. ${dryRun ? "Would change" : "Changed"} ${r.changes.length}, moving ${r.changes.reduce((n, c) => n + c.quotes, 0)} quotes.`);
+    for (const c of r.changes) console.log(`  ${c.title} (${c.from} \u2192 ${c.to}, ${c.quotes} quote${c.quotes === 1 ? "" : "s"})`);
+    for (const m of r.authorMismatches) console.log(`Check this match, no author in common: ${m.title} (${m.authors.join("; ")}) and Zotero ${m.zotero} (${m.creators.join("; ") || "no authors"}).`);
+    console.log(`Works with quotes${dryRun ? ", after this" : ""}: ${Object.entries(r.works).map(([k, n]) => `${n} ${k}`).join(", ")}.`);
+    if (dryRun) {
+      console.log("Dry run: nothing was saved.");
+      return;
+    }
+    const publish = r.changes.length ? snapshotOptions() : null;
+    if (publish) console.log(snapshotLine(buildSnapshot(db, publish, snapshotFile())));
+  } finally {
+    db.close();
+  }
+}
+
 async function takeCorpusQuotesCommand() {
   const config = corpusConfig();
   if (!config) throw new Error("CORPUS_BASE is off; there's no corpus-mcp to take quotes from.");
@@ -407,7 +451,7 @@ function proposalsCommand() {
 
 const commands: Record<string, () => unknown> = {
   import: importCommand, migrate: migrateCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, sets: setsCommand, publish: publishCommand, config: configCommand, serve: serveCommand,
-  terms: termsCommand, propose: proposeCommand, "take-corpus-quotes": takeCorpusQuotesCommand, proposals: proposalsCommand,
+  terms: termsCommand, propose: proposeCommand, "take-corpus-quotes": takeCorpusQuotesCommand, "take-old-site-years": takeOldSiteYearsCommand, rematch: rematchCommand, proposals: proposalsCommand,
   stdio: () => serveStdio(openReadOnly(), sets(), capture()),
 };
 const command = commands[process.argv[2] ?? ""];

@@ -63,6 +63,17 @@ export function emptyFields(works: DrupalWork[]): string[] {
   return (["year", "authors"] as const).filter((f) => !works.some((w) => w[f]?.length));
 }
 
+/** Each old-site work's year, and nothing else. */
+export async function loadDrupalYears(url: string): Promise<{ nid: number; year: string | null }[]> {
+  const db = await mysql.createConnection({ uri: url, charset: "utf8mb4" });
+  try {
+    const [rows] = await db.query("SELECT n.nid, b.biblio_year FROM node n JOIN biblio b ON b.vid = n.vid WHERE n.type = 'biblio' ORDER BY n.nid");
+    return (rows as Record<string, unknown>[]).map((r) => ({ nid: Number(r.nid), year: yearOf(text(r.biblio_year)) }));
+  } finally {
+    await db.end();
+  }
+}
+
 export async function loadDrupal(url: string): Promise<DrupalSite> {
   const db = await mysql.createConnection({ uri: url, charset: "utf8mb4" });
   try {
