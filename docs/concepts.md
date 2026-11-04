@@ -37,7 +37,7 @@ sets that reach it:
 | Field | What it adds |
 |---|---|
 | `concepts` | These concepts. |
-| `around`, with `depth` (default 1) and `types` | These concepts and their neighbours, `depth` steps out along relations of `types` (`broader`, `narrower`, `related`, `opposite`; all by default). In terminology-mcp each concept has its own depth and types. |
+| `around` | Rules, each a concept with its own `depth` and `types`: that concept and its neighbours, `depth` steps out along relations of `types` (`broader`, `narrower`, `related`, `opposite`). |
 | `narrower` | Everything narrower than these, at any depth, without these themselves (add them to `concepts` to keep them). |
 | `exclude` | Minus these, applied last. |
 
@@ -45,16 +45,15 @@ A set in terminology-mcp can instead list its members: concepts or other sets, i
 the scheme doesn't have, or one retired, is left out and listed as `missing`. `list_sets` and the server's
 `/api/sets` also say how many quotes a set's concepts have.
 
-They combine:
+They combine. In terminology-mcp a recipe names its terms by id; quote-mcp's `/api/sets/<slug>` shows them by slug:
 
 ```json
-{ "slug": "despair", "scheme": "human-work", "label": "Despair and its neighbours",
-  "description": "…", "around": ["despair"], "depth": 1, "types": ["related", "opposite"], "exclude": ["pain"] }
+{ "around": [{ "term": "despair", "depth": 1, "types": ["related", "opposite"] }], "exclude": ["pain"] }
 ```
 
-Check the file with `npm run quotes -- sets`: it lists each set as the store has it now, and fails if one names
-a concept its scheme doesn't have. A malformed file stops the server starting, so a deploy rolls back; a slug
-the scheme doesn't have is left out and shown as `missing`.
+Check the sets with `npm run quotes -- sets`: it lists each set as the store has it now, and fails if one names
+a concept its scheme doesn't have. The server doesn't: it leaves such a concept out and shows it as `missing`.
+A store with no sets, such as a new one before its first sync, shows none.
 
 A set's `types` decide only which concepts are in it. quote-atlas's export keeps its own filter for which links
 it draws (related only, by default), so `around` with all types takes in more concepts than its `--around`
