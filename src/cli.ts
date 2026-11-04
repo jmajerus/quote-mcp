@@ -298,6 +298,9 @@ async function termsCommand() {
     await reportProgress(client, result);
     print("Applied:", result.lines);
     console.log(`Accepted change ${n} (${result.change.kind}); the cursor is at ${n}, and the next pass continues after it.`);
+    // The next pass may find nothing new, and wouldn't rebuild for this one.
+    const publish = snapshotOptions();
+    if (publish) console.log(snapshotLine(buildSnapshot(db, publish, snapshotFile())));
     return;
   }
   const apply = flag("--apply");

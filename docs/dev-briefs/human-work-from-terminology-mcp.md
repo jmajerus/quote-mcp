@@ -83,7 +83,7 @@ relations, both ways. Its children's rows are theirs and stay.
 | `split` | Applied when no quote uses the concept; otherwise **held** (`split`). |
 | `slugged` | Applied: the old slug goes to `former_slugs`, so `/api/concepts/<old>` keeps resolving, on the LAN and on the public site. **Held** (`slug-in-sets`) when `vocab/sets.json` names the old slug, while that file is in effect (the store has no sets). |
 | `set-added`, `set-changed`, `set-deleted` | Applied from `afterSets`, for this scheme. Any other kind's `afterSets` is applied too: a merge rewrites the sets that name the merged term. A set names terms by id, so it never holds; an id that isn't a live concept here shows as `missing`. |
-| `scheme-added`, `scheme-changed` | Ignored. |
+| `scheme-added`, `scheme-changed` | Ignored, apart from any `afterSets`. |
 | anything else | **Held** (`unknown-change`). |
 
 A slug check runs for every kind, not only `slugged`, so no change can

@@ -268,6 +268,33 @@ describe("concept sets from terminology-mcp", () => {
     expect(slugs()).toEqual(["harm"]);
   });
 
+  it("takes sets from a scheme-changed, whose own payload is ignored", async () => {
+    const client = await bootstrapped([{ n: 11, kind: "scheme-changed", after: { id: "human-work", label: "not a term" }, afterSets: [harm] } as Change]);
+    expect(await runTermSync({ db, client, sets: SETS })).toMatchObject({ outcome: "applied", through: 11, blocked: null });
+    expect(slugs()).toEqual(["harm"]);
+    expect(concept(db, "abuse").label).toBe("abuse");
+  });
+
+  it("keeps an ordered set's order and says it's ordered, on the server and in the public snapshot", async () => {
+    const client = await bootstrapped([{ n: 11, kind: "set-added", afterSets: [set("s_path", "path", { ordered: true, members: ["t_mobbing", "t_abuse", "t_dignity"] })] }]);
+    await runTermSync({ db, client, sets: SETS });
+    const order = ["mobbing", "abuse", "dignity"];
+    const here = setGraph(db, [], "path");
+    expect(here.concepts.map((c) => c.slug)).toEqual(order);
+    expect(here.definition.ordered).toBe(true);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quote-mcp-sets-"));
+    try {
+      const file = path.join(dir, "public.db");
+      buildSnapshot(db, { level: "catalogue", notes: false, intro: readIntro("# Work quotes"), collections: {}, sets: [], maps: [] }, file);
+      const { set: there } = await (await openSnapshot(file)).set("path");
+      expect(there.concepts.map((c) => c.slug)).toEqual(order);
+      expect(there.definition).toMatchObject({ ordered: true, members: order });
+      expect(there.definition).not.toHaveProperty("order");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("works a recipe out as terminology-mcp does, against the store as it is now", async () => {
     const after = imported();
     const client = await bootstrapped([

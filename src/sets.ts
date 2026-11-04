@@ -182,8 +182,8 @@ function about(set: SetView) {
 
 /** A set's definition as it's shown: slugs throughout, and a nested set by its slug. */
 export function definitionOf(set: SetView) {
-  const { concepts, around, depth, types, narrower, exclude, members } = set;
-  return { concepts, around, depth, types, narrower, exclude, members: members?.map((m) => (typeof m === "string" ? m : m.slug)) };
+  const { concepts, around, depth, types, narrower, exclude, members, ordered } = set;
+  return { concepts, around, depth, types, narrower, exclude, members: members?.map((m) => (typeof m === "string" ? m : m.slug)), ordered: ordered || undefined };
 }
 
 /** How many quotes are tagged with these concepts, as search counts them (unparsed ones left out). */

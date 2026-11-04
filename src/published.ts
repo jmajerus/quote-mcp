@@ -318,11 +318,14 @@ export class Published {
       this.graph(),
     ]);
     const inSet = new Set(members.map((m) => m.slug));
+    const { order, ...definition } = json<Record<string, unknown> & { order?: string[] }>(t.definition, {});
+    const concepts = graph.concepts.filter((c) => c.scheme === t.scheme && inSet.has(c.slug));
+    if (order) concepts.sort((a, b) => order.indexOf(a.slug) - order.indexOf(b.slug));
     return {
       set: {
         slug: t.slug as string, scheme: t.scheme as string, label: t.label as string, description: (t.description as string) ?? null,
-        definition: json<Record<string, unknown>>(t.definition, {}), missing: json<string[]>(t.missing, []),
-        concepts: graph.concepts.filter((c) => c.scheme === t.scheme && inSet.has(c.slug)),
+        definition, missing: json<string[]>(t.missing, []),
+        concepts,
         relations: graph.relations.filter((r) => inSet.has(r.from) && inSet.has(r.to)),
       },
       conceptIds: members.map((m) => m.id),

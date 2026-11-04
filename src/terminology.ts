@@ -254,8 +254,8 @@ const quotes = (n: number) => `${n} quote${n === 1 ? "" : "s"}`;
  * a hold thrown after some writes leaves nothing behind. Returns a line for each thing it did.
  */
 export function applyChange(db: DB, change: Change, sets: ConceptSet[]): string[] {
-  if (IGNORED.has(change.kind)) return [];
-  if (SET_KINDS.has(change.kind)) return applySets(db, change);
+  // These carry no terms to apply, but any change can carry sets, and a change passed isn't seen again.
+  if (IGNORED.has(change.kind) || SET_KINDS.has(change.kind)) return applySets(db, change);
   if (!APPLIED.has(change.kind)) throw new Hold("unknown-change", `Change kind "${change.kind}" isn't one Quote MCP knows`);
   const terms = snapshotsOf(change);
   const lines: string[] = [];

@@ -151,7 +151,8 @@ function fill(store: DB, snap: Database.Database, o: SnapshotOptions): void {
     if (!scheme) return;
     const { members, missing } = resolveSet(set, graph as never);
     insert("sets", { slug: set.slug, scheme_id: scheme.id, label: set.label, description: set.description || null,
-      definition: JSON.stringify(definitionOf(set)), missing: JSON.stringify(missing), position });
+      // set_concepts has no order, so an ordered set's order goes with its definition; src/published.ts takes it out again.
+      definition: JSON.stringify({ ...definitionOf(set), order: set.ordered ? members : undefined }), missing: JSON.stringify(missing), position });
     for (const slug of members) {
       const c = concepts.find((x) => x.scheme_id === scheme.id && x.slug === slug);
       if (c) insert("set_concepts", { set_slug: set.slug, concept_id: c.id });
