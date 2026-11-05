@@ -30,20 +30,24 @@ export interface AuditRecord {
   parsed: { text?: string; locator?: string; comment?: string; flags: string[]; problems: string[] }[];
   /** Whether the parser now reads the raw as the record has it. */
   matches: boolean;
+  /** The parser's reading in full, and the source's words, for the repair. */
+  parts: ParsedNote[]; plain: string; origins: { kind: string; ref: string; raw: string; version?: string | null }[]; chapterAuthor: string | null;
   lost: string[]; added: string[];
 }
 
 interface Row { id: number; text: string; locator: string | null; comment: string | null; chapter_author: string | null; attribution: string | null; status: string; edited: number }
 
-const words = (text: string) => (text.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[\u2018\u2019]/g, "'").match(/[a-z0-9']+/g) ?? [])
+export const words = (text: string) => (text.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[\u2018\u2019]/g, "'").match(/[a-z0-9']+/g) ?? [])
   .map((t) => t.replace(/^'+|'+$/g, "")).filter(Boolean);
-const parseOrigin = (o: { kind: string; raw: string }) => parseNote(o.kind === "drupal-quote" ? `<p><span class="quote">${o.raw}</span></p>` : o.raw);
-const plainOf = (o: { kind: string; raw: string }) => noteText(o.kind === "drupal-quote" ? `<p>${o.raw}</p>` : o.raw);
-/** Which passage of its note a Zotero origin holds: <library>:<key>#2 is the second. (An old-site ref's # is its own span's number.) */
-const passageOf = (o: { kind: string; ref: string }) => (o.kind === "zotero-note" ? Number(/#(\d+)$/.exec(o.ref)?.[1] ?? 1) - 1 : 0);
+export const parseOrigin = (o: { kind: string; raw: string }) => parseNote(o.kind === "drupal-quote" ? `<p><span class="quote">${o.raw}</span></p>` : o.raw);
+export const plainOf = (o: { kind: string; raw: string }) => noteText(o.kind === "drupal-quote" ? `<p>${o.raw}</p>` : o.raw);
+/** The origin of a note's nth passage: <library>:<key>#2 for a Zotero note, as the import makes it, and 1146#2/2 for an old-site span, whose # is its own number. */
+export const passageRef = (o: { kind: string; ref: string }, n: number) => (o.kind === "zotero-note" ? `${o.ref}#${n}` : `${o.ref}/${n}`);
+const PASSAGE = (kind: string) => (kind === "zotero-note" ? /#(\d+)$/ : /\/(\d+)$/);
+const passageOf = (o: { kind: string; ref: string }) => Number(PASSAGE(o.kind).exec(o.ref)?.[1] ?? 1) - 1;
 
 /** What's in `a` beyond what's in `b`, counting repeats. */
-function beyond(a: string[], b: string[]): string[] {
+export function beyond(a: string[], b: string[]): string[] {
   const have = new Map<string, number>();
   for (const t of b) have.set(t, (have.get(t) ?? 0) + 1);
   return a.filter((t) => {
@@ -84,7 +88,7 @@ function auditOne(q: Row, origins: { kind: string; ref: string; raw: string }[],
   const parts = partsOf(o);
   const kinds: AuditKind[] = [];
   if (!parts.length || flagged.includes("passage_gone")) {
-    return { id: q.id, status: q.status, edited: !!q.edited, kinds: ["passage_gone"], origin: { kind: o.kind, ref: o.ref }, raw: o.raw, stored: { text: q.text, locator: q.locator, comment: q.comment }, parsed: [], matches: false, lost: [], added: [] };
+    return { id: q.id, status: q.status, edited: !!q.edited, kinds: ["passage_gone"], origin: { kind: o.kind, ref: o.ref }, raw: o.raw, stored: { text: q.text, locator: q.locator, comment: q.comment }, parsed: [], matches: false, lost: [], added: [], parts: [], plain, origins, chapterAuthor: q.chapter_author };
   }
   const parsed = parts[0];
   const flags = new Set(parts.flatMap((p) => p.flags));
@@ -107,7 +111,7 @@ function auditOne(q: Row, origins: { kind: string; ref: string; raw: string }[],
     id: q.id, status: q.status, edited: !!q.edited, kinds, origin: { kind: o.kind, ref: o.ref }, raw: o.raw,
     stored: { text: q.text, locator: q.locator, comment: q.comment },
     parsed: parts.map((p) => ({ text: p.text, locator: p.locator?.value, comment: p.commentary, flags: p.flags, problems: p.problems })),
-    matches, lost, added,
+    matches, lost, added, parts, plain, origins, chapterAuthor: q.chapter_author,
   };
 }
 
@@ -120,10 +124,10 @@ export interface AuditReport {
 /** Every typed quote against its raw. */
 export function auditStore(db: DB): AuditReport {
   const rows = db.prepare("SELECT id, text, locator, comment, chapter_author, attribution, status, edited, flags FROM quotes WHERE kind = 'quote' ORDER BY id").all() as (Row & { flags: string })[];
-  const refs = new Set(db.prepare("SELECT ref FROM quote_origins WHERE kind = 'zotero-note'").pluck().all() as string[]);
+  const refs = new Set((db.prepare("SELECT kind || ' ' || ref AS r FROM quote_origins").pluck().all() as string[]));
   /** A note already stored as several records: it has a numbered origin, or is one. */
-  const isSplit = (o: { kind: string; ref: string }) => o.kind === "zotero-note" && (/#\d+$/.test(o.ref) || refs.has(`${o.ref}#2`));
-  const originsOf = db.prepare("SELECT kind, ref, raw FROM quote_origins WHERE quote_id = ? AND kind IN ('drupal', 'drupal-quote', 'zotero-note') AND raw IS NOT NULL ORDER BY rowid");
+  const isSplit = (o: { kind: string; ref: string }) => PASSAGE(o.kind).test(o.ref) || refs.has(`${o.kind} ${passageRef(o, 2)}`);
+  const originsOf = db.prepare("SELECT kind, ref, raw, version FROM quote_origins WHERE quote_id = ? AND kind IN ('drupal', 'drupal-quote', 'zotero-note') AND raw IS NOT NULL ORDER BY rowid");
   const records: AuditRecord[] = [];
   for (const q of rows) {
     const origins = originsOf.all(q.id) as { kind: string; ref: string; raw: string }[];

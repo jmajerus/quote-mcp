@@ -21,6 +21,7 @@ import { replicaScript } from "./replica.js";
 import { type ConceptSet, listSets, loadSets } from "./sets.js";
 import { configReport, siteSetting } from "./settings.js";
 import { rematchWorks } from "./rematch.js";
+import { repairQuotes } from "./repair.js";
 import { AUDIT_KINDS, type AuditKind, auditOf, auditStore } from "./audit.js";
 import { type SnapshotOptions, buildSnapshot, readMapsFile } from "./snapshot.js";
 import { syncLibrary } from "./sync.js";
@@ -36,6 +37,9 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *       but Zotero. The dry run lists what would move, and saves nothing.
  *   quote-mcp audit [--kind <kind>] [--id <n>] [--json]
  *       Compares typed quotes with their stored raw, and changes nothing. --id shows one side by side.
+ *   quote-mcp repair [--dry-run] [--id <n>] [--json]
+ *       Repairs typed quotes from their stored raw where the reading is clean, and lists the rest for a person.
+ *       --id applies the reading to one record, even a flagged one, unless it's edited or verified.
  *   quote-mcp migrate [--backup <file>] Brings the store up to this build's schema (the server opens it read-only);
  *                                       with --backup, copies it to <file> first when its schema will change, so
  *                                       a deploy that rolls back can put back a store the previous build opens.
@@ -406,6 +410,36 @@ function auditCommand() {
   console.log("\nA record can be in several kinds. quote-mcp audit --id <n> shows one side by side. This changed nothing.");
 }
 
+/** Repairs typed quotes from their stored raw, by the pattern they were typed to. */
+function repairCommand() {
+  onlyFlags("repair", ["--dry-run", "--id", "--json"].concat(argv.filter((a) => /^\d+$/.test(a))));
+  const dryRun = flag("--dry-run");
+  const id = option("--id");
+  const db = dryRun ? openExisting() : openDb();
+  try {
+    const r = repairQuotes(db, { dryRun, only: id === undefined ? undefined : Number(id) });
+    if (flag("--json")) {
+      console.log(JSON.stringify(r, null, 2));
+    } else {
+      for (const c of r.repairs) {
+        console.log(`\n=== Quote ${c.id}: ${c.why.join(", ")}\n--- Before (${c.before.status}), page ${c.before.locator ?? "none"}\n${c.before.text}${c.before.comment ? `\ncomment: ${c.before.comment}` : ""}`);
+        for (const [i, a] of c.after.entries()) console.log(`--- After${c.after.length > 1 ? `, part ${i + 1} of ${c.after.length}${i > 0 && c.newIds[i - 1] ? ` (quote ${c.newIds[i - 1]})` : ""}` : ""} (${a.status}), page ${a.locator ?? "none"}\n${a.text}${a.comment ? `\ncomment: ${a.comment}` : ""}`);
+      }
+      if (r.forPerson.length) {
+        console.log(`\n=== For a person to decide, not changed: ${r.forPerson.length}`);
+        for (const p of r.forPerson) console.log(`#${p.id} (${p.status}) ${p.why}: ${p.text.replace(/\s+/g, " ").slice(0, 90)}`);
+        console.log("quote-mcp audit --id <n> shows one side by side. quote-mcp repair --id <n> applies the parser's reading to one, unless it's edited or verified; or change it on its admin page.");
+      }
+      const splits = r.repairs.filter((c) => c.after.length > 1);
+      console.log(`\nChecked ${r.checked}. ${dryRun ? "Would repair" : "Repaired"} ${r.repairs.length}, ${splits.length} of them split into ${splits.reduce((n, c) => n + c.after.length, 0)} quotes. ${r.forPerson.length} for a person. ${r.alreadyRight} already right.`);
+    }
+    if (dryRun) console.log("Dry run: nothing was saved.");
+    else if (r.repairs.length) publishFrom(db);
+  } finally {
+    db.close();
+  }
+}
+
 /** Matches works to Zotero from the store, after bringing the mirror of each library up to date. */
 async function rematchCommand() {
   onlyFlags("rematch", ["--dry-run"]);
@@ -476,7 +510,7 @@ function proposalsCommand() {
 
 const commands: Record<string, () => unknown> = {
   import: importCommand, migrate: migrateCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, sets: setsCommand, publish: publishCommand, config: configCommand, serve: serveCommand,
-  terms: termsCommand, propose: proposeCommand, "take-corpus-quotes": takeCorpusQuotesCommand, rematch: rematchCommand, audit: auditCommand, proposals: proposalsCommand,
+  terms: termsCommand, propose: proposeCommand, "take-corpus-quotes": takeCorpusQuotesCommand, rematch: rematchCommand, audit: auditCommand, repair: repairCommand, proposals: proposalsCommand,
   stdio: () => serveStdio(openReadOnly(), sets(), capture()),
 };
 const command = commands[process.argv[2] ?? ""];

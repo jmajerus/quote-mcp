@@ -158,6 +158,11 @@ describe("legacy span", () => {
     expect(parseNote(`<span class="quote">No marks at all here. (p. 9)</span>`).flags).toContain("no_marks");
   });
 
+  it("closes emphasis around the marks on the words, not the remark after them (#315)", () => {
+    const p = parseNote(`<span class="quote"><em>"Good name in man and woman." (III, iii)</em></span>`);
+    expect(p).toMatchObject({ text: "*Good name in man and woman.*", commentary: "(III, iii)" });
+  });
+
   it("holds two quotes with no page between them, as they stand (#752)", () => {
     const p = parseNote(`<span class="quote">"The vampire lives on."\n\n"I suppose it is thus."</span>`);
     expect(p.grade).toBe("C");

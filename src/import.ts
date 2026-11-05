@@ -107,6 +107,13 @@ export function workMatcher(db: DB, primary: string, stamp: string) {
   return { primaryByKey, candidates, zoteroWork, setOrigin, workByOrigin };
 }
 
+/** The search index, from the quotes as they are. */
+export function rebuildSearch(db: DB): void {
+  db.exec(`DELETE FROM quotes_fts;
+    INSERT INTO quotes_fts (rowid, text, comment, tags)
+    SELECT q.id, q.text, COALESCE(q.comment, ''), COALESCE((SELECT group_concat(tag, ' ') FROM quote_tags WHERE quote_id = q.id), '') FROM quotes q;`);
+}
+
 export function runImport(db: DB, opts: ImportOptions): ImportStats {
   const actor = opts.actor ?? "import";
   const stamp = now();
@@ -341,9 +348,7 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
     }
 
     // --- Search index -----------------------------------------------------------------------------
-    db.exec(`DELETE FROM quotes_fts;
-      INSERT INTO quotes_fts (rowid, text, comment, tags)
-      SELECT q.id, q.text, COALESCE(q.comment, ''), COALESCE((SELECT group_concat(tag, ' ') FROM quote_tags WHERE quote_id = q.id), '') FROM quotes q;`);
+    rebuildSearch(db);
 
     for (const r of db.prepare("SELECT match, COUNT(*) AS n FROM works w WHERE EXISTS (SELECT 1 FROM quotes WHERE work_id = w.id) GROUP BY match").all() as { match: string; n: number }[]) {
       stats.works[r.match] = r.n;

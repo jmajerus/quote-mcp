@@ -33,7 +33,12 @@ When a note that made several quotes later holds fewer passages, the quotes no l
 
 `quote-mcp audit` compares every typed quote with the raw it came from, by kind of problem, and changes nothing; `--kind` lists
 one kind, and `--id <n>` shows the raw, the record, and what the parser reads now, side by side. Parsing applies when a note is
-imported or changes, so a record already in the store stays as it is until it's repaired. Quotes saved by `add_quote` or the
+imported or changes, so a record already in the store stays as it is until it's repaired. `quote-mcp repair` does that from
+the stored raw, and needs no source: `--dry-run` shows each record before and after, and saves nothing. It applies only clean readings.
+A record off the pattern, edited by a person, or verified against a book isn't touched, only listed; `--id <n>` applies the
+reading to one record you've decided on, unless it's edited or verified. A record holding several passages keeps its id for the
+first, and each other becomes a new quote with the same work, tags, and history, and a `split` origin naming the original.
+Every change gets a history entry. Quotes saved by `add_quote` or the
 capture form have their own structure, and aren't checked.
 
 ## Forms the parser reads

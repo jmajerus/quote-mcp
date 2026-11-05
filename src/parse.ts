@@ -304,8 +304,15 @@ function readWithoutPage(text: string): { quotes: Read[] } | { unsure: string } 
   if (hasDoubleMark(body)) return { quotes: [{ text: words.trim(), ...place, flags: ["unbalanced_quotes"] }] };
   const lead = words.slice(0, opening).trim();
   const leadEmphasis = /^\*+$/.test(lead);
-  const rest = words.slice(closing + 1).trim();
-  const emphasis = /^\*+$/.test(rest);
+  let rest = words.slice(closing + 1).trim();
+  let emphasis = /^\*+$/.test(rest);
+  // Emphasis around the marks and a remark: *"The words." (III, iii)*. It closes on the words, not the remark.
+  let closesEmphasis = "";
+  if (leadEmphasis && !emphasis && rest.endsWith(lead)) {
+    closesEmphasis = lead;
+    rest = rest.slice(0, -lead.length).trim();
+    emphasis = false;
+  }
   // Marks in the middle of a sentence are a phrase being quoted, not the quote: the note has no marks of its own.
   if (lead && !leadEmphasis && rest && !emphasis && !/[:,]$|\n$/.test(words.slice(0, opening).trimEnd()) && !readLocator(rest).locator) return { quotes: [{ text: words.trim(), ...place, flags: ["no_marks"] }] };
   const tail = emphasis ? undefined : readLocator(rest);
@@ -313,7 +320,7 @@ function readWithoutPage(text: string): { quotes: Read[] } | { unsure: string } 
   if (lead && !leadEmphasis) flags.push("lead_in");
   if (tail?.body) flags.push("commentary_mixed");
   return { quotes: [{
-    text: `${leadEmphasis ? lead : ""}${body}${emphasis ? rest : ""}`.trim(), locator: place.locator ?? tail?.locator, chapterAuthor: place.chapterAuthor ?? tail?.chapterAuthor,
+    text: `${leadEmphasis ? lead : ""}${body}${closesEmphasis}${emphasis ? rest : ""}`.trim(), locator: place.locator ?? tail?.locator, chapterAuthor: place.chapterAuthor ?? tail?.chapterAuthor,
     commentary: joined(leadEmphasis ? undefined : lead, tail?.body), flags,
   }] };
 }
