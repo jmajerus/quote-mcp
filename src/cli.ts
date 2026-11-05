@@ -21,6 +21,7 @@ import { replicaScript } from "./replica.js";
 import { type ConceptSet, listSets, loadSets } from "./sets.js";
 import { configReport, siteSetting } from "./settings.js";
 import { rematchWorks } from "./rematch.js";
+import { AUDIT_KINDS, type AuditKind, auditOf, auditStore } from "./audit.js";
 import { type SnapshotOptions, buildSnapshot, readMapsFile } from "./snapshot.js";
 import { syncLibrary } from "./sync.js";
 import { acceptHeldChange, clearCursor, proposal, readCursor, reportProgress, runTermSync, startTermSync, terminologyClient, terminologyConfig } from "./terminology.js";
@@ -33,6 +34,8 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *   quote-mcp rematch [--dry-run]
  *       Matches works to Zotero from the store: those not matched yet, and those whose item has gone. Reads no source
  *       but Zotero. The dry run lists what would move, and saves nothing.
+ *   quote-mcp audit [--kind <kind>] [--id <n>] [--json]
+ *       Compares typed quotes with their stored raw, and changes nothing. --id shows one side by side.
  *   quote-mcp migrate [--backup <file>] Brings the store up to this build's schema (the server opens it read-only);
  *                                       with --backup, copies it to <file> first when its schema will change, so
  *                                       a deploy that rolls back can put back a store the previous build opens.
@@ -369,6 +372,40 @@ function publishFrom(db: Database.Database) {
   if (publish) console.log(snapshotLine(buildSnapshot(db, publish, snapshotFile())));
 }
 
+/** Compares typed quotes with their stored raw, and changes nothing. */
+function auditCommand() {
+  onlyFlags("audit", ["--json", "--id", "--kind"].concat(argv.filter((a) => /^\d+$/.test(a))));
+  const db = openReadOnly();
+  const id = option("--id");
+  if (id !== undefined) {
+    const r = auditOf(db, Number(id));
+    if (!r) throw new Error(`Quote ${id} isn't a typed quote with a stored raw.`);
+    console.log(flag("--json") ? JSON.stringify(r, null, 2) : [
+      `Quote ${r.id} (${r.status}${r.edited ? ", edited" : ""}), from ${r.origin.kind} ${r.origin.ref}`, `Kinds: ${r.kinds.join(", ") || "none"}`,
+      "", "--- Raw", r.raw, "", "--- Stored", r.stored.text, `page: ${r.stored.locator ?? "none"}`, `comment: ${r.stored.comment ?? "none"}`,
+      ...r.parsed.flatMap((p, i) => ["", `--- The parser now reads${r.parsed.length > 1 ? `, part ${i + 1} of ${r.parsed.length}` : ""}`, p.text ?? "", `page: ${p.locator ?? "none"}`, `comment: ${p.comment ?? "none"}`, `flags: ${p.flags.join(", ") || "none"}`, ...p.problems.map((x) => `problem: ${x}`)]),
+    ].join("\n"));
+    return;
+  }
+  const report = auditStore(db);
+  if (flag("--json")) {
+    console.log(JSON.stringify(report, null, 2));
+    return;
+  }
+  const kind = argv.includes("--kind") ? option("--kind") : undefined;
+  if (kind !== undefined) {
+    if (!(kind in AUDIT_KINDS)) throw new Error(`No audit kind "${kind}". Kinds: ${Object.keys(AUDIT_KINDS).join(", ")}.`);
+    for (const r of report.records.filter((x) => x.kinds.includes(kind as AuditKind))) console.log(`#${r.id} (${r.status}${r.edited ? ", edited" : ""}) ${r.stored.text.replace(/\s+/g, " ").slice(0, 100)}`);
+    return;
+  }
+  console.log(`${report.quotes} quotes: ${report.checked} typed and checked, ${report.notTyped} saved another way and not checked. ${report.clean} clean.`);
+  for (const [k, about] of Object.entries(AUDIT_KINDS)) {
+    const v = report.kinds[k as AuditKind];
+    console.log(`${String(v.count).padStart(4)}  ${k}: ${about}${v.verified ? `, ${v.verified} verified` : ""}${v.edited ? `, ${v.edited} edited` : ""}${v.count ? `\n      ${v.ids.join(", ")}` : ""}`);
+  }
+  console.log("\nA record can be in several kinds. quote-mcp audit --id <n> shows one side by side. This changed nothing.");
+}
+
 /** Matches works to Zotero from the store, after bringing the mirror of each library up to date. */
 async function rematchCommand() {
   onlyFlags("rematch", ["--dry-run"]);
@@ -439,7 +476,7 @@ function proposalsCommand() {
 
 const commands: Record<string, () => unknown> = {
   import: importCommand, migrate: migrateCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, sets: setsCommand, publish: publishCommand, config: configCommand, serve: serveCommand,
-  terms: termsCommand, propose: proposeCommand, "take-corpus-quotes": takeCorpusQuotesCommand, rematch: rematchCommand, proposals: proposalsCommand,
+  terms: termsCommand, propose: proposeCommand, "take-corpus-quotes": takeCorpusQuotesCommand, rematch: rematchCommand, audit: auditCommand, proposals: proposalsCommand,
   stdio: () => serveStdio(openReadOnly(), sets(), capture()),
 };
 const command = commands[process.argv[2] ?? ""];

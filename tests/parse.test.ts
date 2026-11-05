@@ -26,10 +26,16 @@ describe("legacy span", () => {
     expect(p).toMatchObject({ locator: { value: "209" }, chapterAuthor: "Richard L. Daft and Robert H. Lengel", flags: ["chapter_author"] });
   });
 
-  it("is grade A without a locator, keeping inner quotes and emphasis (XM4UMV2H)", () => {
-    const p = parseNote(`<p><span class="quote" title="ideology"> "In fact, in the case of hard work ideology, the overeducation effect is actually <em>increasing</em> in strength. That is, overqualified workers are increasingly likely to disavow the "American Dream" of success through hard work alone." </span></p>`, ["ideology"]);
-    expect(p).toMatchObject({ grade: "A", flags: ["no_locator"] });
-    expect(p.text).toBe(`In fact, in the case of hard work ideology, the overeducation effect is actually *increasing* in strength. That is, overqualified workers are increasingly likely to disavow the "American Dream" of success through hard work alone.`);
+  it("flags double marks inside a quote, keeping the note's words as they are (XM4UMV2H)", () => {
+    const p = parseNote(`<p><span class="quote" title="ideology"> "In fact, the effect is actually <em>increasing</em> in strength, as workers disavow the "American Dream" of success." </span></p>`, ["ideology"]);
+    expect(p.flags).toContain("unbalanced_quotes");
+    expect(p.text).toBe(`"In fact, the effect is actually *increasing* in strength, as workers disavow the "American Dream" of success."`);
+  });
+
+  it("keeps single marks as content", () => {
+    const p = parseNote(`<p><span class="quote"> "He called it the 'bureaucratic burden' and that's that." (p. 3)</span></p>`);
+    expect(p).toMatchObject({ text: "He called it the 'bureaucratic burden' and that's that.", grade: "A" });
+    expect(p.locator?.value).toBe("3");
   });
 
   it("reads curly quotation marks (6KN6K6KV)", () => {
@@ -45,11 +51,95 @@ describe("legacy span", () => {
     expect(p.flags).toContain("title_tag_only");
   });
 
-  it("flags a missing opening mark (TH4GC7EJ)", () => {
-    const p = parseNote(`<p><span class="quote" title="play"> Any individual or business that wants great success must take the concept of play seriously. Thus a business that regards fun as “unprofessional” stifles the creative and progressive process. That’s like running a highly competitive race with one foot stuck in a bucket.” </span></p>`, ["play"]);
+  it("flags a missing opening mark, keeping the closing one (TH4GC7EJ)", () => {
+    const p = parseNote(`<p><span class="quote" title="play"> Any individual or business that wants great success must take play seriously. That’s like running a race with one foot stuck in a bucket.” </span></p>`, ["play"]);
     expect(p.flags).toContain("unbalanced_quotes");
-    expect(p.text).toMatch(/^Any individual.*in a bucket\.$/);
+    expect(p.text).toMatch(/^Any individual.*in a bucket\.”$/);
     expect(p.commentary).toBeUndefined();
+  });
+
+  it("splits passages that each end in a page (#89)", () => {
+    const p = parseNote(`<span class="quote" title="conflict">\n"For instance, conflicts are about <em>controlling your destiny</em>, or feelings of powerlessness." (p. 224)\n"A second hidden source of conflict are <em>affronts to our self-esteem</em>, that we are unappreciated." (p. 225)\n</span>`);
+    expect(p.problems).toEqual([]);
+    expect(p).toMatchObject({ text: "For instance, conflicts are about *controlling your destiny*, or feelings of powerlessness.", grade: "B" });
+    expect(p.locator?.value).toBe("224");
+    expect(p.more).toHaveLength(1);
+    expect(p.more?.[0].text).toBe("A second hidden source of conflict are *affronts to our self-esteem*, that we are unappreciated.");
+    expect(p.more?.[0].locator?.value).toBe("225");
+  });
+
+  it("splits pages that run backwards as they stand (#318)", () => {
+    const p = parseNote(`<span class="quote">"First passage here." (p. 158)\n"Second passage here." (p. 122)</span>`);
+    expect([p.locator?.value, p.more?.[0].locator?.value]).toEqual(["158", "122"]);
+  });
+
+  it("takes a page typed inside the closing mark (#132, #469)", () => {
+    const p = parseNote(`<span class="quote">\n"<em>In organizational totalitarianism the ideal is proclaimed.</em> (p. 24)"\n</span>`);
+    expect(p.text).toBe("*In organizational totalitarianism the ideal is proclaimed.*");
+    expect(p.locator?.value).toBe("24");
+    expect(p.flags).not.toContain("unbalanced_quotes");
+  });
+
+  it("takes a page with no parentheses, or a comma for the full stop (#302, #338)", () => {
+    expect(parseNote(`<span class="quote">"A better way of doing things." p. 222</span>`)).toMatchObject({ text: "A better way of doing things.", commentary: undefined, locator: { value: "222" } });
+    expect(parseNote(`<span class="quote">"Even panic attacks." (p, 40)</span>`)).toMatchObject({ text: "Even panic attacks.", commentary: undefined, locator: { value: "40" } });
+  });
+
+  it("keeps emphasis that closes outside the mark in the text (#155)", () => {
+    const p = parseNote(`<span class="quote">"He used the analogy.\n\n<cite>Among coyotes, I never got the support I needed."</cite> (p. 34)</span>`);
+    expect(p.text).toBe("He used the analogy.\n*Among coyotes, I never got the support I needed.*");
+    expect(p.commentary).toBeUndefined();
+    expect(p.locator?.value).toBe("34");
+  });
+
+  it("makes words after the page a comment (#148, #351)", () => {
+    const p = parseNote(`<span class="quote">"The cause may be permanent." (p. 115)\n\nCompare with Collis [bib]Collis1997[/bib]: "The right person, continuously."</span>`);
+    expect(p).toMatchObject({ text: "The cause may be permanent.", commentary: `Compare with Collis [bib]Collis1997[/bib]: "The right person, continuously."`, locator: { value: "115" } });
+    expect(p.flags).toContain("commentary_mixed");
+    expect(p.more).toBeUndefined();
+  });
+
+  it("makes words before the opening mark a comment, and flags them (#53, #345)", () => {
+    const p = parseNote(`<span class="quote">As DeMarco and Lister [12] argue,\n"There is nothing more discouraging to any worker." (p. 62)</span>`);
+    expect(p).toMatchObject({ text: "There is nothing more discouraging to any worker.", commentary: "As DeMarco and Lister [12] argue,", locator: { value: "62" } });
+    expect(p.flags).toContain("lead_in");
+    const q = parseNote(`<span class="quote"><strong>The Seven Deadly Diseases</strong>\n"3. Evaluation by performance." (p.36)\nSee also in particular: [bib]Deming1982[/bib]</span>`);
+    expect(q.text).toBe("3. Evaluation by performance.");
+    expect(q.locator?.value).toBe("36");
+    expect(q.commentary).toMatch(/The Seven Deadly Diseases[^]*See also in particular: \[bib\]Deming1982\[\/bib\]$/);
+  });
+
+  it("keeps an opening mark with no closing mark, flagged (#243)", () => {
+    const p = parseNote(`<span class="quote">"Getting cooperation has always been a challenge.[fn]Compare Fisher.[/fn]</span>`);
+    expect(p.text).toBe(`"Getting cooperation has always been a challenge.[fn]Compare Fisher.[/fn]`);
+    expect(p.flags).toContain("unbalanced_quotes");
+  });
+
+  it("keeps a closing mark with no opening mark, with its page, flagged (#45)", () => {
+    const p = parseNote(`<span class="quote">The sheer size requires something more than 'thriving on chaos.'" (p. 33)</span>`);
+    expect(p.text).toBe(`The sheer size requires something more than 'thriving on chaos.'"`);
+    expect(p.locator?.value).toBe("33");
+    expect(p.flags).toContain("unbalanced_quotes");
+  });
+
+  it("keeps a note with no marks of its own whole, when marks only set off a phrase mid-sentence (#28)", () => {
+    const p = parseNote(`<span class="quote">Group relationships satisfy needs. Scott Peck explains that they are "onto something" in all this, he says.</span>`);
+    expect(p.text).toBe(`Group relationships satisfy needs. Scott Peck explains that they are "onto something" in all this, he says.`);
+    expect(p.flags).toContain("no_marks");
+    expect(parseNote(`<span class="quote">No marks at all here. (p. 9)</span>`)).toMatchObject({ text: "No marks at all here.", locator: { value: "9" }, flags: expect.arrayContaining(["no_marks"]) });
+  });
+
+  it("holds two quotes with no page between them, as they stand (#752)", () => {
+    const p = parseNote(`<span class="quote">"The vampire lives on."\n\n"I suppose it is thus."</span>`);
+    expect(p.grade).toBe("C");
+    expect(p.text).toBe(`"The vampire lives on."\n"I suppose it is thus."`);
+  });
+
+  it("holds a page inside a quote that doesn't close, as it stands", () => {
+    const p = parseNote(`<span class="quote">"First passage, unclosed. (p. 3) and on. (p. 4) then." (p. 9)</span>`);
+    expect(p.grade).toBe("C");
+    expect(p.locator).toBeUndefined();
+    expect(p.text).toBe(`"First passage, unclosed. (p. 3) and on. (p. 4) then." (p. 9)`);
   });
 
   it("continues the quote into a following list (A8TP3ZSS)", () => {
@@ -114,15 +204,16 @@ describe("blockquote and typed notes", () => {
     expect(p).toMatchObject({ form: "typed", grade: "A", locator: { value: "78" } });
   });
 
-  it("sends a remark before the quote to a person (H65VSST6)", () => {
+  it("makes a remark before the quote a comment, and flags it (H65VSST6)", () => {
     const p = parseNote(`<p>Dr. Provinc would most likely agree with me. As he has said already:<br />"Fahions on laughter change, but one thing<br />that stays the same is you can 't laugh at people<br />in power."<br /><br /></p>`);
-    expect(p).toMatchObject({ form: "typed", grade: "C", commentary: "Dr. Provinc would most likely agree with me. As he has said already:" });
+    expect(p).toMatchObject({ form: "typed", commentary: "Dr. Provinc would most likely agree with me. As he has said already:" });
+    expect(p.flags).toContain("lead_in");
     expect(p.text).toBe("Fahions on laughter change, but one thing\nthat stays the same is you can 't laugh at people\nin power.");
   });
 
-  it("sends a note with two locators to a person", () => {
+  it("splits a typed note with two quotes and two pages", () => {
     const p = parseNote(`<p>"First quote." (p. 3)</p><p>"Second quote." (p. 9)</p>`);
-    expect(p.grade).toBe("C");
+    expect([p.text, p.locator?.value, p.more?.[0].text, p.more?.[0].locator?.value]).toEqual(["First quote.", "3", "Second quote.", "9"]);
   });
 });
 

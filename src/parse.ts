@@ -2,15 +2,19 @@ import { type HTMLElement, type Node, NodeType, parse } from "node-html-parser";
 
 /**
  * Reads one Zotero note and returns the quote it holds as fields: text, locator, chapter author, the
- * concepts in the legacy `title` attribute, and flags for anything a person should look at. Each note
- * is expected to hold one quote, in one of four forms:
+ * concepts in the legacy `title` attribute, and flags for anything a person should look at. These quotes
+ * were typed to one pattern: the words between one opening and one closing double mark, with quotations
+ * inside them in single marks, which are only ever content. A page in parentheses after the closing mark
+ * ends the quote, so a note can hold several (the others are in `more`). Words outside the marks are a comment.
+ * Notes come in four forms:
  *
  *   span          <span class="quote" title="concepts"> "…" (p. 63) </span>, the legacy form
  *   escaped-span  the same span written out as text (&lt;span …&gt;), decoded and read as above
  *   blockquote    <blockquote>…</blockquote>, with an optional locator after it
  *   typed         a note that starts with a quotation mark, as typed by hand
  *
- * The parser never guesses: a note it can't read with confidence is grade C, for a person to split.
+ * The parser never guesses: a note that doesn't follow the pattern is a slip or damage, so it keeps its
+ * words as they are, marks included, and is flagged for a person, or is grade C when it may hold several quotes.
  */
 
 export type NoteKind = "quote" | "catalog" | "empty" | "other";
@@ -18,7 +22,7 @@ export type QuoteForm = "span" | "escaped-span" | "blockquote" | "typed";
 export type Grade = "A" | "B" | "C";
 export type Flag =
   | "no_locator" | "kindle_locator" | "chapter_author" | "unbalanced_quotes" | "list_quote"
-  | "title_tag_only" | "compound_tag" | "commentary_mixed" | "long" | "ocr_suspect";
+  | "title_tag_only" | "compound_tag" | "commentary_mixed" | "long" | "ocr_suspect" | "lead_in" | "no_marks";
 
 export interface Locator {
   kind: "page" | "kindle";
@@ -47,6 +51,8 @@ export interface ParsedNote {
   flags: Flag[];
   /** Why a quote is grade C. */
   problems: string[];
+  /** The note's other passages, when it holds several, each with its own text and page. */
+  more?: ParsedNote[];
 }
 
 /** Over this many characters a quote is flagged `long`; corpus-mcp's quotes stop at 2,000. */
@@ -57,11 +63,17 @@ const CLOSE = new Set(['"', "”"]);
 const PAGE = String.raw`[ivxlcdm]+|\d+`;
 /** A trailing locator: (p. 63), (p 169), (pp. 63-64), (Kindle loc. 208-210), optionally ", chapter author". */
 const LOCATOR = new RegExp(
-  String.raw`\(\s*(?:(?:pp?\.?|pages?)\s*((?:${PAGE})(?:\s*[-–—]\s*(?:${PAGE}))?)|kindle\s+loc(?:ation)?s?\.?\s*(\d+(?:\s*[-–—]\s*\d+)?))\s*(?:[,;]\s*([^()]+?))?\s*\)\s*$`,
+  String.raw`\(\s*(?:(?:pp?[.,]?|pages?)\s*((?:${PAGE})(?:\s*[-–—]\s*(?:${PAGE}))?)|kindle\s+loc(?:ation)?s?\.?\s*(\d+(?:\s*[-–—]\s*\d+)?))\s*(?:[,;]\s*([^()]+?))?\s*\)\s*$`,
   "i",
 );
 /** Any locator anywhere, for spotting a note that holds several quotes. */
-const ANY_LOCATOR = new RegExp(String.raw`\(\s*(?:pp?\.?\s*(?:${PAGE})|kindle\s+loc)`, "gi");
+const ANY_LOCATOR = new RegExp(String.raw`\(\s*(?:pp?[.,]?\s*(?:${PAGE})|kindle\s+loc)`, "gi");
+/** A locator typed inside the closing mark at a line's end, (p. 24)", or with no parentheses after it, " p. 222. */
+const PAGES = String.raw`(?:${PAGE})(?:\s*[-–—]\s*(?:${PAGE}))?`;
+const INSIDE_MARK = new RegExp(String.raw`[ \t]*(\([ \t]*(?:pp?[.,]?|pages?)[ \t]*${PAGES}[ \t]*\))[ \t]*(["”])[ \t]*$`, "gim");
+const BARE_PAGE = new RegExp(String.raw`(["”])[ \t]+(pp?\.[ \t]*${PAGES})[ \t]*$`, "gim");
+/** A closing mark, any emphasis or footnote that closes after it, and the page that ends the quote. */
+const QUOTE_END = new RegExp(String.raw`(["”])(\*+|\.?\[\/fn\])?\s*(${LOCATOR.source.replace(String.raw`\s*$`, "")})`, "gi");
 const CATALOG = [
   /\bIncludes (?:bibliographical references|bibliography|index)/i,
   /\bOriginally published\b/i,
@@ -155,7 +167,7 @@ export function readLocator(text: string): { body: string; locator?: Locator; ch
 export function parseNote(html: string, tags: string[] = []): ParsedNote {
   let form: QuoteForm | undefined;
   if (/&lt;span\s+class=["']quote["']/i.test(html)) {
-    html = html.replace(/&lt;(\/?span\b[^]*?)&gt;/gi, (_, inner: string) => `<${inner.replace(/&quot;/g, '"')}>`);
+    html = decodeEscapedSpans(html);
     form = "escaped-span";
   }
   const root = parse(html);
@@ -176,66 +188,122 @@ export function parseNote(html: string, tags: string[] = []): ParsedNote {
   // Research notes left by agents and drafts: "[VERIFY: …]", "[VERIFIED]", "[PLACEHOLDER: …]".
   if (!form && RESEARCH_NOTE.test(full)) return { ...result, kind: "other" };
 
-  let text = full;
-  let opened = OPEN.has(text[0]);
+  const text = full;
   if (!form) {
-    const first = [...text].findIndex((ch) => OPEN.has(ch));
-    if (first < 0) return { ...result, kind: "other" };
+    if (![...text].some((ch) => OPEN.has(ch))) return { ...result, kind: "other" };
     form = "typed";
-    if (first > 0) {
-      result.commentary = text.slice(0, first).trim();
-      result.problems.push("commentary before the quote");
-      text = text.slice(first);
-      opened = true;
-    }
   }
   result.form = form;
   if (form === "blockquote") result.sourceUrl = quoteBlock?.getAttribute("cite") || undefined;
 
-  const located = readLocator(text);
-  let body = located.body;
-  result.locator = located.locator;
-  result.chapterAuthor = located.chapterAuthor;
-  if (opened) body = body.slice(1);
+  /** The common fields once a quote's own have been read, for the note and each of its passages. */
+  const finish = (r: ParsedNote): ParsedNote => {
+    if (!r.locator) r.flags.push("no_locator");
+    else if (r.locator.kind === "kindle") r.flags.push("kindle_locator");
+    if (r.chapterAuthor) r.flags.push("chapter_author");
+    if (all.some((b) => b.list)) r.flags.push("list_quote");
+    if ((r.text ?? "").length > LONG_QUOTE) r.flags.push("long");
+    if (tags.some((t) => t.includes(","))) r.flags.push("compound_tag");
+    const noteTerms = new Set(tags.flatMap(splitTerms).map((t) => t.toLowerCase()));
+    if (titleTags.some((t) => !noteTerms.has(t.toLowerCase()))) r.flags.push("title_tag_only");
+    r.grade = gradeOf(r);
+    return r;
+  };
+  const read = readQuotes(text);
+  if (read.quotes === undefined) return finish({ ...result, text, problems: [read.unsure] });
+  const parts = read.quotes.map((q) => finish({ ...result, ...q, flags: [...q.flags], problems: [] }));
+  if (!parts[0].text) return { ...result, kind: "empty", form: undefined };
+  return parts.length > 1 ? { ...parts[0], more: parts.slice(1) } : parts[0];
+}
 
-  let closed = CLOSE.has(body.at(-1) ?? "");
-  if (closed) body = body.slice(0, -1);
-  else if (opened) {
-    // A paraphrase or remark after the closing mark: the quote ends at the last closing mark.
-    const last = Math.max(...[...CLOSE].map((ch) => body.lastIndexOf(ch)));
-    if (last > 0) {
-      const after = body.slice(last + 1).trim();
-      const tail = readLocator(after);
-      result.commentary = [result.commentary, tail.body].filter(Boolean).join("\n\n") || undefined;
-      result.locator ??= tail.locator;
-      result.chapterAuthor ??= tail.chapterAuthor;
-      body = body.slice(0, last);
-      closed = true;
-      result.flags.push("commentary_mixed");
+type Read = Pick<ParsedNote, "text" | "locator" | "chapterAuthor" | "commentary" | "flags">;
+
+/** A double mark inside a quote's words, which the pattern doesn't allow. */
+const hasDoubleMark = (body: string) => /["“”]/.test(body);
+
+const joined = (...parts: (string | undefined)[]) => parts.map((p) => p?.trim()).filter(Boolean).join("\n\n") || undefined;
+
+/**
+ * The quotes in a note's words. Each closing mark with a page after it ends a quote, which starts at the first opening
+ * mark since the last one ended. Words before that mark are a comment on it; words after the last page, on the last.
+ */
+function readQuotes(raw: string): { quotes: Read[]; unsure?: undefined } | { quotes?: undefined; unsure: string } {
+  const text = raw.replace(INSIDE_MARK, "$2 $1").replace(BARE_PAGE, "$1 ($2)");
+  const ends = [...text.matchAll(QUOTE_END)];
+  const anyOpening = (s: string) => [...s].findIndex((ch) => OPEN.has(ch));
+  if (!ends.length) return readWithoutPage(text);
+  const quotes: Read[] = [];
+  let from = 0;
+  for (const end of ends) {
+    const part = text.slice(from, end.index);
+    const opening = anyOpening(part);
+    if (opening < 0) {
+      if (ends.length > 1) return { unsure: "a closing mark with no opening mark, among several page references: several quotes?" };
+      // No opening mark: not a quote by the rule, so its words stay as they are.
+      const located = readLocator(end[3]);
+      return { quotes: [{ text: `${part}${end[1]}${end[2] ?? ""}`.trim(), locator: located.locator, chapterAuthor: located.chapterAuthor, commentary: text.slice(end.index + end[0].length).trim() || undefined, flags: ["unbalanced_quotes"] }] };
     }
+    const body = part.slice(opening + 1);
+    if (body.match(ANY_LOCATOR)) return { unsure: "a page reference inside a quote: several quotes?" };
+    const located = readLocator(end[3]);
+    const place = { locator: located.locator, chapterAuthor: located.chapterAuthor };
+    if (hasDoubleMark(body)) {
+      // Off the pattern, so nothing says which marks are the quote's: its words stay as they are.
+      quotes.push({ text: `${part}${end[1]}${end[2] ?? ""}`.trim(), ...place, flags: ["unbalanced_quotes"] });
+    } else {
+      const lead = part.slice(0, opening).trim();
+      const emphasis = /^\*+$/.test(lead);
+      quotes.push({ text: `${emphasis ? lead : ""}${body}${end[2] ?? ""}`.trim(), ...place, commentary: emphasis ? undefined : lead || undefined, flags: lead && !emphasis ? ["lead_in"] : [] });
+    }
+    from = end.index + end[0].length;
   }
-  result.text = body.trim();
-  if (!result.text) return { ...result, kind: "empty", form: undefined };
+  const rest = text.slice(from).trim();
+  if (rest) {
+    const last = quotes[quotes.length - 1];
+    last.commentary = joined(last.commentary, rest);
+    last.flags = [...last.flags, "commentary_mixed"];
+  }
+  return { quotes };
+}
 
-  if (opened !== closed) result.flags.push("unbalanced_quotes");
-  if (!result.locator) result.flags.push("no_locator");
-  else if (result.locator.kind === "kindle") result.flags.push("kindle_locator");
-  if (result.chapterAuthor) result.flags.push("chapter_author");
-  if (all.some((b) => b.list)) result.flags.push("list_quote");
-  if (result.text.length > LONG_QUOTE) result.flags.push("long");
-  if (tags.some((t) => t.includes(","))) result.flags.push("compound_tag");
-  const noteTerms = new Set(tags.flatMap(splitTerms).map((t) => t.toLowerCase()));
-  if (titleTags.some((t) => !noteTerms.has(t.toLowerCase()))) result.flags.push("title_tag_only");
-
-  if ((full.match(ANY_LOCATOR)?.length ?? 0) > 1) result.problems.push("more than one locator: several quotes?");
-  if (spans.length > 1) result.problems.push("more than one quote span: several quotes?");
-  result.grade = gradeOf(result);
-  return result;
+/** A note with no closing mark and page: one pair of marks around its words, or it stays as it is, flagged. */
+function readWithoutPage(text: string): { quotes: Read[] } | { unsure: string } {
+  const located = readLocator(text);
+  const words = located.body;
+  const place = { locator: located.locator, chapterAuthor: located.chapterAuthor };
+  const opening = [...words].findIndex((ch) => OPEN.has(ch));
+  if (opening < 0) return { quotes: [{ text: words.trim(), ...place, flags: [CLOSE.has(words.at(-1) ?? "") ? "unbalanced_quotes" : "no_marks"] }] };
+  const closing = Math.max(...[...CLOSE].map((ch) => words.lastIndexOf(ch)));
+  // An opening mark with nothing to close it isn't taken for an outer one: it stays, for a person to see.
+  if (closing <= opening) return { quotes: [{ text: words.trim(), ...place, flags: ["unbalanced_quotes"] }] };
+  const body = words.slice(opening + 1, closing);
+  if (body.match(ANY_LOCATOR)) return { unsure: "a page reference inside a quote: several quotes?" };
+  if (/["”]\s*\n+\s*["“]/.test(body)) return { unsure: "a closing mark then an opening mark, with no page: several quotes?" };
+  if (hasDoubleMark(body)) return { quotes: [{ text: words.trim(), ...place, flags: ["unbalanced_quotes"] }] };
+  const lead = words.slice(0, opening).trim();
+  const leadEmphasis = /^\*+$/.test(lead);
+  const rest = words.slice(closing + 1).trim();
+  const emphasis = /^\*+$/.test(rest);
+  // Marks in the middle of a sentence are a phrase being quoted, not the quote: the note has no marks of its own.
+  if (lead && !leadEmphasis && rest && !emphasis && !/[:,]$|\n$/.test(words.slice(0, opening).trimEnd()) && !readLocator(rest).locator) return { quotes: [{ text: words.trim(), ...place, flags: ["no_marks"] }] };
+  const tail = emphasis ? undefined : readLocator(rest);
+  const flags: Read["flags"] = [];
+  if (lead && !leadEmphasis) flags.push("lead_in");
+  if (tail?.body) flags.push("commentary_mixed");
+  return { quotes: [{
+    text: `${leadEmphasis ? lead : ""}${body}${emphasis ? rest : ""}`.trim(), locator: place.locator ?? tail?.locator, chapterAuthor: place.chapterAuthor ?? tail?.chapterAuthor,
+    commentary: joined(leadEmphasis ? undefined : lead, tail?.body), flags,
+  }] };
 }
 
 /** A note's words as plain text: paragraphs, list items, and emphasis kept as parseNote keeps them. */
 export function noteText(html: string): string {
-  return joinBlocks(blocks(parse(html)));
+  return joinBlocks(blocks(parse(decodeEscapedSpans(html))));
+}
+
+/** A span written out as text (&lt;span …&gt;) as a real one. */
+function decodeEscapedSpans(html: string): string {
+  return html.replace(/&lt;(\/?span\b[^]*?)&gt;/gi, (_, inner: string) => `<${inner.replace(/&quot;/g, '"')}>`);
 }
 
 /** A: clean, apart from a missing locator. B: extracted, with flags. C: needs a person to split it. */

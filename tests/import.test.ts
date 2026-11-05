@@ -182,6 +182,17 @@ describe("import", () => {
     });
   });
 
+  it("imports a note with several passages as one quote each, with the note's tags", () => {
+    addItem(db, PRIMARY, "NOTE0004", note("ATTILA01", `<p><span class="quote" title="power">"The first passage of this note is here." (p. 224)<br />"The second passage of this note is here." (p. 225)</span></p>`, ["power"]));
+    importWithSite(db, opts());
+    const [a, b] = [quoteLike("first passage of this"), quoteLike("second passage of this")];
+    expect([a.locator, b.locator]).toEqual(["224", "225"]);
+    expect(b.work_id).toBe(a.work_id);
+    expect(tagsOf(b.id)).toEqual(tagsOf(a.id));
+    expect(db.prepare("SELECT ref FROM quote_origins WHERE quote_id = ?").pluck().get(b.id)).toBe(`${PRIMARY}:NOTE0004#2`);
+    expect(importWithSite(db, opts()).quotes.added).toBe(0);
+  });
+
   describe("a note that takes its quote to another work", () => {
     const WORDS = "Patience is a form of wisdom that takes its own time";
     const SPAN = `<p><span class="quote" title="power">"${WORDS}" (p. 9)</span></p>`;
@@ -229,7 +240,7 @@ describe("import", () => {
   });
 
   it("imports a quote it can't split as unparsed, out of the way", () => {
-    addItem(db, PRIMARY, "NOTE0004", note("ATTILA01", `<p>"First quote." (p. 3)</p><p>"Second quote." (p. 9)</p>`));
+    addItem(db, PRIMARY, "NOTE0004", note("ATTILA01", `<p>"First quote."</p><p>"Second quote."</p>`));
     importWithSite(db, opts());
     expect(quoteLike("First quote")).toMatchObject({ status: "unparsed", grade: "C" });
   });

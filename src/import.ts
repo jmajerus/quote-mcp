@@ -265,6 +265,12 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
         upsert({ kind: "zotero-note", ref: `${library}:${n.key}`, version: String(n.version), raw: data.note ?? "", parsed,
           workId: noteWork(library, n.parent_key),
           tags: [...noteTags.map((tag) => ({ tag, origin: "note" })), ...titleOnly.map((tag) => ({ tag, origin: "title" }))] });
+        // A note with several passages, each with its own page: one quote each, sharing the note's tags.
+        for (const [i, more] of (parsed.more ?? []).entries()) {
+          upsert({ kind: "zotero-note", ref: `${library}:${n.key}#${i + 2}`, version: String(n.version), raw: data.note ?? "", parsed: more,
+            workId: noteWork(library, n.parent_key),
+            tags: [...noteTags.map((tag) => ({ tag, origin: "note" })), ...titleOnly.map((tag) => ({ tag, origin: "title" }))] });
+        }
       }
     }
 
