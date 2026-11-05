@@ -37,6 +37,8 @@ export interface ImportStats {
   quotes: { added: number; updated: number; merged: number; unchanged: number; keptEdited: number };
   skipped: Record<string, number>;
   works: Record<string, number>;
+  /** Works left with no quotes because their quotes followed a note to another work, whose old ids now name that work. */
+  absorbed: { from: number; into: number; title: string }[];
   unresolvedTags: [string, number][];
   ocrSuspects: number;
 }
@@ -110,7 +112,7 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
   const stamp = now();
   const stats: ImportStats = {
     quotes: { added: 0, updated: 0, merged: 0, unchanged: 0, keptEdited: 0 },
-    skipped: {}, works: {}, unresolvedTags: [], ocrSuspects: 0,
+    skipped: {}, works: {}, absorbed: [], unresolvedTags: [], ocrSuspects: 0,
   };
   const skip = (why: string) => (stats.skipped[why] = (stats.skipped[why] ?? 0) + 1);
 
@@ -175,6 +177,8 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
       for (const k of q.parsed.kwic) addKwic.run(quoteId, k.phrase, k.concept, conceptOf(k.concept));
     };
 
+    // A note merged into another item in Zotero takes its quotes along, which can leave their old work empty.
+    const moved = new Map<number, number>();
     const upsert = (q: Incoming) => {
       const origin = getOrigin.get(q.kind, q.ref) as { quote_id: number; version: string | null; raw: string } | undefined;
       const fields = fieldsOf(q);
@@ -192,6 +196,10 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
         } else {
           addHistory.run(quote.id, stamp, "reimported", origin.raw, q.raw, actor, `${q.kind} ${q.ref} changed`);
           updateQuote.run({ ...fields, id: quote.id });
+          if (quote.work_id && q.workId && quote.work_id !== q.workId) {
+            addHistory.run(quote.id, stamp, "work_matched", JSON.stringify({ work: quote.work_id }), JSON.stringify({ work: q.workId }), actor, `moved with ${q.kind} ${q.ref}`);
+            moved.set(quote.work_id, q.workId);
+          }
           updateOrigin.run(q.version, q.raw, stamp, q.kind, q.ref);
           stats.quotes.updated++;
         }
@@ -286,6 +294,25 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
       const grade = q.status === "unparsed" ? "C" : flags.some((f) => f !== "no_locator") ? "B" : "A";
       setOcr.run(JSON.stringify(found), JSON.stringify(flags), grade, q.id);
       if (found.length) stats.ocrSuspects++;
+    }
+
+    // --- Works left empty -------------------------------------------------------------------------
+    // An old id keeps naming the work its quotes went to (holdings-mcp's quote:<id>), as it does for a rematch. A work
+    // emptied before this was kept has its old-site quotes to say where they went, when they all went to one place.
+    const whereQuotesWent = db.prepare(`SELECT DISTINCT q.work_id FROM quote_origins o JOIN quotes q ON q.id = o.quote_id
+      WHERE o.kind = 'drupal' AND o.ref LIKE ? AND q.work_id IS NOT NULL`).pluck();
+    for (const w of db.prepare(`SELECT w.id, o.ref FROM works w JOIN work_origins o ON o.work_id = w.id AND o.kind = 'drupal'
+      WHERE w.match != 'zotero' AND NOT EXISTS (SELECT 1 FROM quotes WHERE work_id = w.id)`).all() as { id: number; ref: string }[]) {
+      const went = whereQuotesWent.all(`${w.ref}#%`) as number[];
+      if (went.length === 1 && !moved.has(w.id)) moved.set(w.id, went[0]);
+    }
+    for (const [from, into] of moved) {
+      const w = db.prepare("SELECT title FROM works WHERE id = ? AND match != 'zotero' AND NOT EXISTS (SELECT 1 FROM quotes WHERE work_id = works.id)").get(from) as { title: string } | undefined;
+      if (!w) continue;
+      db.prepare("UPDATE work_origins SET work_id = ? WHERE work_id = ?").run(into, from);
+      setOrigin.run("work", String(from), into);
+      db.prepare("DELETE FROM works WHERE id = ?").run(from);
+      stats.absorbed.push({ from, into, title: w.title });
     }
 
     // --- Search index -----------------------------------------------------------------------------

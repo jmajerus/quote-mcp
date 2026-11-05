@@ -109,6 +109,7 @@ async function importCommand() {
     `Skipped: ${Object.entries(s.skipped).map(([k, n]) => `${n} ${k}`).join(", ") || "nothing"}.`,
     `Tags not in a concept scheme: ${s.unresolvedTags.length}${s.unresolvedTags.length ? ` (${s.unresolvedTags.slice(0, 25).map(([t, n]) => `${t} ${n}`).join(", ")}${s.unresolvedTags.length > 25 ? ", …" : ""})` : ""}.`,
   ].join("\n"));
+  for (const a of s.absorbed) console.log(`Work ${a.from} (${a.title}) now resolves to work ${a.into}, where its quotes went.`);
   const corpus = corpusConfig();
   if (corpus) {
     try {

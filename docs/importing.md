@@ -57,7 +57,8 @@ then by the full title, then by year. One left is the match. Several is `ambiguo
 is `unmatched`, cited from its own details.
 
 A match stands while its Zotero item does: editing the item's title, or filing another edition, doesn't move its quotes. When
-the item goes (merged into another, or deleted), the work is matched afresh. A move keeps each quote's id and history, and the
+the item goes (merged into another, or deleted), the work is matched afresh. A merge also moves the item's notes, so the next import
+can take a quote to the surviving work by itself: it records the move, and a work left empty resolves to where its quotes went. A move keeps each quote's id and history, and the
 work's old id still resolves.
 
 To match works again, after filing or merging items in Zotero:

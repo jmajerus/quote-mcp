@@ -6,6 +6,7 @@ import Database from "better-sqlite3";
 import { type DB, SCHEMA_VERSION, openDb, openExisting } from "../src/db.js";
 import { type DrupalSite, importWithSite } from "./seed.js";
 import { exportAll } from "../src/export.js";
+import { holdingsCounts } from "../src/holdings.js";
 import { searchQuotes } from "../src/queries.js";
 import { runImport } from "../src/import.js";
 import { fullTitle, normalizedTitle, shareAuthor } from "../src/text.js";
@@ -155,6 +156,52 @@ describe("import", () => {
       expect(shareAuthor(["Morgan, G."], ["Other, A.", "Morgan, Gareth"])).toBe(true);
       expect(shareAuthor(["Morgan, Gareth"], ["Burns, James"])).toBe(false);
       expect(shareAuthor([], ["Burns, James"])).toBe(false);
+    });
+  });
+
+  describe("a note that takes its quote to another work", () => {
+    const WORDS = "Patience is a form of wisdom that takes its own time";
+    const SPAN = `<p><span class="quote" title="power">"${WORDS}" (p. 9)</span></p>`;
+    /** A work of its own from the old site, whose quote is also in a Zotero note on an item that doesn't match it by title. */
+    const start = () => {
+      const s = site();
+      s.works.push({ nid: 30, title: "Full Catastrophe", type: "Book", year: null, isbn: null, url: null, citekey: null, authors: [], keywords: [], notes: SPAN });
+      addItem(db, PRIMARY, "SURVIVOR", book("Another title", "1990", "Kabat-Zinn"));
+      addItem(db, PRIMARY, "NOTE0030", note("SURVIVOR", SPAN), 1);
+      const o = opts({ drupal: s });
+      importWithSite(db, o);
+      return { o, old: quoteLike("Patience").work_id as number };
+    };
+
+    it("records the move, and keeps the old id resolving when the note changes", () => {
+      const { o, old } = start();
+      const id = quoteLike("Patience").id;
+      addItem(db, PRIMARY, "NOTE0030", note("SURVIVOR", SPAN.replace("(p. 9)", "(p. 10)")), 2);
+      const s = importWithSite(db, o);
+      const into = quoteLike("Patience").work_id as number;
+      expect(into).not.toBe(old);
+      expect(s.absorbed).toEqual([{ from: old, into, title: "Full Catastrophe" }]);
+      expect(db.prepare("SELECT COUNT(*) FROM works WHERE id = ?").pluck().get(old)).toBe(0);
+      expect(holdingsCounts(db).works.find((w) => w.work_id === into)).toMatchObject({ former_work_ids: [old] });
+      expect(searchQuotes(db, { work: `quote:${old}` }).quotes.map((q) => q.id)).toContain(id);
+      expect(db.prepare("SELECT reason FROM history WHERE quote_id = ? AND kind = 'work_matched'").pluck().get(id)).toBe(`moved with zotero-note ${PRIMARY}:NOTE0030`);
+      expect(importWithSite(db, o).absorbed).toEqual([]);
+    });
+
+    it("repairs a work emptied by an earlier import", () => {
+      const { o, old } = start();
+      const into = db.prepare("SELECT id FROM works WHERE zotero_key = 'SURVIVOR'").pluck().get() as number;
+      db.prepare("UPDATE quotes SET work_id = ? WHERE work_id = ?").run(into, old);
+      expect(importWithSite(db, o).absorbed).toEqual([{ from: old, into, title: "Full Catastrophe" }]);
+      expect(holdingsCounts(db).works.find((w) => w.work_id === into)).toMatchObject({ former_work_ids: [old] });
+    });
+
+    it("leaves an empty work alone when nothing says where its quotes went", () => {
+      const { o, old } = start();
+      db.prepare("DELETE FROM quote_origins WHERE kind = 'drupal' AND ref = '30#1'").run();
+      db.prepare("UPDATE quotes SET work_id = NULL WHERE work_id = ?").run(old);
+      expect(importWithSite(db, { ...o, drupal: undefined }).absorbed).toEqual([]);
+      expect(db.prepare("SELECT COUNT(*) FROM works WHERE id = ?").pluck().get(old)).toBe(1);
     });
   });
 
