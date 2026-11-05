@@ -39,6 +39,8 @@ export interface AuditRecord {
   lost: string[]; added: string[];
   /** Concepts on the record that only another passage's span names, and the page, if it's another passage's. */
   otherConcepts: string[]; otherPage: boolean;
+  /** Concepts this passage's own span names that the record lacks, and no person took off. */
+  missingConcepts: string[];
 }
 
 interface Row { id: number; text: string; locator: string | null; comment: string | null; chapter_author: string | null; attribution: string | null; status: string; edited: number }
@@ -72,8 +74,10 @@ function isSubsequence(part: string[], whole: string[]): boolean {
   return true;
 }
 
+const SOURCE_ORIGINS = new Set(["span", "title", "note"]);
+
 /** What each source says about the passage this record holds: the concepts that are its own and another's, and whether the page is another's. */
-function conceptsAcross(q: Row, tags: string[], origins: { kind: string; ref: string; raw: string }[]) {
+function conceptsAcross(q: Row, tags: { tag: string; origin: string }[], removed: string[], origins: { kind: string; ref: string; raw: string }[]) {
   const key = quoteKey(q.text);
   const own = new Set<string>();
   const others = new Set<string>();
@@ -82,7 +86,8 @@ function conceptsAcross(q: Row, tags: string[], origins: { kind: string; ref: st
   for (const o of origins) {
     const parsed = parseOrigin(o);
     const parts = [parsed, ...(parsed.more ?? [])];
-    const mine = parts.find((p) => key.length >= 20 && quoteKey(p.text) === key);
+    // Within one note a short key is as good as a long one: this only asks which of its passages the record is.
+    const mine = parts.find((p) => key.length > 0 && quoteKey(p.text) === key);
     if (!mine) continue;
     for (const t of mine.titleTags) own.add(t.toLowerCase());
     if (mine.locator) pagesOwn.add(mine.locator.value);
@@ -92,15 +97,16 @@ function conceptsAcross(q: Row, tags: string[], origins: { kind: string; ref: st
       if (p.locator) pagesOther.add(p.locator.value);
     }
   }
-  const have = new Set(tags.map((t) => t.toLowerCase()));
+  // A concept a person took off stays off, and one a person added stays on: only what came from a source is the source's to change.
+  const have = new Set([...tags.map((t) => t.tag), ...removed].map((t) => t.toLowerCase()));
   return {
     missing: [...own].filter((t) => !have.has(t)),
-    otherConcepts: tags.filter((t) => others.has(t.toLowerCase()) && !own.has(t.toLowerCase())),
+    otherConcepts: tags.filter((t) => SOURCE_ORIGINS.has(t.origin) && others.has(t.tag.toLowerCase()) && !own.has(t.tag.toLowerCase())).map((t) => t.tag),
     otherPage: !!q.locator && pagesOther.has(q.locator) && !pagesOwn.has(q.locator),
   };
 }
 
-function auditOne(q: Row, origins: { kind: string; ref: string; raw: string }[], isSplit: (o: { kind: string; ref: string }) => boolean, flagged: string[], tags: string[]): AuditRecord {
+function auditOne(q: Row, origins: { kind: string; ref: string; raw: string }[], isSplit: (o: { kind: string; ref: string }) => boolean, flagged: string[], tags: { tag: string; origin: string }[], removed: string[]): AuditRecord {
   // An attribution comes from the source's own fields, not its words.
   const mine = words([q.text, q.comment, q.chapter_author].filter(Boolean).join(" "));
   /** The parts of an origin's note this record stands for: one, once its note has been split into several records. */
@@ -126,7 +132,7 @@ function auditOne(q: Row, origins: { kind: string; ref: string; raw: string }[],
   const parts = partsOf(o);
   const kinds: AuditKind[] = [];
   if (!parts.length || flagged.includes("passage_gone")) {
-    return { id: q.id, status: q.status, edited: !!q.edited, kinds: ["passage_gone"], origin: { kind: o.kind, ref: o.ref }, raw: o.raw, stored: { text: q.text, locator: q.locator, comment: q.comment }, parsed: [], matches: false, lost: [], added: [], otherConcepts: [], otherPage: false, parts: [], plain, origins, chapterAuthor: q.chapter_author };
+    return { id: q.id, status: q.status, edited: !!q.edited, kinds: ["passage_gone"], origin: { kind: o.kind, ref: o.ref }, raw: o.raw, stored: { text: q.text, locator: q.locator, comment: q.comment }, parsed: [], matches: false, lost: [], added: [], missingConcepts: [], otherConcepts: [], otherPage: false, parts: [], plain, origins, chapterAuthor: q.chapter_author };
   }
   const parsed = parts[0];
   const flags = new Set(parts.flatMap((p) => p.flags));
@@ -141,7 +147,7 @@ function auditOne(q: Row, origins: { kind: string; ref: string; raw: string }[],
   if (parts.length === 1 && !parsed.problems.length && (q.comment ?? "") !== (first.commentary ?? "")) kinds.push("comment_differs");
   if ((q.locator ?? null) !== (first.locator?.value ?? null) && !parsed.problems.length) kinds.push("locator_differs");
   if (pages.some((n, i) => i > 0 && n < pages[i - 1])) kinds.push("pages_backward");
-  const concepts = conceptsAcross(q, tags, origins);
+  const concepts = conceptsAcross(q, tags, removed, origins);
   if (concepts.missing.length) kinds.push("concept_missing");
   if (concepts.otherConcepts.length) kinds.push("concept_other_passage");
   if (concepts.otherPage) kinds.push("page_other_passage");
@@ -153,7 +159,7 @@ function auditOne(q: Row, origins: { kind: string; ref: string; raw: string }[],
     id: q.id, status: q.status, edited: !!q.edited, kinds, origin: { kind: o.kind, ref: o.ref }, raw: o.raw,
     stored: { text: q.text, locator: q.locator, comment: q.comment },
     parsed: parts.map((p) => ({ text: p.text, locator: p.locator?.value, comment: p.commentary, flags: p.flags, problems: p.problems })),
-    matches, lost, added, otherConcepts: concepts.otherConcepts, otherPage: concepts.otherPage, parts, plain, origins, chapterAuthor: q.chapter_author,
+    matches, lost, added, missingConcepts: concepts.missing, otherConcepts: concepts.otherConcepts, otherPage: concepts.otherPage, parts, plain, origins, chapterAuthor: q.chapter_author,
   };
 }
 
@@ -170,11 +176,12 @@ export function auditStore(db: DB): AuditReport {
   /** A note already stored as several records: it has a numbered origin, or is one. */
   const isSplit = (o: { kind: string; ref: string }) => PASSAGE(o.kind).test(o.ref) || refs.has(`${o.kind} ${passageRef(o, 2)}`);
   const originsOf = db.prepare("SELECT kind, ref, raw, version FROM quote_origins WHERE quote_id = ? AND kind IN ('drupal', 'drupal-quote', 'zotero-note') AND raw IS NOT NULL ORDER BY rowid");
-  const tagsOf = db.prepare("SELECT tag FROM quote_tags WHERE quote_id = ?").pluck();
+  const tagsOf = db.prepare("SELECT tag, origin FROM quote_tags WHERE quote_id = ?");
+  const removedOf = db.prepare("SELECT tag FROM tag_removals WHERE quote_id = ?").pluck();
   const records: AuditRecord[] = [];
   for (const q of rows) {
     const origins = originsOf.all(q.id) as { kind: string; ref: string; raw: string }[];
-    if (origins.length) records.push(auditOne(q, origins, isSplit, JSON.parse(q.flags) as string[], tagsOf.all(q.id) as string[]));
+    if (origins.length) records.push(auditOne(q, origins, isSplit, JSON.parse(q.flags) as string[], tagsOf.all(q.id) as { tag: string; origin: string }[], removedOf.all(q.id) as string[]));
   }
   const kinds = Object.fromEntries(Object.keys(AUDIT_KINDS).map((k) => {
     const hit = records.filter((r) => r.kinds.includes(k as AuditKind));

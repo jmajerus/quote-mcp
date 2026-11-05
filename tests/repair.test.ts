@@ -200,11 +200,44 @@ describe("concepts and pages on the wrong passage (#353)", () => {
     expect(repairQuotes(db).repairs).toEqual([]);
   });
 
-  it("leaves a concept a person added", () => {
+  it("leaves a concept a person added, and doesn't report it as removed", () => {
     const id = setUp();
     db.prepare("UPDATE quote_tags SET origin = 'edit' WHERE quote_id = ? AND tag = 'stress'").run(id);
-    repairQuotes(db);
+    expect(auditOf(db, id)?.otherConcepts).toEqual([]);
+    expect(repairQuotes(db).repairs.flatMap((r) => r.removedConcepts)).toEqual([]);
     expect(db.prepare("SELECT tag FROM quote_tags WHERE quote_id = ? ORDER BY tag").pluck().all(id)).toEqual(["disability", "stress"]);
+  });
+
+  it("records no repair when the only other-passage concept is a person's", () => {
+    const id = record({ text: "Exactly as it reads here.", locator: "3" }, `<span class="quote" title="own">"Exactly as it reads here." (p. 3)</span>`);
+    db.prepare("INSERT INTO quote_tags (quote_id, tag, origin) VALUES (?, 'own', 'span'), (?, 'mine', 'edit')").run(id, id);
+    const before = dump();
+    expect(repairQuotes(db).repairs).toEqual([]);
+    expect(dump()).toBe(before);
+  });
+
+  it("finds a concept on a short passage, under the old 20-letter limit", () => {
+    const id = record({ text: "Fear rules." }, `<p><span class="quote" title="fear">"Fear rules."</span> <span class="quote" title="hope">"Hope rules." (p. 3)</span></p>`, "zotero-note", "users/1:S");
+    db.prepare("INSERT INTO quote_tags (quote_id, tag, origin) VALUES (?, 'fear', 'span'), (?, 'hope', 'title')").run(id, id);
+    expect(auditOf(db, id)?.otherConcepts).toEqual(["hope"]);
+  });
+
+  it("adds a concept its own span names, resolved to the concept, with a history entry", () => {
+    db.prepare("INSERT INTO schemes (id, slug, label, created_at) VALUES (1, 'human-work', 'x', 'x')").run();
+    const concept = db.prepare("INSERT INTO concepts (scheme_id, slug, label, alt_labels, status, created_at, updated_at) VALUES (1, 'conflict', 'conflict', '[]', 'confirmed', 'x', 'x') RETURNING id").pluck().get();
+    const id = record({ text: "Exactly as it reads.", locator: "3" }, `<span class="quote" title="conflict">"Exactly as it reads." (p. 3)</span>`);
+    expect(auditOf(db, id)).toMatchObject({ matches: true, missingConcepts: ["conflict"] });
+    expect(repairQuotes(db).repairs[0].addedConcepts).toEqual(["conflict"]);
+    expect(db.prepare("SELECT tag, concept_id, origin FROM quote_tags WHERE quote_id = ?").all(id)).toEqual([{ tag: "conflict", concept_id: concept, origin: "span" }]);
+    expect(db.prepare("SELECT reason FROM history WHERE quote_id = ? ORDER BY id DESC LIMIT 1").pluck().get(id)).toContain("its span's concepts added: conflict");
+    expect(repairQuotes(db).repairs).toEqual([]);
+  });
+
+  it("doesn't add back a concept a person took off", () => {
+    const id = record({ text: "Exactly as it reads.", locator: "3" }, `<span class="quote" title="conflict">"Exactly as it reads." (p. 3)</span>`);
+    db.prepare("INSERT INTO tag_removals (quote_id, tag, by, at) VALUES (?, 'conflict', 'me', 'x')").run(id);
+    expect(auditOf(db, id)).toMatchObject({ missingConcepts: [], kinds: [] });
+    expect(repairQuotes(db).repairs).toEqual([]);
   });
 
   it("lists it when the record is edited, and takes nothing off", () => {

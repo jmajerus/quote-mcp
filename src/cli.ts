@@ -433,6 +433,7 @@ function repairCommand() {
       for (const c of r.repairs) {
         console.log(`\n=== Quote ${c.id}: ${c.why.join(", ")}\n--- Before (${c.before.status}), page ${c.before.locator ?? "none"}\n${c.before.text}${c.before.comment ? `\ncomment: ${c.before.comment}` : ""}`);
         if (c.removedConcepts.length) console.log(`--- Concepts removed, as another passage's: ${c.removedConcepts.join(", ")}`);
+        if (c.addedConcepts.length) console.log(`--- Concepts added, from its own span: ${c.addedConcepts.join(", ")}`);
         if (c.existingIds.length) console.log(`--- Another passage already has its own quote: ${c.existingIds.join(", ")}`);
         for (const [i, a] of c.after.entries()) console.log(`--- After${c.after.length > 1 ? `, part ${i + 1} of ${c.after.length}` : ""} (${a.status}), page ${a.locator ?? "none"}\n${a.text}${a.comment ? `\ncomment: ${a.comment}` : ""}`);
       }
