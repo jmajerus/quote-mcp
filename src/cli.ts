@@ -21,7 +21,7 @@ import { replicaScript } from "./replica.js";
 import { type ConceptSet, listSets, loadSets } from "./sets.js";
 import { configReport, siteSetting } from "./settings.js";
 import { rematchWorks } from "./rematch.js";
-import { repairQuotes } from "./repair.js";
+import { repairQuotes, repairReport } from "./repair.js";
 import { AUDIT_KINDS, type AuditKind, auditOf, auditStore } from "./audit.js";
 import { type SnapshotOptions, buildSnapshot, readMapsFile } from "./snapshot.js";
 import { syncLibrary } from "./sync.js";
@@ -431,34 +431,7 @@ function repairCommand() {
     if (json) {
       console.log(JSON.stringify(r, null, 2));
     } else {
-      const list = (items: string[]) => items.join(", ") || "none";
-      const place = (locator: string | null | undefined, comment: string | null | undefined) => [`page: ${locator ?? "none"}`, ...(comment ? [`comment: ${comment}`] : [])];
-      for (const c of r.repairs) {
-        const kept = c.concepts.filter((t) => !c.removedConcepts.includes(t)).concat(c.addedConcepts);
-        console.log([
-          `\n${"=".repeat(70)}\nQuote ${c.id} will change: ${c.why.join(", ")}`,
-          `\n--- Source, as typed (${c.source.ref})`, c.source.words,
-          `\n--- Now (${c.before.status})`, c.before.text, ...place(c.before.locator, c.before.comment), `concepts: ${list(c.concepts)}`,
-          ...c.after.flatMap((a, i) => [`\n--- After${c.after.length > 1 ? `, quote ${i + 1} of ${c.after.length}` : ""} (${a.status})`, a.text, ...place(a.locator, a.comment), `concepts: ${list(kept)}`]),
-          ...(c.removedConcepts.length ? [`\nConcepts removed, as another passage's: ${list(c.removedConcepts)}`] : []),
-          ...(c.addedConcepts.length ? [`\nConcepts added, from its own span: ${list(c.addedConcepts)}`] : []),
-          ...(c.existingIds.length ? [`\nAnother passage already has its own quote, which gains these concepts: ${c.existingIds.join(", ")}`] : []),
-        ].join("\n"));
-      }
-      if (r.forPerson.length) {
-        console.log(`\n${"#".repeat(70)}\nFor a person to decide, not changed: ${r.forPerson.length}\n${"#".repeat(70)}`);
-        for (const p of r.forPerson) {
-          console.log([
-            `\n${"=".repeat(70)}\nQuote ${p.id} needs a decision: ${AUDIT_KINDS[p.why as AuditKind] ?? p.why}`,
-            `\n--- Source, as typed (${p.source.ref})`, p.source.words,
-            `\n--- Now (${p.status})`, p.text, ...place(p.locator, p.comment), `concepts: ${list(p.concepts)}`,
-            ...p.reading.flatMap((a, i) => [`\n--- The parser would read${p.reading.length > 1 ? `, quote ${i + 1} of ${p.reading.length}` : ""}`, a.text ?? "", ...place(a.locator, a.comment)]),
-          ].join("\n"));
-        }
-        console.log("\nquote-mcp repair --id <n> applies the parser's reading to one, unless it's edited or verified; or change it on its admin page.");
-      }
-      const splits = r.repairs.filter((c) => c.after.length > 1);
-      console.log(`\nChecked ${r.checked}. ${dryRun ? "Would repair" : "Repaired"} ${r.repairs.length}, ${splits.length} of them split into ${splits.reduce((n, c) => n + c.after.length, 0)} quotes. ${r.forPerson.length} for a person. ${r.alreadyRight} already right.`);
+      console.log(repairReport(r, dryRun));
     }
     // With --json, stdout holds the JSON and nothing else.
     const report = json ? console.error : console.log;

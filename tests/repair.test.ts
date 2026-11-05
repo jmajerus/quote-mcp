@@ -3,7 +3,7 @@ import { auditOf, auditStore } from "../src/audit.js";
 import { type DB, openDb } from "../src/db.js";
 import { runImport } from "../src/import.js";
 import { searchQuotes } from "../src/queries.js";
-import { repairQuotes } from "../src/repair.js";
+import { repairQuotes, repairReport, wordChanges } from "../src/repair.js";
 
 let db: DB;
 let n = 0;
@@ -359,5 +359,54 @@ describe("running it", () => {
     const id = record({ text: "From a book." }, "{}", "corpus");
     expect(repairQuotes(db)).toMatchObject({ repairs: [], forPerson: [], checked: 0 });
     expect(quote(id).text).toBe("From a book.");
+  });
+});
+
+describe("the report", () => {
+  const LONG = Array.from({ length: 60 }, (_, i) => `word${i}`).join(" ");
+
+  it("says nothing about texts that read the same, spacing aside", () => {
+    expect(wordChanges("The same\n  words.", "The same words.")).toBeNull();
+  });
+
+  it("shows only the changed words and a few around them", () => {
+    const d = wordChanges(`As they argue, ${LONG} (p. 33)`, LONG)!;
+    expect(d).toContain("[-As they argue,-]");
+    expect(d).toContain("[-(p. 33)-]");
+    expect(d).toContain("…");
+    expect(d).not.toContain("word30");
+  });
+
+  it("shows a change in the middle, with what was added", () => {
+    expect(wordChanges("one two three", "one 2 three")).toBe("one [-two-] {+2+} three");
+  });
+
+  it("leaves out a flagged record that reads the same, and sums it up", () => {
+    const id = record({ text: "No marks at all here." }, span("No marks at all here."));
+    const text = repairReport(repairQuotes(db, { dryRun: true }), true);
+    expect(text).not.toContain(`Quote ${id}`);
+    expect(text).toContain(`No change, and nothing to do: 1 that are flagged but read the same either way (${id})`);
+    expect(text.split("No marks at all here.")).toHaveLength(1);
+  });
+
+  it("shows a repair as what differs: the page, and not the words again", () => {
+    const words = `${LONG} and the end.`;
+    const id = record({ text: words, comment: "(p, 40)" }, span(`"${words}" (p, 40)`));
+    const text = repairReport(repairQuotes(db, { dryRun: true }), true);
+    expect(text).toContain(`Quote ${id}`);
+    expect(text).toContain("page: none -> 40");
+    expect(text).toContain("comment: (p, 40) -> none");
+    expect(text).not.toContain("text:");
+    expect(text).not.toContain("word30");
+  });
+
+  it("shows a split's passages in full, with their pages and concepts", () => {
+    const id = merged();
+    db.prepare("INSERT INTO quote_tags (quote_id, tag, origin) VALUES (?, 'conflict', 'span')").run(id);
+    const text = repairReport(repairQuotes(db, { dryRun: true }), true);
+    expect(text).toContain(`Quote ${id} splits into 2 quotes, each with concepts: conflict`);
+    expect(text).toContain("1. page 224");
+    expect(text).toContain("2. page 225");
+    expect(text).toContain("A second hidden source of conflict");
   });
 });

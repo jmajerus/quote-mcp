@@ -159,3 +159,99 @@ export function repairQuotes(db: DB, { dryRun, only, actor = "repair" }: { dryRu
   }
   return result;
 }
+
+// --- The report ---------------------------------------------------------------------------------
+
+const squeeze = (text: string | null | undefined) => (text ?? "").replace(/\s+/g, " ").trim();
+const CONTEXT = 6;
+
+/**
+ * What changes between two texts, word by word: only the changed words and a few around them, [-removed-] {+added+}.
+ * Null when they read the same. A long stretch of unchanged words is cut down, so a person only reads what differs.
+ */
+export function wordChanges(before: string | null | undefined, after: string | null | undefined): string | null {
+  const a = squeeze(before);
+  const b = squeeze(after);
+  if (a === b) return null;
+  const x = a ? a.split(" ") : [];
+  const y = b ? b.split(" ") : [];
+  // Longest common run of words, from the end backward, so the walk below reads forward.
+  const best = Array.from({ length: x.length + 1 }, () => new Uint16Array(y.length + 1));
+  for (let i = x.length - 1; i >= 0; i--) for (let j = y.length - 1; j >= 0; j--) best[i][j] = x[i] === y[j] ? best[i + 1][j + 1] + 1 : Math.max(best[i + 1][j], best[i][j + 1]);
+  const out: string[] = [];
+  let same: string[] = [];
+  const flushSame = (end: boolean) => {
+    const first = !out.length;
+    if (first && same.length > CONTEXT) out.push("…", ...same.slice(-CONTEXT));
+    else if (end && same.length > CONTEXT) out.push(...same.slice(0, CONTEXT), "…");
+    else if (!first && !end && same.length > CONTEXT * 2) out.push(...same.slice(0, CONTEXT), "…", ...same.slice(-CONTEXT));
+    else out.push(...same);
+    same = [];
+  };
+  let i = 0;
+  let j = 0;
+  while (i < x.length || j < y.length) {
+    if (i < x.length && j < y.length && x[i] === y[j]) {
+      same.push(x[i]);
+      i++;
+      j++;
+      continue;
+    }
+    flushSame(false);
+    const removed: string[] = [];
+    const added: string[] = [];
+    while ((i < x.length || j < y.length) && !(i < x.length && j < y.length && x[i] === y[j])) {
+      if (j >= y.length || (i < x.length && best[i + 1][j] >= best[i][j + 1])) removed.push(x[i++]);
+      else added.push(y[j++]);
+    }
+    if (removed.length) out.push(`[-${removed.join(" ")}-]`);
+    if (added.length) out.push(`{+${added.join(" ")}+}`);
+  }
+  flushSame(true);
+  return out.join(" ");
+}
+
+const concepts = (list: string[]) => list.join(", ") || "none";
+const changed = (label: string, before: string | null | undefined, after: string | null | undefined) => (before ?? "") === (after ?? "") ? [] : [`  ${label}: ${before || "none"} -> ${after || "none"}`];
+
+/** The repair as a person reads it: only what differs, with everything that doesn't summed up in a line. */
+export function repairReport(r: RepairResult, dryRun: boolean | undefined): string {
+  const lines: string[] = [];
+  const singles = r.repairs.filter((c) => c.after.length === 1);
+  const splits = r.repairs.filter((c) => c.after.length > 1);
+  for (const c of singles) {
+    const [a] = c.after;
+    const text = wordChanges(c.before.text, a.text);
+    lines.push("", `Quote ${c.id}`,
+      ...(text ? [`  text: ${text}`] : []),
+      ...changed("page", c.before.locator, a.locator),
+      ...changed("comment", squeeze(c.before.comment), squeeze(a.comment)),
+      ...changed("status", c.before.status, a.status),
+      ...(c.removedConcepts.length ? [`  concepts removed, as another passage's: ${concepts(c.removedConcepts)}`] : []),
+      ...(c.addedConcepts.length ? [`  concepts added, from its own span: ${concepts(c.addedConcepts)}`] : []));
+  }
+  for (const c of splits) {
+    const kept = c.concepts.filter((t) => !c.removedConcepts.includes(t)).concat(c.addedConcepts);
+    lines.push("", `Quote ${c.id} splits into ${c.after.length} quotes, each with concepts: ${concepts(kept)}`);
+    c.after.forEach((a, i) => lines.push(`  ${i + 1}. page ${a.locator ?? "none"}${a.comment ? `, comment: ${squeeze(a.comment)}` : ""}`, `     ${squeeze(a.text)}`));
+    if (c.existingIds.length) lines.push(`  Already has its own quote, which gains these concepts: ${c.existingIds.join(", ")}`);
+  }
+  const unchanged = r.forPerson.filter((p) => p.reading.length === 1 && squeeze(p.reading[0].text) === squeeze(p.text) && (p.reading[0].locator ?? null) === p.locator && squeeze(p.reading[0].comment) === squeeze(p.comment));
+  const differs = r.forPerson.filter((p) => !unchanged.includes(p));
+  if (differs.length) {
+    lines.push("", "Left as they are: the parser would read these differently, but isn't sure, or a person has worked on them.");
+    for (const p of differs) {
+      lines.push("", `Quote ${p.id} (${p.why})`);
+      if (p.reading.length > 1) p.reading.forEach((a, i) => lines.push(`  ${i + 1}. page ${a.locator ?? "none"}: ${squeeze(a.text)}`));
+      else {
+        const text = wordChanges(p.text, p.reading[0]?.text);
+        lines.push(...(text ? [`  text: ${text}`] : []), ...changed("page", p.locator, p.reading[0]?.locator), ...changed("comment", squeeze(p.comment), squeeze(p.reading[0]?.comment)));
+      }
+    }
+  }
+  lines.push("", `${dryRun ? "Would change" : "Changed"} ${r.repairs.length} quotes: ${singles.length} corrected, ${splits.length} split. Every word of each source is kept.`);
+  if (unchanged.length) lines.push(`No change, and nothing to do: ${unchanged.length} that are flagged but read the same either way (${unchanged.map((p) => p.id).join(", ")}).`);
+  if (differs.length) lines.push(`Left as they are: ${differs.length}. Nothing happens to them unless you ask (quote-mcp repair --id <n>).`);
+  lines.push(`Already right: ${r.alreadyRight} of ${r.checked}.`);
+  return lines.join("\n").trim();
+}
