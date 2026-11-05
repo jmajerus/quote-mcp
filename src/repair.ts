@@ -11,8 +11,8 @@ import { quoteKey } from "./text.js";
  * other becomes a new quote with the same work, tags, and history, and an origin that links back to it.
  */
 
-export interface Repair { id: number; why: string[]; before: AuditRecord["stored"] & { status: string }; after: { text: string; locator: string | null; comment: string | null; status: string }[]; newIds: number[]; existingIds: number[]; removedConcepts: string[]; addedConcepts: string[] }
-export interface ForPerson { id: number; status: string; why: string; text: string; reading: { text?: string; locator?: string; comment?: string }[] }
+export interface Repair { id: number; why: string[]; source: { ref: string; words: string }; concepts: string[]; before: AuditRecord["stored"] & { status: string }; after: { text: string; locator: string | null; comment: string | null; status: string }[]; newIds: number[]; existingIds: number[]; removedConcepts: string[]; addedConcepts: string[] }
+export interface ForPerson { id: number; status: string; why: string; kinds: string[]; source: { ref: string; words: string }; concepts: string[]; text: string; locator: string | null; comment: string | null; reading: { text?: string; locator?: string; comment?: string }[] }
 export interface RepairResult { repairs: Repair[]; forPerson: ForPerson[]; checked: number; alreadyRight: number }
 
 const statusOf = (p: ParsedNote) => (p.grade === "C" ? "unparsed" : "transcribed");
@@ -65,7 +65,9 @@ export function repairQuotes(db: DB, { dryRun, only, actor = "repair" }: { dryRu
           result.alreadyRight++;
           continue;
         }
-        const list = (why: string) => result.forPerson.push({ id: r.id, status: r.status, why, text: r.stored.text, reading: excerpt(r) });
+        const source = { ref: `${r.origin.kind} ${r.origin.ref}`, words: r.plain };
+        const concepts = db.prepare("SELECT tag FROM quote_tags WHERE quote_id = ? ORDER BY tag").pluck().all(r.id) as string[];
+        const list = (why: string) => result.forPerson.push({ id: r.id, status: r.status, why, kinds: r.kinds, source, concepts, text: r.stored.text, locator: r.stored.locator, comment: r.stored.comment, reading: excerpt(r) });
         if (r.kinds.includes("passage_gone")) {
           list("passage_gone");
           continue;
@@ -110,7 +112,7 @@ export function repairQuotes(db: DB, { dryRun, only, actor = "repair" }: { dryRu
         }
         const keepOcr = (JSON.parse(row.flags) as string[]).includes("ocr_suspect") ? ["ocr_suspect"] : [];
         const after = parts.map((p, i) => ({ text: p.text ?? "", locator: (i === 0 ? locator : p.locator)?.value ?? null, comment: p.commentary ?? null, status: statusOf(p) }));
-        const repair: Repair = { id: r.id, why: r.kinds, before: { ...r.stored, status: r.status }, after, newIds: [], existingIds: [], removedConcepts: r.otherConcepts, addedConcepts: r.missingConcepts };
+        const repair: Repair = { id: r.id, why: r.kinds, source, concepts, before: { ...r.stored, status: r.status }, after, newIds: [], existingIds: [], removedConcepts: r.otherConcepts, addedConcepts: r.missingConcepts };
         // A concept from a Zotero note or another span goes; one the record got any other way, a person's, stays.
         for (const tag of r.otherConcepts) db.prepare("DELETE FROM quote_tags WHERE quote_id = ? AND tag = ? AND origin IN ('title', 'note', 'span')").run(r.id, tag);
         for (const tag of r.missingConcepts) db.prepare("INSERT OR IGNORE INTO quote_tags (quote_id, tag, concept_id, origin) VALUES (?, ?, ?, 'span')").run(r.id, tag, conceptOf(db, tag));

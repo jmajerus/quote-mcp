@@ -342,6 +342,19 @@ describe("running it", () => {
     expect(dump()).toBe(before);
   });
 
+  it("reports whole words and concepts, for repairs and for what's left to a person", () => {
+    const long = "A very long passage. ".repeat(30).trim();
+    const repaired = record({ text: `${long}" (p. 1)`, status: "unparsed" }, span(`"${long}" (p. 1)`));
+    const listed = record({ text: `"${long}` }, span(`"${long}`));
+    db.prepare("INSERT INTO quote_tags (quote_id, tag, origin) VALUES (?, 'conflict', 'span'), (?, 'power', 'span')").run(repaired, listed);
+    const r = repairQuotes(db, { dryRun: true });
+    expect(r.repairs[0]).toMatchObject({ id: repaired, concepts: ["conflict"], source: { ref: `drupal ${repaired}#1` } });
+    expect(r.repairs[0].source.words).toContain(long);
+    expect(r.forPerson[0]).toMatchObject({ id: listed, concepts: ["power"], text: `"${long}`, source: { ref: `drupal ${listed}#1` } });
+    expect(r.forPerson[0].source.words).toContain(long);
+    expect(r.forPerson[0].reading[0].text).toBe(`"${long}`);
+  });
+
   it("leaves a quote saved another way alone", () => {
     const id = record({ text: "From a book." }, "{}", "corpus");
     expect(repairQuotes(db)).toMatchObject({ repairs: [], forPerson: [], checked: 0 });
