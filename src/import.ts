@@ -243,6 +243,22 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
     for (const library of opts.sources) {
       const notes = db.prepare("SELECT key, version, parent_key, data FROM zotero_items WHERE library = ? AND item_type = 'note' AND deleted = 0 ORDER BY key")
         .all(library) as { key: string; version: number; parent_key: string | null; data: string }[];
+      /**
+       * A note that used to hold more passages than it does now. The quote isn't deleted, since a person may have worked on it
+       * and it may be the note that's wrong: it's flagged and recorded once, for a person to decide.
+       */
+      const passagesGone = (key: string, version: number, raw: string, kept: number) => {
+        const prefix = `${library}:${key}#`;
+        for (const o of db.prepare("SELECT ref, quote_id, raw FROM quote_origins WHERE kind = 'zotero-note' AND substr(ref, 1, ?) = ?").all(prefix.length, prefix) as { ref: string; quote_id: number; raw: string }[]) {
+          if (Number(o.ref.slice(prefix.length)) <= kept || o.raw === raw) continue;
+          const row = db.prepare("SELECT flags FROM quotes WHERE id = ?").get(o.quote_id) as { flags: string } | undefined;
+          if (row) {
+            db.prepare("UPDATE quotes SET flags = ?, updated_at = ?, updated_by = ? WHERE id = ?").run(JSON.stringify([...new Set([...(JSON.parse(row.flags) as string[]), "passage_gone"])]), stamp, actor, o.quote_id);
+            addHistory.run(o.quote_id, stamp, "source_changed", o.raw, raw, actor, `zotero-note ${o.ref} no longer holds this passage; the quote was left for a person`);
+          }
+          updateOrigin.run(String(version), raw, stamp, "zotero-note", o.ref);
+        }
+      };
       for (const n of notes) {
         const data = JSON.parse(n.data) as ApiItem["data"];
         const noteTags = (data.tags ?? []).map((t) => t.tag);
@@ -254,17 +270,26 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
           }
           upsert({ kind: "zotero-note", record: "note", ref: `${library}:${n.key}`, version: String(n.version), raw: data.note ?? "", ...margin,
             workId: noteWork(library, n.parent_key) });
+          passagesGone(n.key, n.version, data.note ?? "", 1);
           continue;
         }
         const parsed = parseNote(data.note ?? "", noteTags);
         if (parsed.kind !== "quote") {
           skip(`zotero note: ${parsed.kind}`);
+          passagesGone(n.key, n.version, data.note ?? "", 1);
           continue;
         }
         const titleOnly = parsed.titleTags.filter((t) => !noteTags.some((n2) => n2.toLowerCase() === t.toLowerCase()));
         upsert({ kind: "zotero-note", ref: `${library}:${n.key}`, version: String(n.version), raw: data.note ?? "", parsed,
           workId: noteWork(library, n.parent_key),
           tags: [...noteTags.map((tag) => ({ tag, origin: "note" })), ...titleOnly.map((tag) => ({ tag, origin: "title" }))] });
+        // A note with several passages, each with its own page: one quote each, sharing the note's tags.
+        for (const [i, more] of (parsed.more ?? []).entries()) {
+          upsert({ kind: "zotero-note", ref: `${library}:${n.key}#${i + 2}`, version: String(n.version), raw: data.note ?? "", parsed: more,
+            workId: noteWork(library, n.parent_key),
+            tags: [...noteTags.map((tag) => ({ tag, origin: "note" })), ...titleOnly.map((tag) => ({ tag, origin: "title" }))] });
+        }
+        passagesGone(n.key, n.version, data.note ?? "", 1 + (parsed.more?.length ?? 0));
       }
     }
 

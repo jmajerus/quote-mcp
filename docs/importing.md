@@ -17,6 +17,24 @@ it every 30 minutes, and `add_quote` brings the Zotero mirror up to date on the 
   and its tags.
 - Zotero notes are never changed.
 
+## The pattern quotes are typed to
+
+A quote is the words between one opening and one closing double mark, with quotations inside them in single marks, which are
+only ever content. A page in parentheses after the closing mark ends it, so one note can hold several quotes. Words before the
+opening mark, or after the page, are a comment.
+
+A note off the pattern is a typing slip or damage, so it isn't guessed at. It keeps its words, marks included, and is flagged
+for a person: `unbalanced_quotes` for a missing mark or double marks inside the quote, `no_marks` for none. One that may hold
+several quotes it can't divide (two quotes and no page, or a page inside a quote) is grade C.
+
+When a note that made several quotes later holds fewer passages, the quotes no longer in it aren't deleted: each is flagged
+`passage_gone`, with a history entry, for a person to decide.
+
+`quote-mcp audit` compares every typed quote with the raw it came from, by kind of problem, and changes nothing; `--kind` lists
+one kind, and `--id <n>` shows the raw, the record, and what the parser reads now, side by side. Parsing applies when a note is
+imported or changes, so a record already in the store stays as it is until it's repaired. Quotes saved by `add_quote` or the
+capture form have their own structure, and aren't checked.
+
 ## Forms the parser reads
 
 1. The old site's quote span (`span.quote`, its `title` giving concepts), including a list after it.
