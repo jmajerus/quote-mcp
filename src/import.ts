@@ -75,6 +75,50 @@ export function creators(data: ApiItem["data"]): string[] {
   return (authors.length ? authors : all).map((c) => c.name ?? [c.lastName, c.firstName].filter(Boolean).join(", "));
 }
 
+/** What matching a work needs, over the primary library's items as the mirror has them now. */
+export function workMatcher(db: DB, primary: string, stamp: string) {
+  const itemsOf = (library: string) => (db.prepare(`SELECT key, data FROM zotero_items WHERE library = ? AND deleted = 0 AND parent_key IS NULL
+    AND item_type NOT IN ('note', 'attachment', 'annotation')`).all(library) as { key: string; data: string }[])
+    .map((r) => ({ key: r.key, data: JSON.parse(r.data) as ApiItem["data"] }));
+  const index = new Map<string, { key: string; data: ApiItem["data"] }[]>();
+  const primaryByKey = new Map(itemsOf(primary).map((item) => [item.key, item]));
+  for (const item of primaryByKey.values()) {
+    const k = normalizedTitle(item.data.title);
+    if (k) index.set(k, [...(index.get(k) ?? []), item]);
+  }
+  /** Primary-library items with this title, narrowed when the title repeats: by author, by the full title, subtitle included, then by year. */
+  const candidates = (title: string, year: string | null, authors: string[]) => {
+    let hits = index.get(normalizedTitle(title)) ?? [];
+    const narrow = (keep: (h: (typeof hits)[number]) => boolean) => {
+      const kept = hits.filter(keep);
+      if (hits.length > 1 && kept.length) hits = kept;
+    };
+    narrow((h) => shareAuthor(authors, creators(h.data)));
+    narrow((h) => fullTitle(h.data.title) === fullTitle(title));
+    narrow((h) => !!year && yearOf(h.data.date) === year);
+    return hits;
+  };
+
+  const workByOrigin = db.prepare("SELECT work_id FROM work_origins WHERE kind = ? AND ref = ?");
+  const setOrigin = db.prepare(`INSERT INTO work_origins (kind, ref, work_id) VALUES (?, ?, ?)
+    ON CONFLICT (kind, ref) DO UPDATE SET work_id = excluded.work_id`);
+  const upsertZoteroWork = db.prepare(`
+    INSERT INTO works (title, authors, year, item_type, isbn, url, zotero_library, zotero_key, match, created_at, updated_at)
+    VALUES (@title, @authors, @year, @item_type, @isbn, @url, @library, @key, 'zotero', @stamp, @stamp)
+    ON CONFLICT (zotero_library, zotero_key) DO UPDATE SET title = excluded.title, authors = excluded.authors, year = excluded.year,
+      item_type = excluded.item_type, isbn = excluded.isbn, url = excluded.url, updated_at = excluded.updated_at
+    RETURNING id`);
+  const zoteroWork = (library: string, key: string, data: ApiItem["data"]): number => {
+    const { id } = upsertZoteroWork.get({
+      title: data.title ?? "(untitled)", authors: JSON.stringify(creators(data)), year: yearOf(data.date), item_type: data.itemType,
+      isbn: data.ISBN || null, url: data.url || null, library, key, stamp,
+    }) as { id: number };
+    setOrigin.run("zotero", `${library}:${key}`, id);
+    return id;
+  };
+  return { primaryByKey, candidates, zoteroWork, setOrigin, workByOrigin };
+}
+
 const ROLLBACK = new Error("dry run");
 
 export function runImport(db: DB, opts: ImportOptions): ImportStats {
@@ -116,45 +160,7 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
     const conceptOf = (tag: string) => concepts.get(tag.toLowerCase()) ?? null;
 
     // --- Works ------------------------------------------------------------------------------------
-    const itemsOf = (library: string) => (db.prepare(`SELECT key, data FROM zotero_items WHERE library = ? AND deleted = 0 AND parent_key IS NULL
-      AND item_type NOT IN ('note', 'attachment', 'annotation')`).all(library) as { key: string; data: string }[])
-      .map((r) => ({ key: r.key, data: JSON.parse(r.data) as ApiItem["data"] }));
-    const primaryIndex = new Map<string, { key: string; data: ApiItem["data"] }[]>();
-    const primaryByKey = new Map(itemsOf(opts.primary).map((item) => [item.key, item]));
-    for (const item of primaryByKey.values()) {
-      const k = normalizedTitle(item.data.title);
-      if (k) primaryIndex.set(k, [...(primaryIndex.get(k) ?? []), item]);
-    }
-    /** Primary-library items with this title, narrowed when the title repeats: by author, by the full title, subtitle included, then by year. */
-    const candidates = (title: string, year: string | null, authors: string[]) => {
-      let hits = primaryIndex.get(normalizedTitle(title)) ?? [];
-      const narrow = (keep: (h: (typeof hits)[number]) => boolean) => {
-        const kept = hits.filter(keep);
-        if (hits.length > 1 && kept.length) hits = kept;
-      };
-      narrow((h) => shareAuthor(authors, creators(h.data)));
-      narrow((h) => fullTitle(h.data.title) === fullTitle(title));
-      narrow((h) => !!year && yearOf(h.data.date) === year);
-      return hits;
-    };
-
-    const workByOrigin = db.prepare("SELECT work_id FROM work_origins WHERE kind = ? AND ref = ?");
-    const setOrigin = db.prepare(`INSERT INTO work_origins (kind, ref, work_id) VALUES (?, ?, ?)
-      ON CONFLICT (kind, ref) DO UPDATE SET work_id = excluded.work_id`);
-    const upsertZoteroWork = db.prepare(`
-      INSERT INTO works (title, authors, year, item_type, isbn, url, zotero_library, zotero_key, match, created_at, updated_at)
-      VALUES (@title, @authors, @year, @item_type, @isbn, @url, @library, @key, 'zotero', @stamp, @stamp)
-      ON CONFLICT (zotero_library, zotero_key) DO UPDATE SET title = excluded.title, authors = excluded.authors, year = excluded.year,
-        item_type = excluded.item_type, isbn = excluded.isbn, url = excluded.url, updated_at = excluded.updated_at
-      RETURNING id`);
-    const zoteroWork = (library: string, key: string, data: ApiItem["data"]): number => {
-      const { id } = upsertZoteroWork.get({
-        title: data.title ?? "(untitled)", authors: JSON.stringify(creators(data)), year: yearOf(data.date), item_type: data.itemType,
-        isbn: data.ISBN || null, url: data.url || null, library, key, stamp,
-      }) as { id: number };
-      setOrigin.run("zotero", `${library}:${key}`, id);
-      return id;
-    };
+    const { primaryByKey, candidates, zoteroWork, setOrigin, workByOrigin } = workMatcher(db, opts.primary, stamp);
 
     /** The work for an old-site work: its Zotero item when exactly one matches, else a work of its own. */
     const drupalWork = (w: DrupalWork): number => {
