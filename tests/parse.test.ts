@@ -26,10 +26,37 @@ describe("legacy span", () => {
     expect(p).toMatchObject({ locator: { value: "209" }, chapterAuthor: "Richard L. Daft and Robert H. Lengel", flags: ["chapter_author"] });
   });
 
-  it("flags double marks inside a quote, keeping the note's words as they are (XM4UMV2H)", () => {
+  it("keeps a nested quotation in double marks as content (XM4UMV2H)", () => {
     const p = parseNote(`<p><span class="quote" title="ideology"> "In fact, the effect is actually <em>increasing</em> in strength, as workers disavow the "American Dream" of success." </span></p>`, ["ideology"]);
+    expect(p.flags).not.toContain("unbalanced_quotes");
+    expect(p.text).toBe(`In fact, the effect is actually *increasing* in strength, as workers disavow the "American Dream" of success.`);
+  });
+
+  it("flags inner double marks that don't pair, keeping the note's words as they are", () => {
+    const p = parseNote(`<span class="quote">"He said "this, and never closed it." (p. 3)</span>`);
     expect(p.flags).toContain("unbalanced_quotes");
-    expect(p.text).toBe(`"In fact, the effect is actually *increasing* in strength, as workers disavow the "American Dream" of success."`);
+    expect(p.text).toBe(`"He said "this, and never closed it."`);
+    expect(p.locator?.value).toBe("3");
+  });
+
+  it("doesn't read a remark that quotes something as another quote (#342)", () => {
+    const p = parseNote(`<span class="quote">"Every employee is family." (p. 165)\n"The right person, continuously." This reminds me of Deming: "A moral obligation." ([bib]Deming1982[/bib], p. 115)</span>`);
+    expect(p.more).toBeUndefined();
+    expect(p.text).toBe("Every employee is family.");
+    expect(p.commentary).toContain("This reminds me of Deming");
+  });
+
+  it("keeps a closing mark inside a footnote, flagged, rather than take it for the quote's (#251)", () => {
+    const p = parseNote(`<span class="quote">"The manager relies on punishment.[fn]This reminded me: "The beatings will continue."[/fn] (p. 15)</span>`);
+    expect(p.text).toBe(`"The manager relies on punishment.[fn]This reminded me: "The beatings will continue."[/fn]`);
+    expect(p.locator?.value).toBe("15");
+    expect(p.flags).toContain("unbalanced_quotes");
+  });
+
+  it("flags marks before and inside, when nothing says which are the quote's (#7)", () => {
+    const p = parseNote(`<span class="quote">In the book, subtitled "Letting Go", the authors say "it is counterproductive." (p. 69)</span>`);
+    expect(p.flags).toContain("unbalanced_quotes");
+    expect(p.text).toBe(`In the book, subtitled "Letting Go", the authors say "it is counterproductive."`);
   });
 
   it("keeps single marks as content", () => {

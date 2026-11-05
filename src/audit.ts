@@ -11,7 +11,7 @@ export const AUDIT_KINDS = {
   several_passages: "several passages in one record, each with its own page",
   held: "may hold several quotes, and can't be split without a person",
   page_in_text: "a page reference left in the text",
-  marks_off_pattern: "marks off the pattern: an opening or closing mark missing, or double marks inside the quote",
+  marks_off_pattern: "marks off the pattern: an opening or closing mark missing, or double marks inside the quote that don't pair",
   no_marks: "no quotation marks of its own",
   lead_in: "words before the opening mark stored in the text",
   comment_differs: "comment isn't what the words outside the marks say",

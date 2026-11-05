@@ -19,14 +19,14 @@ it every 30 minutes, and `add_quote` brings the Zotero mirror up to date on the 
 
 ## The pattern quotes are typed to
 
-A quote is the words between one opening and one closing double mark, with quotations inside them in single marks, which are
-only ever content. A concept belongs to its span, and covers every quote in it: grouping by concept was the convention, so a span
+A quote is the words between one opening and one closing double mark. Quotations inside them are in single marks, or sometimes
+double ones, which are content so long as they pair. A concept belongs to its span, and covers every quote in it: grouping by concept was the convention, so a span
 can hold several quotes, with or without pages. A page in parentheses ends a quote, and belongs to that quote alone. With no closing mark before it, the page
 stands in for the mark, and the record is flagged `unbalanced_quotes`. Words before the
 opening mark, or after the page, are a comment.
 
 A note off the pattern is a typing slip or damage, so it isn't guessed at. It keeps its words, marks included, and is flagged
-for a person: `unbalanced_quotes` for a missing mark or double marks inside the quote, `no_marks` for none. One that may hold
+for a person: `unbalanced_quotes` for a missing mark or inner double marks that don't pair, `no_marks` for none. One that may hold
 several quotes it can't divide (two quotes and no page, or a page inside a quote) is grade C.
 
 When a note that made several quotes later holds fewer passages, the quotes no longer in it aren't deleted: each is flagged

@@ -168,6 +168,12 @@ describe("repairing one record", () => {
     expect(quote(id)).toMatchObject({ text: "The same words, and a stray comment.", comment: "stray", locator: "208", locator_kind: "kindle" });
   });
 
+  it("takes a page out of a quote with a nested quotation, which stays (#469)", () => {
+    const id = record({ text: `Alarm has a "common effect" of depression. (p. 33)` }, span(`"Alarm has a "common effect" of depression. (p. 33)"`));
+    repairQuotes(db);
+    expect(quote(id)).toMatchObject({ text: `Alarm has a "common effect" of depression.`, locator: "33" });
+  });
+
   it("doesn't take away a page that another source gave (#353)", () => {
     const id = record({ text: "The same words here.", locator: "15" }, span(`"The same words here."`));
     expect(repairQuotes(db)).toMatchObject({ repairs: [] });
@@ -275,7 +281,7 @@ describe("what it leaves for a person", () => {
   it.each([
     ["an opening mark with no closing mark (#243)", `"An unclosed quote.`, "marks_off_pattern"],
     ["a closing mark with no opening mark (#45)", `A closing mark only." (p. 33)`, "marks_off_pattern"],
-    ["double marks inside a quote (#469)", `"With a "phrase" inside." (p. 3)`, "marks_off_pattern"],
+    ["inner double marks that don't pair", `"With a "phrase inside." (p. 3)`, "marks_off_pattern"],
     ["no marks (#521)", "No marks at all.", "no_marks"],
     ["a page inside a quote (#815)", `"A page (p. 3) inside this, then more." (p. 9)`, "held"],
   ])("lists %s", (_name, words, why) => {

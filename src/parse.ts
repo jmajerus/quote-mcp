@@ -3,8 +3,8 @@ import { type HTMLElement, type Node, NodeType, parse } from "node-html-parser";
 /**
  * Reads one Zotero note and returns the quote it holds as fields: text, locator, chapter author, the
  * concepts in the legacy `title` attribute, and flags for anything a person should look at. These quotes
- * were typed to one pattern: the words between one opening and one closing double mark, with quotations
- * inside them in single marks, which are only ever content. A page in parentheses ends the quote, and stands
+ * were typed to one pattern: the words between one opening and one closing double mark. Quotations inside
+ * them are in single marks, or sometimes double ones, which are content so long as they pair. A page in parentheses ends the quote, and stands
  * in for a closing mark that's missing (which is flagged), so a note can hold several (the others are in `more`).
  * Words outside the marks are a comment.
  * Notes come in four forms:
@@ -239,8 +239,14 @@ export function parseNote(html: string, tags: string[] = []): ParsedNote {
 
 type Read = Pick<ParsedNote, "text" | "locator" | "chapterAuthor" | "commentary" | "flags">;
 
-/** A double mark inside a quote's words, which the pattern doesn't allow. */
 const hasDoubleMark = (body: string) => /["“”]/.test(body);
+/** Whether the double marks inside a quote's words pair up, as a quotation inside it does. Single marks are apostrophes as often as not. */
+function innerMarksPair(body: string): boolean {
+  const count = (mark: string) => body.split(mark).length - 1;
+  return count('"') % 2 === 0 && count("“") === count("”");
+}
+/** Off the pattern: marks inside that don't pair, or marks both before and inside, when nothing says which are the quote's. */
+const offPattern = (lead: string, body: string) => !innerMarksPair(body) || (!!lead && !/^\*+$/.test(lead) && hasDoubleMark(body));
 
 const joined = (...parts: (string | undefined)[]) => parts.map((p) => p?.trim()).filter(Boolean).join("\n\n") || undefined;
 
@@ -302,7 +308,8 @@ function readQuotes(raw: string): { quotes: Read[]; unsure?: undefined } | { quo
       from = end.index + end[0].length;
       continue;
     }
-    if (hasDoubleMark(body)) {
+    // A closing mark just before a footnote's end closes something in the footnote, not the quote (#251, #462).
+    if (offPattern(part.slice(0, opening).trim(), body) || /\[\/fn\]$/.test(end[2] ?? "")) {
       // Off the pattern, so nothing says which marks are the quote's: its words stay as they are.
       quotes.push({ text: `${part.slice(0, opening)}${part.slice(opening + earlier.length)}${close}${end[2] ?? ""}`.trim(), ...place, flags: ["unbalanced_quotes"] });
     } else {
@@ -317,7 +324,8 @@ function readQuotes(raw: string): { quotes: Read[]; unsure?: undefined } | { quo
   // Another quote after the last page, in its own marks on its own line, with no page of its own.
   if (OPEN.has(rest[0] ?? "")) {
     const after = readWithoutPage(rest);
-    if (after.quotes && !after.quotes.some((q) => q.flags.includes("unbalanced_quotes") || q.flags.includes("no_marks"))) return { quotes: [...quotes, ...after.quotes] };
+    // Marks inside would make it a remark that quotes something, as often as a quote (#342).
+    if (after.quotes && !after.quotes.some((q) => q.flags.includes("unbalanced_quotes") || q.flags.includes("no_marks") || hasDoubleMark(q.text ?? ""))) return { quotes: [...quotes, ...after.quotes] };
   }
   if (rest) {
     const last = quotes[quotes.length - 1];
@@ -342,11 +350,11 @@ function readWithoutPage(text: string): { quotes: Read[]; unsure?: undefined } |
   if (/["”]\s*\n+\s*["“]/.test(body)) {
     // Quotes grouped under a concept, in their own marks, with no page.
     const lines = words.trim().split(/\n+/).map((l) => l.trim()).filter(Boolean);
-    const clean = lines.every((l) => OPEN.has(l[0]) && CLOSE.has(l.at(-1) ?? "") && !hasDoubleMark(l.slice(1, -1)));
+    const clean = lines.every((l) => OPEN.has(l[0]) && CLOSE.has(l.at(-1) ?? "") && innerMarksPair(l.slice(1, -1)));
     if (clean && !place.locator) return { quotes: lines.map((l) => ({ text: l.slice(1, -1).trim(), flags: [] })) };
     return { unsure: "a closing mark then an opening mark, not each a clean quote: several quotes?" };
   }
-  if (hasDoubleMark(body)) return { quotes: [{ text: words.trim(), ...place, flags: ["unbalanced_quotes"] }] };
+  if (offPattern(words.slice(0, opening).trim(), body)) return { quotes: [{ text: words.trim(), ...place, flags: ["unbalanced_quotes"] }] };
   const lead = words.slice(0, opening).trim();
   const leadEmphasis = /^\*+$/.test(lead);
   let rest = words.slice(closing + 1).trim();
