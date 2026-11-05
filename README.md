@@ -12,7 +12,7 @@ quote-atlas, whose concept maps open the quotes tagged with each concept.
 
 ## What it does
 
-- **Import.** Reads quote notes from Zotero and the old site, grades each, and flags what to check: a missing
+- **Import.** Reads quote notes from Zotero, grades each, and flags what to check: a missing
   page, a possible OCR error, a work not yet in Zotero. Zotero notes tagged `margin` become notes of your own.
 - **Search and cite.** Full-text search over what quotes say, by concept (with narrower concepts), set, author,
   or work, and a citation with a real locator: CSL JSON, the Better BibTeX citekey, and a Pandoc citation.

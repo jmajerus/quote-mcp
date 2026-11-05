@@ -1,16 +1,5 @@
 import { decodeHTMLStrict } from "entities";
 
-/**
- * A value read from outside as text: numbers and buffers as what they say, empty as null. A database column's type
- * isn't ours to assume, so anything else throws, rather than reading as "nothing there".
- */
-export function textOf(value: unknown): string | null {
-  if (value === null || value === undefined) return null;
-  const text = typeof value === "string" ? value : typeof value === "number" || typeof value === "bigint" ? String(value) : Buffer.isBuffer(value) ? value.toString("utf8") : undefined;
-  if (text === undefined) throw new Error(`Expected text, and found ${Object.prototype.toString.call(value)}.`);
-  return text.trim() || null;
-}
-
 /** Words compared loosely: case, accents, punctuation, HTML escapes (a title or name pasted from a web page can keep them), a leading article, and & against "and" don't count. */
 function loose(text: string): string {
   return decodeHTMLStrict(text).toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/&/g, " and ")

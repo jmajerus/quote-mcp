@@ -8,10 +8,11 @@ import { runImport } from "../src/import.js";
 import { getQuote, overview, searchQuotes, worklist } from "../src/queries.js";
 import { renderAdmin } from "../src/web.js";
 import { drupal, makeStore } from "./fixture.js";
+import { importWithSite } from "./seed.js";
 
 let db: DB;
 const byText = (start: string) => db.prepare("SELECT id FROM quotes WHERE text LIKE ?").pluck().get(`${start}%`) as number;
-const reimport = () => runImport(db, { drupal, primary: "users/1", sources: ["users/1"], dictionary: new Set(["mobbing"]) });
+const reimport = () => importWithSite(db, { drupal, primary: "users/1", sources: ["users/1"], dictionary: new Set(["mobbing"]) });
 const tags = (id: number) => db.prepare("SELECT tag FROM quote_tags WHERE quote_id = ? ORDER BY tag").pluck().all(id) as string[];
 const fails = (f: () => unknown, pattern: RegExp) => {
   expect(f).toThrow(ToolError);

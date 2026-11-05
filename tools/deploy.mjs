@@ -12,7 +12,7 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const HOST = process.env.QUOTE_DEPLOY_HOST ?? "authoring@quote-mcp.localdomain";
 const ASKPASS = path.join(root, "tools", "askpass.mjs");
 
-const USAGE = `Usage: npm run deploy -- [--provision | --env | --import-drupal] [--skip-tests]
+const USAGE = `Usage: npm run deploy -- [--provision | --env] [--skip-tests]
 
   (no flag)        build, test, install this checkout as a new release, restart, health-check, roll
                    back on failure, and record the branch and commit in /var/lib/quote-mcp/deployed.json
@@ -21,9 +21,8 @@ const USAGE = `Usage: npm run deploy -- [--provision | --env | --import-drupal] 
   --provision      one-time setup of the LXC (Node 22, build tools, word list, quote user, directories)
   --env            copy the server's settings from .env into its /etc/quote-mcp/env (mode 0640) and
                    restart: QUOTE_ZOTERO_LIBRARY, QUOTE_ZOTERO_API_KEY, QUOTE_ZOTERO_SOURCES,
-                   QUOTE_ZOTERO_API, QUOTE_DRUPAL_URL, QUOTE_D1_PROXY_URL, and QUOTE_D1_PROXY_TOKEN. Only those set
+                   QUOTE_ZOTERO_API, QUOTE_D1_PROXY_URL, and QUOTE_D1_PROXY_TOKEN. Only those set
                    in .env are replaced; the server's others are left as they are
-  --import-drupal  run an import on the server with the old site included (the timer leaves it out)
   --skip-tests     deploy without running the test suite first
 
 Needs AUTHORING_DEPLOY_PASSWORD in .env.`;
@@ -71,7 +70,7 @@ async function provision() {
  * it) never deletes the server's.
  */
 async function pushEnv() {
-  const all = ["QUOTE_ZOTERO_LIBRARY", "QUOTE_ZOTERO_API_KEY", "QUOTE_ZOTERO_SOURCES", "QUOTE_ZOTERO_API", "QUOTE_DRUPAL_URL", "QUOTE_D1_PROXY_URL", "QUOTE_D1_PROXY_TOKEN"];
+  const all = ["QUOTE_ZOTERO_LIBRARY", "QUOTE_ZOTERO_API_KEY", "QUOTE_ZOTERO_SOURCES", "QUOTE_ZOTERO_API", "QUOTE_D1_PROXY_URL", "QUOTE_D1_PROXY_TOKEN"];
   const library = process.env.QUOTE_ZOTERO_LIBRARY ?? "";
   if (library && !/^(users|groups)\/\d+$/.test(library)) throw new Error(`QUOTE_ZOTERO_LIBRARY should be "users/<user id>" or "groups/<group id>", not "${library}".`);
   const names = all.filter((n) => process.env[n]?.trim());
@@ -98,10 +97,6 @@ done
 journalctl -u quote-mcp.service -n 20 --no-pager || true
 echo "quote-mcp didn't answer /health within 20 seconds of the restart." >&2
 exit 1`);
-}
-
-async function importDrupal() {
-  await runAsRoot(`set -euo pipefail\n${asQuote("import")}`);
 }
 
 async function deploy({ skipTests }) {
@@ -189,7 +184,7 @@ trap rollback EXIT
 ln -sfn "$release" /opt/quote-mcp/current.new && mv -T /opt/quote-mcp/current.new /opt/quote-mcp/current
 install_units "$release"
 if [ ! -f "$QUOTE_DB" ] || [ -f "$first_import" ]; then
-  echo "No store yet: running the first import, the old site included."
+  echo "No store yet: running the first import."
   touch "$first_import"
   ${asQuote("import")}
   rm -f "$first_import"
@@ -229,13 +224,12 @@ async function writeDeployed(record) {
 
 async function main(argv) {
   if (argv.includes("--help") || argv.includes("-h")) return console.log(USAGE);
-  const known = new Set(["--provision", "--env", "--import-drupal", "--skip-tests"]);
+  const known = new Set(["--provision", "--env", "--skip-tests"]);
   const unknown = argv.find((a) => !known.has(a));
   if (unknown) throw new Error(`Unknown argument ${unknown}.\n\n${USAGE}`);
   if (!password) throw new Error(`AUTHORING_DEPLOY_PASSWORD is not set.\n\n${USAGE}`);
   if (argv.includes("--provision")) return provision();
   if (argv.includes("--env")) return pushEnv();
-  if (argv.includes("--import-drupal")) return importDrupal();
   return deploy({ skipTests: argv.includes("--skip-tests") });
 }
 

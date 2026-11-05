@@ -7,7 +7,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type DB, openDb } from "../src/db.js";
-import type { DrupalSite } from "../src/drupal.js";
+import { type DrupalSite, importWithSite } from "./seed.js";
 import { runImport } from "../src/import.js";
 import { citeQuote, ftsQuery, getConcept, searchQuotes } from "../src/queries.js";
 import { holdingsCounts } from "../src/holdings.js";
@@ -47,7 +47,7 @@ beforeAll(async () => {
   db.prepare("INSERT INTO zotero_items (library, key, version, item_type, parent_key, deleted, data) VALUES (?, ?, 1, 'note', ?, 0, ?)").run(PRIMARY, "MARGIN01", "MOBB0001", JSON.stringify({
     itemType: "note", parentItem: "MOBB0001", note: "<p>Compare Leymann's forty-five behaviours, which she leaves out. (p. 41)</p>", tags: [{ tag: "margin" }],
   }));
-  runImport(db, { drupal, primary: PRIMARY, sources: [PRIMARY] });
+  importWithSite(db, { drupal, primary: PRIMARY, sources: [PRIMARY] });
   // The map's folder, beside a file it must never serve, and a symlink pointing at that file.
   mapRoot = fs.mkdtempSync(path.join(os.tmpdir(), "quote-mcp-map-"));
   const mapDir = path.join(mapRoot, "map");

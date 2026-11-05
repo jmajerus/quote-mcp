@@ -238,18 +238,6 @@ export function noteText(html: string): string {
   return joinBlocks(blocks(parse(html)));
 }
 
-/**
- * Splits a note that holds several quote spans, as the old site's notes do, into one piece of HTML per
- * quote, plus whatever text sits outside every span (a cross-reference, a remark).
- */
-export function splitQuotes(html: string): { quotes: { html: string; concepts: string[] }[]; outside: string } {
-  const root = parse(html);
-  const spans = quoteSpans(root);
-  const quotes = spans.map((s) => ({ html: s.toString(), concepts: uniqueTerms(splitTerms(s.getAttribute("title") ?? "")) }));
-  for (const s of spans) s.remove();
-  return { quotes, outside: joinBlocks(blocks(root)) };
-}
-
 /** A: clean, apart from a missing locator. B: extracted, with flags. C: needs a person to split it. */
 export function gradeOf(note: ParsedNote): Grade {
   if (note.problems.length) return "C";

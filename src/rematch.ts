@@ -89,32 +89,3 @@ export function rematchWorks(db: DB, { primary, dryRun, actor = "rematch" }: { p
   });
   return result;
 }
-
-export interface YearsResult { read: number; withYear: number; filled: number; alreadySet: number; matched: number; notHere: number }
-
-/**
- * Saves the old site's years on the works that keep their own details: an unmatched or ambiguous work, whose year is
- * empty. A work matched to Zotero has its item's year, and a year already there stays. Safe to run again.
- */
-export function takeOldSiteYears(db: DB, years: { nid: number; year: string | null }[], { dryRun }: { dryRun?: boolean } = {}): YearsResult {
-  const result: YearsResult = { read: years.length, withYear: years.filter((y) => y.year).length, filled: 0, alreadySet: 0, matched: 0, notHere: 0 };
-  // None at all means the query or the column has changed, not that the site has none.
-  if (years.length && !result.withYear) throw new Error(`None of the old site's ${years.length} works has a year it could read, so nothing was saved. Has a column changed?`);
-  const stamp = now();
-  transact(db, dryRun, () => {
-    const find = db.prepare("SELECT w.id, w.match, w.year FROM work_origins o JOIN works w ON w.id = o.work_id WHERE o.kind = 'drupal' AND o.ref = ?");
-    const fill = db.prepare("UPDATE works SET year = ?, updated_at = ? WHERE id = ?");
-    for (const { nid, year } of years) {
-      if (!year) continue;
-      const w = find.get(String(nid)) as { id: number; match: string; year: string | null } | undefined;
-      if (!w) result.notHere++;
-      else if (w.match === "zotero") result.matched++;
-      else if (w.year) result.alreadySet++;
-      else {
-        fill.run(year, stamp, w.id);
-        result.filled++;
-      }
-    }
-  });
-  return result;
-}

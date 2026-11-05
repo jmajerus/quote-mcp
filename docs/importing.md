@@ -3,20 +3,18 @@
 Where quote-mcp's records come from, and how they're read. The design, and what the survey of the sources
 found, are in [PLAN.md](../PLAN.md) (its Survey, Import, and Notes sections).
 
-`npm run import` syncs the Zotero mirror, reads the old site, and imports. It's safe to run again: an
-unchanged note changes nothing, and a quote edited in quote-mcp, or checked against its Calibre book, is left alone. On the server a timer runs it
-every 30 minutes without the old site (`import --no-drupal`), and `add_quote` brings the Zotero mirror up to date on the spot for a book filed since then; Deploy Quotes → Import with the old site runs it
-with the old site.
+`npm run import` syncs the Zotero mirror and imports quote notes. It's safe to run again: an unchanged note changes
+nothing, and a quote edited in quote-mcp, or checked against its Calibre book, is left alone. On the server a timer runs
+it every 30 minutes, and `add_quote` brings the Zotero mirror up to date on the spot for a book filed since then.
 
 ## Sources
 
-- **The old site** (`QUOTE_DRUPAL_URL`, read-only): its concept vocabulary and relations, its works, the quotes
-  in each work's notes (each quote span's `title` gives its concepts), and the Quotes module's standalone
-  quotes.
+- **The old site**, once: the defunct workcreatively.org Drupal site gave the first concepts, works, and quotes, in a
+  one-time import. Its code is gone from this build; its records keep their `drupal` and `drupal-quote` origins.
 - **Zotero notes** in `QUOTE_ZOTERO_LIBRARY`, and in any libraries in `QUOTE_ZOTERO_SOURCES`. The mirror syncs
   by Zotero's library version, so only what changed is fetched, and each note's HTML is kept, so a parser
-  change re-runs without fetching again. A quote already imported from the old site gains the Zotero note as
-  a second origin and its tags.
+  change re-runs without fetching again. A quote already in the store gains the Zotero note as a second origin
+  and its tags.
 - Zotero notes are never changed.
 
 ## Forms the parser reads
@@ -51,7 +49,7 @@ inside a word, repeated words.
 
 ## Works
 
-Each quote cites a work. The old site is defunct, and its import was meant as one pass, so works are matched from the store with `rematch`, not by importing again.
+Each quote cites a work. Works are matched from the store with `rematch`; the timer's import doesn't move them.
 
 A work matches a primary-library item by its short title: case, accents, punctuation, HTML escapes, a leading article, `&`
 against "and", and any subtitle don't count. When several items have that title, they're narrowed by a shared author surname,
@@ -69,11 +67,7 @@ To match works again, after filing or merging items in Zotero:
 
 It brings each library's mirror up to date, except in a dry run, then checks each work that isn't matched and each
 whose item has gone. A move adds a `work_matched` history entry per quote. It also lists each match whose item shares no author
-with the work, or has none, since it may be another book. The timer's import doesn't match works, and a work made by `add_quote`
-is matched this way too.
-
-`quote-mcp take-old-site-years` saved the old site's years on works that keep their own details, which is what lets the year
-tell editions apart. It reads nothing else from the old site, and is safe to run again.
+with the work, or has none, since it may be another book. A work made by `add_quote` is matched this way too.
 
 ## Margin notes
 

@@ -20,12 +20,6 @@
       "problemMatcher": []
     },
     {
-      "label": "Deploy Quotes: import old site",
-      "type": "shell",
-      "command": "npm run deploy -- --import-drupal",
-      "problemMatcher": []
-    },
-    {
       "label": "Deploy Quotes: public Worker",
       "type": "npm",
       "script": "worker:deploy",
