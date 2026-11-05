@@ -151,6 +151,29 @@ describe("import", () => {
       expect(normalizedTitle("?: Why")).toBe("why");
     });
 
+    it("leaves off what booksellers add at a title's end, but not a parenthetical inside it", () => {
+      expect(normalizedTitle("Anna Karenina (Signet Classics)")).toBe("anna karenina");
+      expect(normalizedTitle("Othello (Signet Classic Shakespeare)")).toBe("othello");
+      expect(normalizedTitle("Developing People (2nd Edition) (Series)")).toBe("developing people");
+      expect(normalizedTitle("Work (2nd Edition): Why")).toBe("work");
+      expect(normalizedTitle("Work (Series: Vol. 1)")).toBe("work");
+      expect(normalizedTitle("Gulag: An Experiment (P.S.)")).toBe("gulag");
+      expect(normalizedTitle("Work (and Play) Today")).toBe("work and play today");
+      expect(normalizedTitle("(Untitled)")).toBe("untitled");
+    });
+
+    it("keeps editions distinct in the full title, which narrows repeated titles", () => {
+      expect(fullTitle("Work (2nd Edition)")).not.toBe(fullTitle("Work (3rd Edition)"));
+    });
+
+    it("reads a catalogue's trailing article as a leading one", () => {
+      for (const t of ["One Who Is Not Busy, The: Connecting", "The One Who Is Not Busy: Connecting", "One Who Is Not Busy, The"]) expect(normalizedTitle(t)).toBe("one who is not busy");
+      expect(fullTitle("One Who Is Not Busy, The: Connecting")).toBe(fullTitle("The One Who Is Not Busy: Connecting"));
+      expect(normalizedTitle("Art of War, An: Notes")).toBe("art of war");
+      expect(normalizedTitle("Bread, A Memoir")).toBe("bread a memoir");
+      expect(normalizedTitle("Love, The Way We Live")).toBe("love the way we live");
+    });
+
     it("compares authors by surname, in either order of name", () => {
       expect(shareAuthor(["Morgan, Gareth"], ["Gareth Morgan"])).toBe(true);
       expect(shareAuthor(["Morgan, G."], ["Other, A.", "Morgan, Gareth"])).toBe(true);

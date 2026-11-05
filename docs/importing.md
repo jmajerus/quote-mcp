@@ -52,7 +52,7 @@ inside a word, repeated words.
 Each quote cites a work. Works are matched from the store with `rematch`; the timer's import doesn't move them.
 
 A work matches a primary-library item by its short title: case, accents, punctuation, HTML escapes, a leading article, `&`
-against "and", and any subtitle don't count. When several items have that title, they're narrowed by a shared author surname,
+against "and", a trailing article ("One Who Is Not Busy, The"), any subtitle, and a parenthetical at the end ("(Signet Classics)") don't count. When several items have that title, they're narrowed by a shared author surname,
 then by the full title, then by year. One left is the match. Several is `ambiguous` (cite_quote lists each edition), and none
 is `unmatched`, cited from its own details.
 

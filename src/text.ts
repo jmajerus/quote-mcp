@@ -12,15 +12,23 @@ function loose(text: string): string {
  */
 const SUBTITLE = /[:?!]\s|\s[-–—]\s|—|(?<=[\p{L}\d]{4})\.\s/u;
 
-/** A title compared loosely, with its subtitle left off. */
+/** A library catalogue's "One Who Is Not Busy, The: Connecting…" as "The One Who Is Not Busy: Connecting…". */
+const articleFirst = (title: string) => title.replace(/^(.+?),\s*(the|an?)(?=\s*(?:[:?!]|$))/i, "$2 $1");
+
+/** A title without what booksellers add at its end: "(Signet Classics)", "(2nd Edition)". */
+const withoutTrailingNotes = (title: string) => title.replace(/(?:\s*\([^()]*\))+\s*$/, "");
+
+/** A title compared loosely, with its subtitle and any trailing parenthetical left off. */
 export function normalizedTitle(title: string | null | undefined): string {
-  const whole = decodeHTMLStrict(String(title ?? ""));
-  return loose(whole.split(SUBTITLE)[0]) || loose(whole);
+  const whole = articleFirst(decodeHTMLStrict(String(title ?? "")));
+  // Before the subtitle's taken off, since a note can hold a colon; and after, for "Work (2nd Edition): Why".
+  const short = withoutTrailingNotes(withoutTrailingNotes(whole).split(SUBTITLE)[0]);
+  return loose(short) || loose(whole);
 }
 
-/** A whole title, subtitle included, compared loosely: for telling editions apart once short titles collide. */
+/** A whole title, subtitle and parentheticals included, compared loosely: for telling editions apart once short titles collide. */
 export function fullTitle(title: string | null | undefined): string {
-  return loose(String(title ?? ""));
+  return loose(articleFirst(decodeHTMLStrict(String(title ?? ""))));
 }
 
 /** The surnames in a list of authors: what's before the comma in "Last, First", else the last word. */
