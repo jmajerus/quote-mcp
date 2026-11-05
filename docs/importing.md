@@ -20,7 +20,8 @@ it every 30 minutes, and `add_quote` brings the Zotero mirror up to date on the 
 ## The pattern quotes are typed to
 
 A quote is the words between one opening and one closing double mark, with quotations inside them in single marks, which are
-only ever content. A page in parentheses ends it, so one note can hold several quotes. With no closing mark before it, the page
+only ever content. A concept belongs to its span, and covers every quote in it: grouping by concept was the convention, so a span
+can hold several quotes, with or without pages. A page in parentheses ends a quote, and belongs to that quote alone. With no closing mark before it, the page
 stands in for the mark, and the record is flagged `unbalanced_quotes`. Words before the
 opening mark, or after the page, are a comment.
 
@@ -37,7 +38,9 @@ imported or changes, so a record already in the store stays as it is until it's 
 the stored raw, and needs no source: `--dry-run` shows each record before and after, and saves nothing. It applies only clean readings.
 A record off the pattern, edited by a person, or verified against a book isn't touched, only listed; `--id <n>` applies the
 reading to one record you've decided on, unless it's edited or verified. A record holding several passages keeps its id for the
-first, and each other becomes a new quote with the same work, tags, and history, and a `split` origin naming the original.
+first, and each other becomes a new quote with the same work, tags, and history, and a `split` origin naming the original. A passage that
+already has a quote keeps it and gains the span's concepts. A concept or page that belongs to another span's passage comes off, unless a
+person added it.
 Every change gets a history entry. Quotes saved by `add_quote` or the
 capture form have their own structure, and aren't checked.
 

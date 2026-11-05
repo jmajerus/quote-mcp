@@ -55,6 +55,39 @@ describe("splitting a merged record (#89)", () => {
     expect(db.prepare("SELECT kind, ref FROM quote_origins WHERE quote_id = ? ORDER BY kind").all(other)).toEqual([{ kind: "drupal", ref: `${id}#1/2` }, { kind: "split", ref: `${id}#2` }]);
   });
 
+  it("gives both quotes of a concept group the concept, with no pages to go on (#752)", () => {
+    const id = record({ text: `One quote here."\n\n"Another quote here.`, status: "unparsed" }, span(`"One quote here."\n\n"Another quote here."`));
+    db.prepare("INSERT INTO quote_tags (quote_id, tag, origin) VALUES (?, 'vampirism', 'span')").run(id);
+    const [other] = repairQuotes(db).repairs[0].newIds;
+    expect(quote(id)).toMatchObject({ text: "One quote here.", locator: null, status: "transcribed" });
+    expect(quote(other)).toMatchObject({ text: "Another quote here.", locator: null, status: "transcribed" });
+    expect(db.prepare("SELECT tag FROM quote_tags WHERE quote_id = ?").pluck().all(other)).toEqual(["vampirism"]);
+  });
+
+  it("doesn't make a second quote for a passage an import already made (#670, #833)", () => {
+    const id = merged();
+    const made = record({ text: "A second hidden source of conflict are affronts to self-esteem.", locator: "225" }, span(MERGED), "drupal", `${id}#1/2`);
+    const count = () => db.prepare("SELECT COUNT(*) FROM quotes").pluck().get();
+    const before = count();
+    const [r] = repairQuotes(db).repairs;
+    expect(r).toMatchObject({ newIds: [], existingIds: [made] });
+    expect(count()).toBe(before);
+    expect(quote(id).text).toBe("For instance, recurring conflicts are about powerlessness.");
+    expect(historyOf(made)).toContain("split_from");
+  });
+
+  it("gives a passage that already had a quote the span's concept too, as well as its own (#268, #825)", () => {
+    const id = merged();
+    db.prepare("INSERT INTO quote_tags (quote_id, tag, origin) VALUES (?, 'conflict', 'span'), (?, 'taken off', 'span')").run(id, id);
+    const had = record({ text: "A second hidden source of conflict are affronts to self-esteem.", locator: "225" }, `<p>${span(`"A second hidden source of conflict are affronts to self-esteem." (p. 225)`)}</p>`, "zotero-note", "users/1:OTHER");
+    db.prepare("UPDATE quotes SET text_key = ? WHERE id = ?").run("asecondhiddensourceofconflictareaffrontstoselfesteem", had);
+    db.prepare("INSERT INTO quote_tags (quote_id, tag, origin) VALUES (?, 'hubris', 'note')").run(had);
+    db.prepare("INSERT INTO tag_removals (quote_id, tag, by, at) VALUES (?, 'taken off', 'me', 'x')").run(had);
+    const [r] = repairQuotes(db).repairs;
+    expect(r).toMatchObject({ newIds: [], existingIds: [had] });
+    expect(db.prepare("SELECT tag FROM quote_tags WHERE quote_id = ? ORDER BY tag").pluck().all(had)).toEqual(["conflict", "hubris"]);
+  });
+
   it("moves a mark to the passage holding its words", () => {
     const id = merged();
     db.prepare("INSERT INTO quote_kwic (quote_id, phrase, tag) VALUES (?, 'powerlessness', 'power'), (?, 'self-esteem', 'esteem')").run(id, id);
@@ -142,6 +175,47 @@ describe("repairing one record", () => {
   });
 });
 
+describe("concepts and pages on the wrong passage (#353)", () => {
+  const NOTE = `<p><span class="quote" title="disability"> "Stress is the biggest reason for disability claims." </span> <span class="quote" title="stress"> "Employees with stress had higher costs." (p. 15) </span></p>`;
+  const setUp = () => {
+    const first = record({ text: "Stress is the biggest reason for disability claims.", locator: "15" }, `<span class="quote" title="disability">"Stress is the biggest reason for disability claims."</span>`);
+    db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, version, raw, imported_at) VALUES ('zotero-note', 'users/1:RST', ?, '1', ?, 'x')").run(first, NOTE);
+    db.prepare("INSERT INTO quote_tags (quote_id, tag, origin) VALUES (?, 'disability', 'span'), (?, 'stress', 'title')").run(first, first);
+    return first;
+  };
+
+  it("finds them", () => {
+    const id = setUp();
+    expect(auditOf(db, id)).toMatchObject({ otherConcepts: ["stress"], otherPage: true });
+    expect(auditOf(db, id)?.kinds).toEqual(expect.arrayContaining(["concept_other_passage", "page_other_passage"]));
+  });
+
+  it("takes them off, with a history entry, and keeps the record's own", () => {
+    const id = setUp();
+    const [r] = repairQuotes(db).repairs;
+    expect(r.removedConcepts).toEqual(["stress"]);
+    expect(db.prepare("SELECT tag FROM quote_tags WHERE quote_id = ?").pluck().all(id)).toEqual(["disability"]);
+    expect(quote(id)).toMatchObject({ text: "Stress is the biggest reason for disability claims.", locator: null });
+    expect(db.prepare("SELECT reason FROM history WHERE quote_id = ? ORDER BY id DESC LIMIT 1").pluck().get(id)).toContain("concepts of another passage removed: stress");
+    expect(repairQuotes(db).repairs).toEqual([]);
+  });
+
+  it("leaves a concept a person added", () => {
+    const id = setUp();
+    db.prepare("UPDATE quote_tags SET origin = 'edit' WHERE quote_id = ? AND tag = 'stress'").run(id);
+    repairQuotes(db);
+    expect(db.prepare("SELECT tag FROM quote_tags WHERE quote_id = ? ORDER BY tag").pluck().all(id)).toEqual(["disability", "stress"]);
+  });
+
+  it("lists it when the record is edited, and takes nothing off", () => {
+    const id = setUp();
+    db.prepare("UPDATE quotes SET edited = 1 WHERE id = ?").run(id);
+    const before = dump();
+    expect(repairQuotes(db).repairs).toEqual([]);
+    expect(dump()).toBe(before);
+  });
+});
+
 describe("what it leaves for a person", () => {
   const wrong = { text: "Even panic attacks.", comment: "(p, 40)" };
   const raw = span(`"Even panic attacks." (p, 40)`);
@@ -170,7 +244,7 @@ describe("what it leaves for a person", () => {
     ["a closing mark with no opening mark (#45)", `A closing mark only." (p. 33)`, "marks_off_pattern"],
     ["double marks inside a quote (#469)", `"With a "phrase" inside." (p. 3)`, "marks_off_pattern"],
     ["no marks (#521)", "No marks at all.", "no_marks"],
-    ["two quotes with no page (#752)", `"One quote."\n\n"Another quote."`, "held"],
+    ["a page inside a quote (#815)", `"A page (p. 3) inside this, then more." (p. 9)`, "held"],
   ])("lists %s", (_name, words, why) => {
     const id = record({ text: "as stored" }, span(words));
     const before = dump();

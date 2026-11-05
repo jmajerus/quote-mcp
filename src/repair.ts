@@ -11,7 +11,7 @@ import { quoteKey } from "./text.js";
  * other becomes a new quote with the same work, tags, and history, and an origin that links back to it.
  */
 
-export interface Repair { id: number; why: string[]; before: AuditRecord["stored"] & { status: string }; after: { text: string; locator: string | null; comment: string | null; status: string }[]; newIds: number[] }
+export interface Repair { id: number; why: string[]; before: AuditRecord["stored"] & { status: string }; after: { text: string; locator: string | null; comment: string | null; status: string }[]; newIds: number[]; existingIds: number[]; removedConcepts: string[] }
 export interface ForPerson { id: number; status: string; why: string; text: string; reading: { text?: string; locator?: string; comment?: string }[] }
 export interface RepairResult { repairs: Repair[]; forPerson: ForPerson[]; checked: number; alreadyRight: number }
 
@@ -53,7 +53,8 @@ export function repairQuotes(db: DB, { dryRun, only, actor = "repair" }: { dryRu
         const flagged = flaggedKinds.filter((k) => r.kinds.includes(k));
         // A record that reads right can still be held back as unparsed, from when it couldn't be read cleanly.
         const needsStatus = r.status === "unparsed" && r.parts.length > 0 && r.parts.every((p) => statusOf(p) === "transcribed");
-        if (r.matches && !flagged.length && !needsStatus) {
+        const concepts = r.otherConcepts.length > 0 || r.otherPage;
+        if (r.matches && !flagged.length && !needsStatus && !concepts) {
           result.alreadyRight++;
           continue;
         }
@@ -92,21 +93,37 @@ export function repairQuotes(db: DB, { dryRun, only, actor = "repair" }: { dryRu
         }
         const row = db.prepare("SELECT status, flags, chapter_author, locator_kind, work_id, attribution, source_url, created_at, created_by FROM quotes WHERE id = ?").get(r.id) as
           { status: string; flags: string; chapter_author: string | null; locator_kind: "page" | "kindle" | "none"; work_id: number | null; attribution: string | null; source_url: string | null; created_at: string; created_by: string | null };
-        // One source can give the words and another the place: a place isn't taken away, or changed in kind, because this source has none.
-        const locator = first.locator ?? (parts.length === 1 && r.stored.locator && row.locator_kind !== "none" ? { kind: row.locator_kind, value: r.stored.locator, raw: "" } : undefined);
-        const same = parts.length === 1 && first.text === r.stored.text && (locator?.value ?? null) === r.stored.locator && (first.commentary ?? null) === r.stored.comment && statusOf(first) === r.status;
+        // One source can give the words and another the place: a place isn't taken away, or changed in kind, because this source has
+        // none, unless it's the page of another passage in the note.
+        const locator = first.locator ?? (parts.length === 1 && r.stored.locator && row.locator_kind !== "none" && !r.otherPage ? { kind: row.locator_kind, value: r.stored.locator, raw: "" } : undefined);
+        const same = !concepts && parts.length === 1 && first.text === r.stored.text && (locator?.value ?? null) === r.stored.locator && (first.commentary ?? null) === r.stored.comment && statusOf(first) === r.status;
         if (same) {
           result.alreadyRight++;
           continue;
         }
         const keepOcr = (JSON.parse(row.flags) as string[]).includes("ocr_suspect") ? ["ocr_suspect"] : [];
         const after = parts.map((p, i) => ({ text: p.text ?? "", locator: (i === 0 ? locator : p.locator)?.value ?? null, comment: p.commentary ?? null, status: statusOf(p) }));
-        const repair: Repair = { id: r.id, why: r.kinds, before: { ...r.stored, status: r.status }, after, newIds: [] };
+        const repair: Repair = { id: r.id, why: r.kinds, before: { ...r.stored, status: r.status }, after, newIds: [], existingIds: [], removedConcepts: r.otherConcepts };
+        // A concept from a Zotero note or another span goes; one the record got any other way, a person's, stays.
+        for (const tag of r.otherConcepts) db.prepare("DELETE FROM quote_tags WHERE quote_id = ? AND tag = ? AND origin IN ('title', 'note', 'span')").run(r.id, tag);
         db.prepare(`UPDATE quotes SET text = ?, text_key = ?, locator_kind = ?, locator = ?, chapter_author = ?, comment = ?, status = ?, grade = ?, flags = ?, updated_at = ?, updated_by = ? WHERE id = ?`)
           .run(after[0].text, quoteKey(after[0].text), locator?.kind ?? "none", locator?.value ?? null, first.chapterAuthor ?? row.chapter_author, after[0].comment, after[0].status, first.grade ?? null,
             JSON.stringify([...new Set([...first.flags, ...keepOcr])]), stamp, actor, r.id);
         for (const [i, part] of parts.entries()) {
           if (i === 0) continue;
+          // The passage may have a quote already: an earlier import's, or the old site's own record of it. It isn't made twice.
+          const existing = r.origins.map((o) => db.prepare("SELECT quote_id FROM quote_origins WHERE kind = ? AND ref = ?").pluck().get(o.kind, passageRef(o, i + 1)) as number | undefined).find((x) => x !== undefined)
+            ?? (quoteKey(part.text).length >= 20 ? db.prepare("SELECT id FROM quotes WHERE text_key = ? AND id != ? AND (work_id IS ? OR work_id IS NULL OR ? IS NULL) ORDER BY id LIMIT 1").pluck().get(quoteKey(part.text), r.id, row.work_id, row.work_id) as number | undefined : undefined);
+          if (existing !== undefined) {
+            repair.existingIds.push(existing);
+            // The span's concepts cover all its passages, so this quote gets them too, unless a person took one off.
+            db.prepare(`INSERT OR IGNORE INTO quote_tags (quote_id, tag, concept_id, origin) SELECT @to, t.tag, t.concept_id, t.origin FROM quote_tags t WHERE t.quote_id = @from AND t.origin IN ('span', 'title', 'note')
+              AND NOT EXISTS (SELECT 1 FROM tag_removals r WHERE r.quote_id = @to AND r.tag = t.tag)`).run({ to: existing, from: r.id });
+            for (const o of r.origins) db.prepare("INSERT OR IGNORE INTO quote_origins (kind, ref, quote_id, version, raw, imported_at) VALUES (?, ?, ?, ?, ?, ?)").run(o.kind, passageRef(o, i + 1), existing, o.version ?? null, o.raw, stamp);
+            db.prepare("INSERT OR IGNORE INTO quote_origins (kind, ref, quote_id, version, raw, imported_at) VALUES ('split', ?, ?, NULL, ?, ?)").run(`${r.id}#${i + 1}`, existing, r.raw, stamp);
+            history.run(existing, stamp, "split_from", JSON.stringify(repair.before), JSON.stringify(after[i]), actor, `passage ${i + 1} of quote ${r.id}, which already had this quote`);
+            continue;
+          }
           const { id } = db.prepare(`INSERT INTO quotes (id, kind, work_id, text, text_key, locator_kind, locator, chapter_author, comment, attribution, source_url, status, grade, flags, created_at, created_by, updated_at, updated_by)
             VALUES (${NEXT_QUOTE_ID}, 'quote', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`).get(row.work_id, after[i].text, quoteKey(after[i].text), part.locator?.kind ?? "none", part.locator?.value ?? null,
             part.chapterAuthor ?? null, after[i].comment, row.attribution, row.source_url, after[i].status, part.grade ?? null, JSON.stringify(part.flags), row.created_at, row.created_by, stamp, actor) as { id: number };
@@ -119,8 +136,9 @@ export function repairQuotes(db: DB, { dryRun, only, actor = "repair" }: { dryRu
           }
           history.run(id, stamp, "split_from", JSON.stringify(repair.before), JSON.stringify(after[i]), actor, `passage ${i + 1} of quote ${r.id}, read again from ${r.origin.kind} ${r.origin.ref}`);
         }
-        history.run(r.id, stamp, repair.newIds.length ? "split" : "repaired", JSON.stringify(repair.before), JSON.stringify(after[0]), actor,
-          `read again from ${r.origin.kind} ${r.origin.ref}${repair.newIds.length ? `; its other passages are now quotes ${repair.newIds.join(", ")}` : ""}`);
+        const others = [...repair.newIds, ...repair.existingIds];
+        history.run(r.id, stamp, others.length ? "split" : "repaired", JSON.stringify({ ...repair.before, concepts: r.otherConcepts }), JSON.stringify(after[0]), actor,
+          `read again from ${r.origin.kind} ${r.origin.ref}${others.length ? `; its other passages are now quotes ${others.join(", ")}` : ""}${r.otherConcepts.length ? `; concepts of another passage removed: ${r.otherConcepts.join(", ")}` : ""}`);
         result.repairs.push(repair);
       }
       if (result.repairs.length) rebuildSearch(db);

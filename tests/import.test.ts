@@ -218,6 +218,31 @@ describe("import", () => {
     expect(JSON.parse(quoteLike("second passage of this").flags as string)).toContain("passage_gone");
   });
 
+  it("doesn't divide a note already imported and unchanged, which is the repair's to do (#670, #833)", () => {
+    const two = `<p><span class="quote" title="power">"The first passage of this note is here." (p. 224)<br />"The second passage of this note is here." (p. 225)</span></p>`;
+    addItem(db, PRIMARY, "NOTE0004", note("ATTILA01", two));
+    importWithSite(db, opts());
+    db.prepare("DELETE FROM quote_origins WHERE ref = ?").run(`${PRIMARY}:NOTE0004#2`);
+    db.prepare("DELETE FROM quotes WHERE text LIKE '%second passage of this%'").run();
+    const count = () => db.prepare("SELECT COUNT(*) FROM quotes").pluck().get();
+    const before = count();
+    importWithSite(db, opts());
+    expect(count()).toBe(before);
+    addItem(db, PRIMARY, "NOTE0004", note("ATTILA01", two.replace("(p. 225)", "(p. 226)")), 2);
+    importWithSite(db, opts());
+    expect(quoteLike("second passage of this").locator).toBe("226");
+  });
+
+  it("tags each span's quote with its own concepts, not the note's other span's (#353)", () => {
+    addItem(db, PRIMARY, "NOTE0004", note("ATTILA01", `<p><span class="quote" title="power"> "The first span's quote is right here." </span> <span class="quote" title="fear"> "The second span's quote is here." (p. 15) </span></p>`, ["power", "fear", "shared"]));
+    importWithSite(db, opts());
+    const tags = (fragment: string) => tagsOf(quoteLike(fragment).id).map((t) => (t as { tag: string }).tag);
+    expect(tags("first span's")).toEqual(["power", "shared"]);
+    expect(tags("second span's")).toEqual(["fear", "shared"]);
+    expect(quoteLike("first span's").locator).toBeNull();
+    expect(quoteLike("second span's").locator).toBe("15");
+  });
+
   describe("a note that takes its quote to another work", () => {
     const WORDS = "Patience is a form of wisdom that takes its own time";
     const SPAN = `<p><span class="quote" title="power">"${WORDS}" (p. 9)</span></p>`;
@@ -265,7 +290,7 @@ describe("import", () => {
   });
 
   it("imports a quote it can't split as unparsed, out of the way", () => {
-    addItem(db, PRIMARY, "NOTE0004", note("ATTILA01", `<p>"First quote."</p><p>"Second quote."</p>`));
+    addItem(db, PRIMARY, "NOTE0004", note("ATTILA01", `<p>"First quote, and a page inside (p. 3) it, then more." (p. 9)</p>`));
     importWithSite(db, opts());
     expect(quoteLike("First quote")).toMatchObject({ status: "unparsed", grade: "C" });
   });
