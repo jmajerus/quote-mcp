@@ -24,7 +24,7 @@ How quote-mcp is run, configured, and deployed.
 | `quote-mcp take-corpus-quotes --skip 2` | Once: takes over corpus-mcp's own saved quotes, each checked against its book again, and prints corpus-mcp's id and the new one for each (see [the dev-brief](dev-briefs/holdings-and-quotes.md), §2.3). `--dry-run` first. |
 | `quote-mcp proposals` | Agents' proposed changes to quotes' text, page, or chapter author; `--accept <n>` or `--reject <n>` (with `--note "…"`) reviews one. Accepting applies it as your edit. |
 | `npm run quotes -- export --out quotes.json` | Everything as JSON. |
-| `npm run quotes -- backup` | A SQLite backup in `data/backups`, keeping 14. |
+| `npm run quotes -- backup` | A SQLite backup in a `backups` folder beside the store, keeping 14. |
 | `npm run survey` | Phase 0's read-only survey of the Zotero notes. |
 | `npm run worker:load`, `npm run worker:dev` | Loads the snapshot into a local D1 and runs the public Worker on it at `http://localhost:8787`. |
 | `npm run worker:proxy` | The D1 proxy Worker, locally on port 8788. |
