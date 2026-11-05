@@ -371,18 +371,26 @@ async function migrateCommand() {
 }
 
 /** Rebuilds the public snapshot after a change to the store, when the site is public. */
-function publishFrom(db: Database.Database) {
+function publishFrom(db: Database.Database, report: (line: string) => void = console.log) {
   const publish = snapshotOptions();
-  if (publish) console.log(snapshotLine(buildSnapshot(db, publish, snapshotFile())));
+  if (publish) report(snapshotLine(buildSnapshot(db, publish, snapshotFile())));
+}
+
+/** The quote --id names, if it's given. A missing or bad value stops here: it must never read as "every quote". */
+function quoteIdOption(command: string): number | undefined {
+  if (!flag("--id")) return undefined;
+  const value = option("--id");
+  if (!value || !/^[1-9]\d*$/.test(value)) throw new Error(`${command} --id needs a quote's number. Nothing was done.`);
+  return Number(value);
 }
 
 /** Compares typed quotes with their stored raw, and changes nothing. */
 function auditCommand() {
-  onlyFlags("audit", ["--json", "--id", "--kind"].concat(argv.filter((a) => /^\d+$/.test(a))));
+  onlyFlags("audit", ["--json", "--id", "--kind"]);
+  const id = quoteIdOption("audit");
   const db = openReadOnly();
-  const id = option("--id");
   if (id !== undefined) {
-    const r = auditOf(db, Number(id));
+    const r = auditOf(db, id);
     if (!r) throw new Error(`Quote ${id} isn't a typed quote with a stored raw.`);
     console.log(flag("--json") ? JSON.stringify(r, null, 2) : [
       `Quote ${r.id} (${r.status}${r.edited ? ", edited" : ""}), from ${r.origin.kind} ${r.origin.ref}`, `Kinds: ${r.kinds.join(", ") || "none"}`,
@@ -412,13 +420,14 @@ function auditCommand() {
 
 /** Repairs typed quotes from their stored raw, by the pattern they were typed to. */
 function repairCommand() {
-  onlyFlags("repair", ["--dry-run", "--id", "--json"].concat(argv.filter((a) => /^\d+$/.test(a))));
+  onlyFlags("repair", ["--dry-run", "--id", "--json"]);
   const dryRun = flag("--dry-run");
-  const id = option("--id");
+  const json = flag("--json");
+  const only = quoteIdOption("repair");
   const db = dryRun ? openExisting() : openDb();
   try {
-    const r = repairQuotes(db, { dryRun, only: id === undefined ? undefined : Number(id) });
-    if (flag("--json")) {
+    const r = repairQuotes(db, { dryRun, only });
+    if (json) {
       console.log(JSON.stringify(r, null, 2));
     } else {
       for (const c of r.repairs) {
@@ -433,8 +442,10 @@ function repairCommand() {
       const splits = r.repairs.filter((c) => c.after.length > 1);
       console.log(`\nChecked ${r.checked}. ${dryRun ? "Would repair" : "Repaired"} ${r.repairs.length}, ${splits.length} of them split into ${splits.reduce((n, c) => n + c.after.length, 0)} quotes. ${r.forPerson.length} for a person. ${r.alreadyRight} already right.`);
     }
-    if (dryRun) console.log("Dry run: nothing was saved.");
-    else if (r.repairs.length) publishFrom(db);
+    // With --json, stdout holds the JSON and nothing else.
+    const report = json ? console.error : console.log;
+    if (dryRun) report("Dry run: nothing was saved.");
+    else if (r.repairs.length) publishFrom(db, report);
   } finally {
     db.close();
   }
@@ -518,7 +529,8 @@ if (!command) {
   say(`Usage: quote-mcp ${Object.keys(commands).join(" | ")}\n`);
   process.exit(2);
 }
-Promise.resolve(command()).catch((error) => {
+// Through then, so a command that throws at once is reported the same way as one that fails later.
+Promise.resolve().then(command).catch((error) => {
   say(`${(error as Error).message}\n`);
   process.exit(1);
 });

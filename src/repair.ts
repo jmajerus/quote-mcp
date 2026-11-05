@@ -51,7 +51,9 @@ export function repairQuotes(db: DB, { dryRun, only, actor = "repair" }: { dryRu
         result.checked++;
         if (only !== undefined && r.id !== only) continue;
         const flagged = flaggedKinds.filter((k) => r.kinds.includes(k));
-        if (r.matches && !flagged.length) {
+        // A record that reads right can still be held back as unparsed, from when it couldn't be read cleanly.
+        const needsStatus = r.status === "unparsed" && r.parts.length > 0 && r.parts.every((p) => statusOf(p) === "transcribed");
+        if (r.matches && !flagged.length && !needsStatus) {
           result.alreadyRight++;
           continue;
         }
@@ -76,17 +78,27 @@ export function repairQuotes(db: DB, { dryRun, only, actor = "repair" }: { dryRu
           list(`the reading would lose words: ${lost.slice(0, 8).join(" ")}`);
           continue;
         }
+        // Words the record has and its source doesn't came from somewhere else, and a repair would delete them.
+        if (r.added.length) {
+          list(`the record has words its source doesn't: ${r.added.slice(0, 8).join(" ")}`);
+          continue;
+        }
         const parts = r.parts;
         const first = parts[0];
-        // One source can give the words and another the page: a page isn't taken away because this source has none.
-        const locator = first.locator ?? (parts.length === 1 ? (r.stored.locator ? { kind: "page" as const, value: r.stored.locator, raw: "" } : undefined) : undefined);
-        const same = parts.length === 1 && first.text === r.stored.text && (locator?.value ?? null) === r.stored.locator && (first.commentary ?? null) === r.stored.comment;
+        // More words before the marks than inside them: a note that quotes a phrase, not a quote with a lead-in.
+        if (only === undefined && first.flags.includes("lead_in") && (first.commentary ?? "").length > (first.text ?? "").length) {
+          list("more words before the marks than inside them");
+          continue;
+        }
+        const row = db.prepare("SELECT status, flags, chapter_author, locator_kind, work_id, attribution, source_url, created_at, created_by FROM quotes WHERE id = ?").get(r.id) as
+          { status: string; flags: string; chapter_author: string | null; locator_kind: "page" | "kindle" | "none"; work_id: number | null; attribution: string | null; source_url: string | null; created_at: string; created_by: string | null };
+        // One source can give the words and another the place: a place isn't taken away, or changed in kind, because this source has none.
+        const locator = first.locator ?? (parts.length === 1 && r.stored.locator && row.locator_kind !== "none" ? { kind: row.locator_kind, value: r.stored.locator, raw: "" } : undefined);
+        const same = parts.length === 1 && first.text === r.stored.text && (locator?.value ?? null) === r.stored.locator && (first.commentary ?? null) === r.stored.comment && statusOf(first) === r.status;
         if (same) {
           result.alreadyRight++;
           continue;
         }
-        const row = db.prepare("SELECT status, flags, chapter_author, locator_kind, work_id, attribution, source_url, created_at, created_by FROM quotes WHERE id = ?").get(r.id) as
-          { status: string; flags: string; chapter_author: string | null; locator_kind: string; work_id: number | null; attribution: string | null; source_url: string | null; created_at: string; created_by: string | null };
         const keepOcr = (JSON.parse(row.flags) as string[]).includes("ocr_suspect") ? ["ocr_suspect"] : [];
         const after = parts.map((p, i) => ({ text: p.text ?? "", locator: (i === 0 ? locator : p.locator)?.value ?? null, comment: p.commentary ?? null, status: statusOf(p) }));
         const repair: Repair = { id: r.id, why: r.kinds, before: { ...r.stored, status: r.status }, after, newIds: [] };

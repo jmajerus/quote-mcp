@@ -75,7 +75,7 @@ describe("splitting a merged record (#89)", () => {
   it("gives a Zotero note's parts the origins the import looks for, and an import leaves them alone", () => {
     const raw = `<p>${span(MERGED)}</p>`;
     db.prepare("INSERT INTO zotero_items (library, key, version, item_type, parent_key, deleted, data) VALUES ('users/1', 'NOTE', 1, 'note', NULL, 0, ?)").run(JSON.stringify({ itemType: "note", note: raw, tags: [] }));
-    const id = record({ text: "stored wrongly here for the test", locator: "225" }, raw, "zotero-note", "users/1:NOTE");
+    const id = record({ text: "For instance, recurring conflicts are about powerlessness.", locator: "225" }, raw, "zotero-note", "users/1:NOTE");
     db.prepare("UPDATE quote_origins SET version = '1' WHERE quote_id = ?").run(id);
     const [other] = repairQuotes(db).repairs[0].newIds;
     expect(db.prepare("SELECT ref FROM quote_origins WHERE quote_id = ? AND kind = 'zotero-note'").pluck().get(other)).toBe("users/1:NOTE#2");
@@ -119,6 +119,20 @@ describe("repairing one record", () => {
     expect(h).toMatchObject({ kind: "repaired", actor: "repair", reason: `read again from drupal ${id}#1` });
     expect(JSON.parse(h.before)).toMatchObject({ comment: "(p, 40)", locator: null });
     expect(JSON.parse(h.after)).toMatchObject({ comment: null, locator: "40" });
+  });
+
+  it("makes a clean record that's still unparsed a normal quote, changing nothing else", () => {
+    const id = record({ text: "Now it reads cleanly.", locator: "3", status: "unparsed" }, span(`"Now it reads cleanly." (p. 3)`));
+    expect(repairQuotes(db).repairs).toHaveLength(1);
+    expect(quote(id)).toMatchObject({ text: "Now it reads cleanly.", locator: "3", status: "transcribed" });
+    expect(repairQuotes(db).repairs).toEqual([]);
+  });
+
+  it("keeps a place's kind when this source has none", () => {
+    const id = record({ text: "The same words, and a stray comment.", locator: "208", comment: "stray" }, span(`"The same words, and a stray comment." stray`));
+    db.prepare("UPDATE quotes SET text = ?, comment = NULL, locator_kind = 'kindle' WHERE id = ?").run(`"The same words, and a stray comment." stray`, id);
+    expect(repairQuotes(db).repairs).toHaveLength(1);
+    expect(quote(id)).toMatchObject({ text: "The same words, and a stray comment.", comment: "stray", locator: "208", locator_kind: "kindle" });
   });
 
   it("doesn't take away a page that another source gave (#353)", () => {
@@ -166,9 +180,29 @@ describe("what it leaves for a person", () => {
     expect(dump()).toBe(before);
   });
 
+  it("lists a record with words its source doesn't have, and doesn't delete them", () => {
+    const id = record({ text: "Even panic attacks, and a word someone added.", comment: "(p, 40)" }, raw);
+    const before = dump();
+    const r = repairQuotes(db);
+    expect(r.repairs).toEqual([]);
+    expect(r.forPerson[0].id).toBe(id);
+    expect(r.forPerson[0].why).toMatch(/words its source doesn't: .*someone/);
+    expect(dump()).toBe(before);
+    expect(repairQuotes(db, { only: id }).repairs).toEqual([]);
+  });
+
+  it("lists a note that only quotes a phrase, rather than making the phrase the quote (#822)", () => {
+    const words = `Neumann, a hospice volunteer, examines the dimensions of dying in America. Quoted on robot companionship as`;
+    const id = record({ text: "a kind of abandonment.", comment: words, status: "unparsed" }, span(`${words} "a kind of abandonment."`));
+    const before = dump();
+    expect(repairQuotes(db)).toMatchObject({ repairs: [], forPerson: [{ id, why: "more words before the marks than inside them" }] });
+    expect(dump()).toBe(before);
+    expect(repairQuotes(db, { only: id }).repairs).toHaveLength(1);
+    expect(quote(id).status).toBe("transcribed");
+  });
+
   it("applies one flagged record when told to, but never an edited one", () => {
-    const flagged = record({ text: "stale text", locator: null }, span(`"Because it is memorable. (p. 121)`));
-    db.prepare("UPDATE quotes SET text = ? WHERE id = ?").run("stale text", flagged);
+    const flagged = record({ text: `"Because it is memorable. (p. 121)`, locator: null }, span(`"Because it is memorable. (p. 121)`));
     const edited = record({ ...wrong, edited: 1 }, raw);
     expect(repairQuotes(db, { only: flagged }).repairs).toHaveLength(1);
     expect(quote(flagged)).toMatchObject({ text: "Because it is memorable.", locator: "121" });
