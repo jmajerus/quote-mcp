@@ -20,7 +20,8 @@ it every 30 minutes, and `add_quote` brings the Zotero mirror up to date on the 
 ## The pattern quotes are typed to
 
 A quote is the words between one opening and one closing double mark, with quotations inside them in single marks, which are
-only ever content. A page in parentheses after the closing mark ends it, so one note can hold several quotes. Words before the
+only ever content. A page in parentheses ends it, so one note can hold several quotes. With no closing mark before it, the page
+stands in for the mark, and the record is flagged `unbalanced_quotes`. Words before the
 opening mark, or after the page, are a comment.
 
 A note off the pattern is a typing slip or damage, so it isn't guessed at. It keeps its words, marks included, and is flagged

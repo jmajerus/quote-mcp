@@ -129,6 +129,35 @@ describe("legacy span", () => {
     expect(parseNote(`<span class="quote">No marks at all here. (p. 9)</span>`)).toMatchObject({ text: "No marks at all here.", locator: { value: "9" }, flags: expect.arrayContaining(["no_marks"]) });
   });
 
+  it("takes a page as an implicit closing mark, and flags the missing mark", () => {
+    const p = parseNote(`<span class="quote">"Because the quotation provides such a memorable source. (p. 121)</span>`);
+    expect(p).toMatchObject({ text: "Because the quotation provides such a memorable source.", locator: { value: "121" } });
+    expect(p.flags).toContain("unbalanced_quotes");
+  });
+
+  it("splits passages when a page stands in for a closing mark, and flags that one", () => {
+    const p = parseNote(`<span class="quote">"The first passage, unclosed. (p. 3)\n"The second passage." (p. 9)</span>`);
+    expect([p.text, p.locator?.value, p.more?.[0].text, p.more?.[0].locator?.value]).toEqual(["The first passage, unclosed.", "3", "The second passage.", "9"]);
+    expect(p.flags).toContain("unbalanced_quotes");
+    expect(p.more?.[0].flags).not.toContain("unbalanced_quotes");
+  });
+
+  it("keeps a page after words that follow the closing mark, which are a comment (#374)", () => {
+    const p = parseNote(`<span class="quote">"A third group manifested itself physically." --Roy R. Male (p. 334)</span>`);
+    expect(p).toMatchObject({ text: "A third group manifested itself physically.", commentary: "--Roy R. Male", locator: { value: "334" } });
+    expect(p.flags).not.toContain("unbalanced_quotes");
+  });
+
+  it("doesn't take a phrase in mid-sentence for the quote, when the note ends in a page (#28)", () => {
+    const p = parseNote(`<span class="quote">Scott Peck explains that they are "onto something" in all this. (p. 12)</span>`);
+    expect(p).toMatchObject({ text: `Scott Peck explains that they are "onto something" in all this.`, locator: { value: "12" } });
+    expect(p.flags).toContain("no_marks");
+  });
+
+  it("flags a note with no marks that ends in a page, keeping the page", () => {
+    expect(parseNote(`<span class="quote">No marks at all here. (p. 9)</span>`).flags).toContain("no_marks");
+  });
+
   it("holds two quotes with no page between them, as they stand (#752)", () => {
     const p = parseNote(`<span class="quote">"The vampire lives on."\n\n"I suppose it is thus."</span>`);
     expect(p.grade).toBe("C");

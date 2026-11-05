@@ -4,8 +4,9 @@ import { type HTMLElement, type Node, NodeType, parse } from "node-html-parser";
  * Reads one Zotero note and returns the quote it holds as fields: text, locator, chapter author, the
  * concepts in the legacy `title` attribute, and flags for anything a person should look at. These quotes
  * were typed to one pattern: the words between one opening and one closing double mark, with quotations
- * inside them in single marks, which are only ever content. A page in parentheses after the closing mark
- * ends the quote, so a note can hold several (the others are in `more`). Words outside the marks are a comment.
+ * inside them in single marks, which are only ever content. A page in parentheses ends the quote, and stands
+ * in for a closing mark that's missing (which is flagged), so a note can hold several (the others are in `more`).
+ * Words outside the marks are a comment.
  * Notes come in four forms:
  *
  *   span          <span class="quote" title="concepts"> "…" (p. 63) </span>, the legacy form
@@ -74,8 +75,8 @@ const INSIDE_MARK = new RegExp(String.raw`[ \t]*(\([ \t]*(?:pp?[.,]?|pages?)[ \t
 const BARE_PAGE = new RegExp(String.raw`(["”])[ \t]+(pp?\.[ \t]*${PAGES})[ \t]*$`, "gim");
 /** Every form of page reference, as metadata beside a quote's words: in parentheses anywhere, or bare after a closing mark at a line's end. */
 export const PAGE_REFERENCE = new RegExp(String.raw`\(\s*(?:pp?[.,]?|pages?)\s*${PAGES}[^()]*\)|\(\s*kindle\s+loc[^()]*\)|(?<=["”][ \t]+)pp?\.[ \t]*${PAGES}[ \t]*$`, "gim");
-/** A closing mark, any emphasis or footnote that closes after it, and the page that ends the quote. */
-const QUOTE_END = new RegExp(String.raw`(["”])(\*+|\.?\[\/fn\])?\s*(${LOCATOR.source.replace(String.raw`\s*$`, "")})`, "gi");
+/** The page that ends a quote: after its closing mark and any emphasis or footnote closing there, or standing in for the mark. */
+const QUOTE_END = new RegExp(String.raw`(["”])?(\*+|\.?\[\/fn\])?\s*(${LOCATOR.source.replace(String.raw`\s*$`, "")})`, "gi");
 const CATALOG = [
   /\bIncludes (?:bibliographical references|bibliography|index)/i,
   /\bOriginally published\b/i,
@@ -226,8 +227,8 @@ const hasDoubleMark = (body: string) => /["“”]/.test(body);
 const joined = (...parts: (string | undefined)[]) => parts.map((p) => p?.trim()).filter(Boolean).join("\n\n") || undefined;
 
 /**
- * The quotes in a note's words. Each closing mark with a page after it ends a quote, which starts at the first opening
- * mark since the last one ended. Words before that mark are a comment on it; words after the last page, on the last.
+ * The quotes in a note's words. Each page ends a quote, which starts at the first opening mark since the last one ended;
+ * with no closing mark before it, the page stands in for one, and the missing mark is flagged. Words before that mark are a comment on it; words after the last page, on the last.
  */
 function readQuotes(raw: string): { quotes: Read[]; unsure?: undefined } | { quotes?: undefined; unsure: string } {
   const text = raw.replace(INSIDE_MARK, "$2 $1").replace(BARE_PAGE, "$1 ($2)");
@@ -239,23 +240,42 @@ function readQuotes(raw: string): { quotes: Read[]; unsure?: undefined } | { quo
   for (const end of ends) {
     const part = text.slice(from, end.index);
     const opening = anyOpening(part);
+    const close = end[1] ?? "";
     if (opening < 0) {
-      if (ends.length > 1) return { unsure: "a closing mark with no opening mark, among several page references: several quotes?" };
+      if (ends.length > 1) return { unsure: "a page with no opening mark, among several page references: several quotes?" };
       // No opening mark: not a quote by the rule, so its words stay as they are.
       const located = readLocator(end[3]);
-      return { quotes: [{ text: `${part}${end[1]}${end[2] ?? ""}`.trim(), locator: located.locator, chapterAuthor: located.chapterAuthor, commentary: text.slice(end.index + end[0].length).trim() || undefined, flags: ["unbalanced_quotes"] }] };
+      return { quotes: [{ text: `${part}${close}${end[2] ?? ""}`.trim(), locator: located.locator, chapterAuthor: located.chapterAuthor, commentary: text.slice(end.index + end[0].length).trim() || undefined, flags: [close ? "unbalanced_quotes" : "no_marks"] }] };
     }
     const body = part.slice(opening + 1);
     if (body.match(ANY_LOCATOR)) return { unsure: "a page reference inside a quote: several quotes?" };
     const located = readLocator(end[3]);
     const place = { locator: located.locator, chapterAuthor: located.chapterAuthor };
+    // The closing mark is there, with words between it and the page: the page is still this quote's, and the words a comment.
+    const marks = close ? [] : [...body.matchAll(/["”]/g)];
+    if (!close && marks.length === 1 && !/["“”]/.test(body.slice(0, marks[0].index))) {
+      const lead = part.slice(0, opening).trim();
+      const after = body.slice(marks[0].index + 1).trim();
+      const emphasis = /^\*+$/.test(lead);
+      // Marks in mid-sentence set off a phrase: the note has no marks of its own.
+      if (lead && !emphasis && after && !/[:,\n]\s*$/.test(part.slice(0, opening))) {
+        quotes.push({ text: part.trim(), ...place, flags: ["no_marks"] });
+      } else {
+        const flags: Read["flags"] = lead && !emphasis ? ["lead_in"] : [];
+        if (after) flags.push("commentary_mixed");
+        quotes.push({ text: `${emphasis ? lead : ""}${body.slice(0, marks[0].index)}`.trim(), ...place, commentary: joined(emphasis ? undefined : lead, after), flags });
+      }
+      from = end.index + end[0].length;
+      continue;
+    }
     if (hasDoubleMark(body)) {
       // Off the pattern, so nothing says which marks are the quote's: its words stay as they are.
-      quotes.push({ text: `${part}${end[1]}${end[2] ?? ""}`.trim(), ...place, flags: ["unbalanced_quotes"] });
+      quotes.push({ text: `${part}${close}${end[2] ?? ""}`.trim(), ...place, flags: ["unbalanced_quotes"] });
     } else {
       const lead = part.slice(0, opening).trim();
       const emphasis = /^\*+$/.test(lead);
-      quotes.push({ text: `${emphasis ? lead : ""}${body}${end[2] ?? ""}`.trim(), ...place, commentary: emphasis ? undefined : lead || undefined, flags: lead && !emphasis ? ["lead_in"] : [] });
+      quotes.push({ text: `${emphasis ? lead : ""}${body}${end[2] ?? ""}`.trim(), ...place, commentary: emphasis ? undefined : lead || undefined,
+        flags: [...(lead && !emphasis ? ["lead_in" as const] : []), ...(close ? [] : ["unbalanced_quotes" as const])] });
     }
     from = end.index + end[0].length;
   }
