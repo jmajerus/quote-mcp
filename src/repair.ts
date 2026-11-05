@@ -66,8 +66,8 @@ export function repairQuotes(db: DB, { dryRun, only, actor = "repair" }: { dryRu
           continue;
         }
         const source = { ref: `${r.origin.kind} ${r.origin.ref}`, words: r.plain };
-        const concepts = db.prepare("SELECT tag FROM quote_tags WHERE quote_id = ? ORDER BY tag").pluck().all(r.id) as string[];
-        const list = (why: string) => result.forPerson.push({ id: r.id, status: r.status, why, kinds: r.kinds, source, concepts, text: r.stored.text, locator: r.stored.locator, comment: r.stored.comment, reading: excerpt(r) });
+        const tags = db.prepare("SELECT tag FROM quote_tags WHERE quote_id = ? ORDER BY tag").pluck().all(r.id) as string[];
+        const list = (why: string) => result.forPerson.push({ id: r.id, status: r.status, why, kinds: r.kinds, source, concepts: tags, text: r.stored.text, locator: r.stored.locator, comment: r.stored.comment, reading: excerpt(r) });
         if (r.kinds.includes("passage_gone")) {
           list("passage_gone");
           continue;
@@ -112,7 +112,7 @@ export function repairQuotes(db: DB, { dryRun, only, actor = "repair" }: { dryRu
         }
         const keepOcr = (JSON.parse(row.flags) as string[]).includes("ocr_suspect") ? ["ocr_suspect"] : [];
         const after = parts.map((p, i) => ({ text: p.text ?? "", locator: (i === 0 ? locator : p.locator)?.value ?? null, comment: p.commentary ?? null, status: statusOf(p) }));
-        const repair: Repair = { id: r.id, why: r.kinds, source, concepts, before: { ...r.stored, status: r.status }, after, newIds: [], existingIds: [], removedConcepts: r.otherConcepts, addedConcepts: r.missingConcepts };
+        const repair: Repair = { id: r.id, why: r.kinds, source, concepts: tags, before: { ...r.stored, status: r.status }, after, newIds: [], existingIds: [], removedConcepts: r.otherConcepts, addedConcepts: r.missingConcepts };
         // A concept from a Zotero note or another span goes; one the record got any other way, a person's, stays.
         for (const tag of r.otherConcepts) db.prepare("DELETE FROM quote_tags WHERE quote_id = ? AND tag = ? AND origin IN ('title', 'note', 'span')").run(r.id, tag);
         for (const tag of r.missingConcepts) db.prepare("INSERT OR IGNORE INTO quote_tags (quote_id, tag, concept_id, origin) VALUES (?, ?, ?, 'span')").run(r.id, tag, conceptOf(db, tag));
