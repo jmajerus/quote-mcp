@@ -1,21 +1,16 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type DrupalSite, drupalUrl, loadDrupal } from "./drupal.js";
 import { type Suspect, dropCommonUnknowns, loadDictionary, suspectTokens } from "./ocr.js";
-import { type ParsedNote, gradeOf, parseNote, splitQuotes } from "./parse.js";
-import { normalizedTitle, quoteKey } from "./text.js";
-import { type ApiItem, ZoteroClient, zoteroConfig } from "./zotero.js";
+import { type ParsedNote, gradeOf, parseNote } from "./parse.js";
+import { ZoteroClient, zoteroConfig } from "./zotero.js";
 
 /**
- * Phase 0: reads every quote a source holds, parses each one, and reports what the import would make
- * of them. Read-only. Sources are cached in <out>/cache, so a re-run after a parser change needs no
- * network; pass --refresh to fetch again.
+ * Phase 0: reads every Zotero quote note, parses each one, and reports what the import would make of
+ * them. Read-only. Notes are cached in <out>/cache, so a re-run after a parser change needs no network;
+ * pass --refresh to fetch again.
  *
  *   npm run survey [-- --refresh] [-- --out <dir>]
  *       Zotero notes in QUOTE_ZOTERO_LIBRARY.
- *   npm run survey -- --source drupal [--libraries users/1,groups/2] [--compare a.jsonl,b.jsonl] [--out <dir>]
- *       The old Drupal site (QUOTE_DRUPAL_URL), with each work matched to the Zotero items in --libraries
- *       and each quote compared with earlier Zotero surveys.
  *
  * Writes <out>/report.md (counts, examples, tag inventory) and <out>/notes.jsonl (every quote as parsed).
  */
@@ -35,13 +30,12 @@ interface Row {
 function args() {
   const argv = process.argv.slice(2);
   const at = (name: string) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined);
-  const list = (name: string) => at(name)?.split(",").map((s) => s.trim()).filter(Boolean);
-  const source = at("--source") ?? "zotero";
-  if (source !== "zotero" && source !== "drupal") throw new Error(`--source must be zotero or drupal, not "${source}".`);
-  return {
-    source, refresh: argv.includes("--refresh"), out: at("--out") ?? (source === "drupal" ? "survey/drupal" : "survey"),
-    libraries: list("--libraries"), compare: list("--compare") ?? ["survey/notes.jsonl", "survey/group-61098/notes.jsonl"].filter(existsSync),
-  };
+  // An option ignored would give a different report from the one asked for.
+  argv.forEach((arg, i) => {
+    if (arg.startsWith("-") && arg !== "--refresh" && arg !== "--out") throw new Error(`The survey doesn't take ${arg}: it reads Zotero notes only.`);
+    if (!arg.startsWith("-") && argv[i - 1] !== "--out") throw new Error(`The survey doesn't take ${arg}.`);
+  });
+  return { refresh: argv.includes("--refresh"), out: at("--out") ?? "survey" };
 }
 
 function progress(label: string) {
@@ -74,27 +68,6 @@ async function zoteroRows(out: string, refresh: boolean): Promise<Row[]> {
     const parent = n.data.parentItem ? parents.get(n.data.parentItem) : undefined;
     return { key: n.key, parent: n.data.parentItem ?? null, parentTitle: parent?.data.title ?? null, parentType: parent?.data.itemType ?? null, tags, parsed, suspects: [] };
   });
-}
-
-function drupalRows(site: DrupalSite): Row[] {
-  const rows: Row[] = [];
-  for (const work of site.works) {
-    if (!work.notes.trim()) continue;
-    const { quotes, outside } = splitQuotes(work.notes);
-    // A work whose notes hold no quote span is read as a single note, so the report shows what it is.
-    const pieces = quotes.length ? quotes : [{ html: work.notes, concepts: [] }];
-    for (const [i, q] of pieces.entries()) {
-      const parsed = parseNote(q.html, q.concepts);
-      if (parsed.kind === "other") parsed.commentary = plain(q.html);
-      if (i === 0 && outside) parsed.commentary = [parsed.commentary, outside].filter(Boolean).join("\n\n");
-      rows.push({ key: `drupal:${work.nid}#${i + 1}`, parent: `drupal:${work.nid}`, parentTitle: work.title, parentType: work.type, tags: q.concepts, parsed, suspects: [] });
-    }
-  }
-  for (const q of site.quotes) {
-    const parsed = parseNote(`<p>${q.body}</p>`);
-    rows.push({ key: `drupal-quote:${q.nid}`, parent: null, parentTitle: q.citation ?? (q.author ? `(${q.author})` : q.title), parentType: "Quotes module", tags: [], parsed, suspects: [] });
-  }
-  return rows;
 }
 
 function applyOcr(rows: Row[]) {
@@ -141,7 +114,7 @@ function variantGroups(tags: [string, number][]): string[][] {
   return [...groups.values()].filter((g) => g.length > 1);
 }
 
-function report(rows: Row[], source: string, extra = ""): string {
+function report(rows: Row[], source: string): string {
   const quotes = rows.filter((r) => r.parsed.kind === "quote");
   const sources = new Set(quotes.map((r) => r.parent).filter(Boolean));
   const withFlag = (flag: string) => quotes.filter((r) => r.parsed.flags.includes(flag as never));
@@ -245,102 +218,21 @@ ${tagCounts.length ? ["| Tag | Quotes |", "|---|---:|", ...tagCounts.slice(0, 60
 Spellings that may be one tag:
 
 ${variantGroups(tagCounts).map((g) => `- ${g.map((t) => `\`${t}\``).join(", ")}`).join("\n") || "_None._"}
-${extra}`;
-}
-
-function drupalExtra(site: DrupalSite, rows: Row[], zotero: Map<string, ApiItem[]>, compared: Row[]): string {
-  const quotes = rows.filter((r) => r.parsed.kind === "quote");
-  const vocab = new Map(site.concepts.map((c) => [c.word.toLowerCase(), c]));
-  const used = count(quotes, (r) => r.tags.map((t) => t.toLowerCase()));
-  const outsideVocab = used.filter(([t]) => !vocab.has(t));
-  const keywordUse = new Set(site.works.flatMap((w) => w.keywords.map((k) => k.toLowerCase())));
-  const unusedConcepts = site.concepts.filter((c) => !used.some(([t]) => t === c.word.toLowerCase()) && !keywordUse.has(c.word.toLowerCase()));
-
-  // Each work with quotes, matched to Zotero items by loose title, then year when titles repeat.
-  const index = new Map<string, { library: string; item: ApiItem }[]>();
-  for (const [library, items] of zotero) {
-    for (const item of items) {
-      const k = normalizedTitle(item.data.title);
-      if (k) index.set(k, [...(index.get(k) ?? []), { library, item }]);
-    }
-  }
-  const quoted = site.works.filter((w) => quotes.some((r) => r.parent === `drupal:${w.nid}`));
-  const matches = quoted.map((w) => {
-    let hits = index.get(normalizedTitle(w.title)) ?? [];
-    const sameYear = hits.filter((h) => w.year && (h.item.data.date ?? "").includes(w.year));
-    if (hits.length > 1 && sameYear.length) hits = sameYear;
-    return { work: w, libraries: [...new Set(hits.map((h) => h.library))] };
-  });
-  const unmatched = matches.filter((m) => !m.libraries.length);
-
-  const zoteroKeys = new Map<string, Row>();
-  for (const r of compared) if (r.parsed.kind === "quote") zoteroKeys.set(quoteKey(r.parsed.text), r);
-  const drupalKeys = new Set(quotes.map((r) => quoteKey(r.parsed.text)));
-  const inBoth = [...drupalKeys].filter((k) => zoteroKeys.has(k)).length;
-  const zoteroOnly = [...zoteroKeys.keys()].filter((k) => !drupalKeys.has(k));
-
-  return `
-## The old site
-
-- **Works:** ${site.works.length}; with notes: ${site.works.filter((w) => w.notes.trim()).length}; with quotes: ${quoted.length}.
-- **Quotes module:** ${site.quotes.length} standalone quotes (rows \`drupal-quote:*\`).
-- **Text outside the quote spans:** ${site.works.filter((w) => w.notes.includes('class="quote"') && splitQuotes(w.notes).outside).length} works (kept as the first quote's commentary; see notes.jsonl).
-
-### Concept vocabulary
-
-${site.concepts.length} concepts, ${site.concepts.filter((c) => c.definition).length} with a definition, ${site.concepts.filter((c) => c.altLabels.length).length} with alternative labels, ${site.concepts.filter((c) => c.closeMatch).length} linked to WordNet.
-
-${table(count(site.relations, (r) => ({ B: "broader", N: "narrower", R: "related", I: "inverse" })[r.type] ?? r.type), site.relations.length, "Relation", "Pairs")}
-
-- Concepts used on quotes: ${used.filter(([t]) => vocab.has(t)).length}; used only as work keywords or not at all: ${site.concepts.length - used.filter(([t]) => vocab.has(t)).length}; used nowhere: ${unusedConcepts.length}.
-- Quote terms missing from the vocabulary: ${outsideVocab.length}${outsideVocab.length ? `: ${outsideVocab.slice(0, 40).map(([t, n]) => `\`${t}\` (${n})`).join(", ")}` : ""}.
-
-### Matching works to Zotero
-
-Works with quotes, matched by title (and year where titles repeat) against ${[...zotero].map(([l, items]) => `${l} (${items.length} items)`).join(", ")}:
-
-${table(count(matches, (m) => (m.libraries.length ? m.libraries.join(" + ") : "no match")), matches.length, "Found in", "Works")}
-
-${unmatched.length ? ["Unmatched examples:", "", ...unmatched.slice(0, 12).map((m) => `- \`${m.work.nid}\` ${m.work.title} (${m.work.year ?? "n.d."}; ${m.work.authors.slice(0, 2).join("; ") || "no author"})`)].join("\n") : ""}
-
-### Overlap with Zotero notes
-
-Compared with ${compared.length ? `the ${compared.length} notes in the Zotero surveys given by --compare` : "nothing (run the Zotero surveys first)"}, by the first 120 letters of each quote:
-
-- In both: ${inBoth} of ${drupalKeys.size} distinct old-site quotes.
-- Only in Zotero notes: ${zoteroOnly.length}${zoteroOnly.length ? `, e.g. ${zoteroOnly.slice(0, 4).map((k) => `\`${zoteroKeys.get(k)!.key}\``).join(", ")}` : ""}.
-- Distinct quotes across both: about ${drupalKeys.size + zoteroOnly.length}.
 `;
 }
 
-/** The text of a note that isn't a quote, so the report can show it. */
 function plain(html: string): string {
   return html.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
 }
 
 async function main() {
-  const { source, refresh, out, libraries, compare } = args();
-  let rows: Row[];
-  let extra = "";
-  if (source === "zotero") {
-    rows = await zoteroRows(out, refresh);
-    applyOcr(rows);
-  } else {
-    const site = await cached(join(out, "cache", "drupal.json"), refresh, () => loadDrupal(drupalUrl()));
-    rows = drupalRows(site);
-    applyOcr(rows);
-    const zotero = new Map<string, ApiItem[]>();
-    for (const library of libraries ?? [zoteroConfig().library]) {
-      const file = join(out, "cache", `zotero-${library.replace("/", "-")}.json`);
-      zotero.set(library, await cached(file, refresh, () => clientFor(library).getAll("items/top", {}, progress(`Items in ${library}`))));
-    }
-    const compared = compare.flatMap((f) => readFileSync(f, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Row));
-    extra = drupalExtra(site, rows, zotero, compared);
-  }
+  const { refresh, out } = args();
+  const rows = await zoteroRows(out, refresh);
+  applyOcr(rows);
 
   mkdirSync(out, { recursive: true });
   writeFileSync(join(out, "notes.jsonl"), rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
-  writeFileSync(join(out, "report.md"), report(rows, source === "zotero" ? "Zotero notes" : "the old Drupal site", extra));
+  writeFileSync(join(out, "report.md"), report(rows, "Zotero notes"));
   const quotes = rows.filter((r) => r.parsed.kind === "quote");
   const grades = count(quotes, (r) => r.parsed.grade).map(([g, n]) => `${g} ${n}`).join(", ");
   process.stderr.write(`${rows.length} notes, ${quotes.length} quotes (${grades}). Report: ${join(out, "report.md")}\n`);

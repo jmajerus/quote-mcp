@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { type DB, openDb } from "../src/db.js";
-import type { DrupalSite } from "../src/drupal.js";
+import { type DrupalSite, importWithSite } from "./seed.js";
 import { holdingsCounts } from "../src/holdings.js";
 import { runImport } from "../src/import.js";
-import { rematchWorks, takeOldSiteYears } from "../src/rematch.js";
+import { rematchWorks } from "../src/rematch.js";
 import { searchQuotes } from "../src/queries.js";
 
 const PRIMARY = "users/1";
@@ -20,7 +20,7 @@ const site = (title: string, authors = ["Morgan, Gareth"]): DrupalSite => ({
 
 let db: DB;
 const work = () => db.prepare("SELECT w.* FROM works w JOIN quotes q ON q.work_id = w.id LIMIT 1").get() as Record<string, unknown>;
-const load = (title: string, authors?: string[]) => runImport(db, { drupal: site(title, authors), primary: PRIMARY, sources: [PRIMARY] });
+const load = (title: string, authors?: string[]) => importWithSite(db, { drupal: site(title, authors), primary: PRIMARY, sources: [PRIMARY] });
 const rematch = (dryRun = false) => rematchWorks(db, { primary: PRIMARY, dryRun });
 const dump = () => JSON.stringify([db.prepare("SELECT * FROM works ORDER BY id").all(), db.prepare("SELECT id, work_id, updated_at FROM quotes ORDER BY id").all(),
   db.prepare("SELECT * FROM work_origins ORDER BY kind, ref").all(), db.prepare("SELECT COUNT(*) FROM history").pluck().get()]);
@@ -53,7 +53,7 @@ describe("rematching works", () => {
     load("Images of Organization");
     expect(work()).toMatchObject({ match: "ambiguous", year: null });
     expect(rematch().changes).toEqual([]);
-    takeOldSiteYears(db, [{ nid: 5, year: "2006" }]);
+    db.prepare("UPDATE works SET year = '2006' WHERE match = 'ambiguous'").run();
     expect(rematch().changes).toMatchObject([{ from: "ambiguous", to: "zotero EDITION2" }]);
     expect(work()).toMatchObject({ zotero_key: "EDITION2" });
   });
@@ -64,6 +64,21 @@ describe("rematching works", () => {
     load("Images of Organization");
     addItem(db, "EDITION1", book("Images of organization", "1986", "Morgan"), 1);
     expect(rematch().changes).toMatchObject([{ from: "ambiguous", to: "zotero EDITION2" }]);
+  });
+
+  it("matches & to and, with a different subtitle and HTML escapes", () => {
+    addItem(db, "SHAME001", book("Shame and guilt: the masters of disguise", "1992", "Morgan"));
+    load("Shame &amp; Guilt: Masters of Disguise");
+    expect(work()).toMatchObject({ match: "zotero", zotero_key: "SHAME001" });
+  });
+
+  it("tells books with one title apart by the author, and prefers the full title to the year", () => {
+    addItem(db, "OTHERONE", book("Images of organization", "2006", "Other"));
+    addItem(db, "PLAIN001", book("Images of organization", "2006", "Morgan"));
+    addItem(db, "EXEC0001", book("Images of organization: the executive edition", "1998", "Morgan"));
+    load("Images of Organization: The Executive Edition");
+    db.prepare("UPDATE works SET year = '2006'").run();
+    expect(work()).toMatchObject({ zotero_key: "EXEC0001" });
   });
 
   it("updates an ambiguous work's candidates, and makes it unmatched when none are left", () => {
@@ -151,32 +166,5 @@ describe("rematching works", () => {
     expect(r.changes).toMatchObject([{ from: "unmatched", to: "zotero IMAGES01" }]);
     expect(r.works).toEqual({ zotero: 1 });
     expect(dump()).toBe(before);
-  });
-});
-
-describe("taking the old site's years", () => {
-  it("fills an empty year on a work with its own details, and nothing else", () => {
-    load("Images of Organization");
-    const nid = [{ nid: 5, year: "2006" }, { nid: 6, year: "1999" }, { nid: 7, year: null }];
-    const dry = takeOldSiteYears(db, nid, { dryRun: true });
-    expect(dry).toEqual({ read: 3, withYear: 2, filled: 1, alreadySet: 0, matched: 0, notHere: 1 });
-    expect(work().year).toBeNull();
-    expect(takeOldSiteYears(db, nid).filled).toBe(1);
-    expect(work().year).toBe("2006");
-    expect(takeOldSiteYears(db, [{ nid: 5, year: "1990" }])).toMatchObject({ filled: 0, alreadySet: 1 });
-    expect(work().year).toBe("2006");
-  });
-
-  it("leaves a matched work with its item's year", () => {
-    addItem(db, "IMAGES01", book("Images of organization", "1986", "Morgan"));
-    load("Images of Organization");
-    expect(takeOldSiteYears(db, [{ nid: 5, year: "2006" }])).toMatchObject({ filled: 0, matched: 1 });
-    expect(work().year).toBe("1986");
-  });
-
-  it("stops if no year could be read", () => {
-    load("Images of Organization");
-    expect(() => takeOldSiteYears(db, [{ nid: 5, year: null }])).toThrow(/Has a column changed/);
-    expect(takeOldSiteYears(db, []).read).toBe(0);
   });
 });

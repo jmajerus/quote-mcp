@@ -1,8 +1,7 @@
 import { type DB, NEXT_QUOTE_ID, now } from "./db.js";
-import type { DrupalSite, DrupalWork } from "./drupal.js";
 import { type Suspect, dropCommonUnknowns, suspectTokens } from "./ocr.js";
 import { readMargin } from "./margin.js";
-import { type ParsedNote, noteText, parseNote, readLocator, splitQuotes } from "./parse.js";
+import { type ParsedNote, noteText, parseNote, readLocator } from "./parse.js";
 import { fullTitle, normalizedTitle, quoteKey, shareAuthor, slugify, yearOf } from "./text.js";
 import type { ApiItem } from "./zotero.js";
 
@@ -25,7 +24,6 @@ export const SCHEME = {
 export const MARGIN_TAG = "margin";
 
 export interface ImportOptions {
-  drupal?: DrupalSite;
   /** The library quotes cite: works are matched to its items. */
   primary: string;
   /** Libraries whose quote notes are imported, in order; the primary library should come first. */
@@ -33,28 +31,18 @@ export interface ImportOptions {
   /** A word list for the OCR check; without one the check is skipped. */
   dictionary?: Set<string>;
   actor?: string;
-  /** Works it all out and reports it, then puts everything back. */
-  dryRun?: boolean;
 }
 
-/** An old-site work that now points somewhere else, which moves its quotes. */
-export interface WorkChange { title: string; from: string; to: string; quotes: number }
-
 export interface ImportStats {
-  concepts: { added: number; relations: number };
   quotes: { added: number; updated: number; merged: number; unchanged: number; keptEdited: number };
   skipped: Record<string, number>;
   works: Record<string, number>;
-  /** Old-site works that matched something different from last time. */
-  workChanges: WorkChange[];
-  /** Works matched by title to an item with none of their authors, or none at all: worth a look, since it may be another book. */
-  authorMismatches: { title: string; authors: string[]; zotero: string; creators: string[] }[];
   unresolvedTags: [string, number][];
   ocrSuspects: number;
 }
 
 interface Incoming {
-  kind: "drupal" | "drupal-quote" | "zotero-note";
+  kind: "zotero-note";
   record?: "quote" | "note";
   ref: string;
   version: string | null;
@@ -66,8 +54,6 @@ interface Incoming {
 }
 
 interface QuoteRow { id: number; work_id: number | null; edited: number; status: string; locator: string | null; chapter_author: string | null; comment: string | null }
-
-const RELATION = { B: "broader", N: "narrower", R: "related", I: "inverse" } as const;
 
 export function creators(data: ApiItem["data"]): string[] {
   const all = data.creators ?? [];
@@ -119,38 +105,18 @@ export function workMatcher(db: DB, primary: string, stamp: string) {
   return { primaryByKey, candidates, zoteroWork, setOrigin, workByOrigin };
 }
 
-const ROLLBACK = new Error("dry run");
-
 export function runImport(db: DB, opts: ImportOptions): ImportStats {
   const actor = opts.actor ?? "import";
   const stamp = now();
   const stats: ImportStats = {
-    concepts: { added: 0, relations: 0 },
     quotes: { added: 0, updated: 0, merged: 0, unchanged: 0, keptEdited: 0 },
-    skipped: {}, works: {}, workChanges: [], authorMismatches: [], unresolvedTags: [], ocrSuspects: 0,
+    skipped: {}, works: {}, unresolvedTags: [], ocrSuspects: 0,
   };
   const skip = (why: string) => (stats.skipped[why] = (stats.skipped[why] ?? 0) + 1);
 
-  const run = db.transaction(() => {
+  db.transaction(() => {
     // --- Concepts ---------------------------------------------------------------------------------
     db.prepare("INSERT OR IGNORE INTO schemes (slug, label, description, created_at) VALUES (?, ?, ?, ?)").run(SCHEME.slug, SCHEME.label, SCHEME.description, stamp);
-    const schemeId = (db.prepare("SELECT id FROM schemes WHERE slug = ?").get(SCHEME.slug) as { id: number }).id;
-    // Once terminology-mcp holds the scheme (src/terminology.ts), its concepts come only from there.
-    const followed = db.prepare("SELECT 1 FROM concepts WHERE scheme_id = ? AND term_id IS NOT NULL LIMIT 1").get(schemeId);
-    if (opts.drupal && !followed) {
-      const addConcept = db.prepare(`INSERT OR IGNORE INTO concepts (scheme_id, slug, label, alt_labels, definition, close_match, source, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-      for (const c of opts.drupal.concepts) {
-        stats.concepts.added += addConcept.run(schemeId, slugify(c.word), c.word, JSON.stringify(c.altLabels), c.definition, c.closeMatch, `drupal:kid:${c.kid}`, stamp, stamp).changes;
-      }
-      const idOf = db.prepare("SELECT id FROM concepts WHERE scheme_id = ? AND slug = ?");
-      const addRelation = db.prepare("INSERT OR IGNORE INTO concept_relations (from_id, to_id, type) VALUES (?, ?, ?)");
-      for (const r of opts.drupal.relations) {
-        const from = idOf.get(schemeId, slugify(r.from)) as { id: number } | undefined;
-        const to = idOf.get(schemeId, slugify(r.to)) as { id: number } | undefined;
-        if (from && to && RELATION[r.type]) stats.concepts.relations += addRelation.run(from.id, to.id, RELATION[r.type]).changes;
-      }
-    }
     // Tags resolve to concepts by label first, then by alternative label, then by slug, ignoring case.
     const concepts = new Map<string, number>();
     const rows = db.prepare("SELECT id, slug, label, alt_labels FROM concepts WHERE status != 'retired'").all() as { id: number; slug: string; label: string; alt_labels: string }[];
@@ -160,54 +126,7 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
     const conceptOf = (tag: string) => concepts.get(tag.toLowerCase()) ?? null;
 
     // --- Works ------------------------------------------------------------------------------------
-    const { primaryByKey, candidates, zoteroWork, setOrigin, workByOrigin } = workMatcher(db, opts.primary, stamp);
-
-    /** The work for an old-site work: its Zotero item when exactly one matches, else a work of its own. */
-    const drupalWork = (w: DrupalWork): number => {
-      let hits = candidates(w.title, w.year, w.authors);
-      const existing = (workByOrigin.get("drupal", String(w.nid)) as { work_id: number } | undefined)?.work_id;
-      const before = existing === undefined ? undefined : db.prepare("SELECT match, zotero_library, zotero_key, (SELECT COUNT(*) FROM quotes WHERE work_id = works.id) AS quotes FROM works WHERE id = ?").get(existing) as
-        { match: string; zotero_library: string | null; zotero_key: string | null; quotes: number };
-      // A match stands while its item does: a title edited in Zotero, or another edition filed, doesn't move its quotes.
-      // When the item goes (a merge, say), the work is matched afresh.
-      const matched = before?.match === "zotero" && before.zotero_library === opts.primary ? primaryByKey.get(before.zotero_key!) : undefined;
-      if (matched) hits = [matched];
-      let id: number;
-      if (hits.length === 1) {
-        const { key, data } = hits[0];
-        const made = creators(data);
-        if (w.authors.length && !shareAuthor(w.authors, made)) stats.authorMismatches.push({ title: w.title, authors: w.authors, zotero: key, creators: made });
-        id = zoteroWork(opts.primary, key, data);
-      } else {
-        const match = hits.length ? "ambiguous" : "unmatched";
-        const own = existing && (db.prepare("SELECT match FROM works WHERE id = ?").get(existing) as { match: string }).match !== "zotero" ? existing : undefined;
-        const fields = { title: w.title, authors: JSON.stringify(w.authors), year: w.year, item_type: w.type, isbn: w.isbn, url: w.url, match, candidates: hits.length ? JSON.stringify(hits.map((h) => h.key)) : null, stamp };
-        if (own) {
-          db.prepare(`UPDATE works SET title = @title, authors = @authors, year = @year, item_type = @item_type, isbn = @isbn, url = @url,
-            match = @match, candidates = @candidates, updated_at = @stamp WHERE id = @id`).run({ ...fields, id: own });
-          id = own;
-        } else {
-          id = (db.prepare(`INSERT INTO works (title, authors, year, item_type, isbn, url, match, candidates, created_at, updated_at)
-            VALUES (@title, @authors, @year, @item_type, @isbn, @url, @match, @candidates, @stamp, @stamp) RETURNING id`).get(fields) as { id: number }).id;
-        }
-      }
-      if (existing && existing !== id) {
-        // The work was filed in Zotero since the last import: its quotes move to the Zotero item, and its
-        // old id stays an origin of the work, so a key made from it (holdings-mcp's quote:<id>) still resolves.
-        db.prepare("UPDATE quotes SET work_id = ? WHERE work_id = ?").run(id, existing);
-        db.prepare("UPDATE work_origins SET work_id = ? WHERE work_id = ?").run(id, existing);
-        setOrigin.run("work", String(existing), id);
-        db.prepare("DELETE FROM works WHERE id = ? AND match != 'zotero' AND NOT EXISTS (SELECT 1 FROM quotes WHERE work_id = ?)").run(existing, existing);
-      }
-      setOrigin.run("drupal", String(w.nid), id);
-      if (before) {
-        const was = before.match === "zotero" ? `zotero ${before.zotero_key}` : before.match;
-        const now = db.prepare("SELECT match, zotero_key FROM works WHERE id = ?").get(id) as { match: string; zotero_key: string | null };
-        const is = now.match === "zotero" ? `zotero ${now.zotero_key}` : now.match;
-        if (was !== is) stats.workChanges.push({ title: w.title, from: was, to: is, quotes: before.quotes });
-      }
-      return id;
-    };
+    const { candidates, zoteroWork, setOrigin } = workMatcher(db, opts.primary, stamp);
 
     /** The work for a Zotero note's parent: the primary library's copy of it when there is exactly one. */
     const noteWork = (library: string, parentKey: string | null): number | null => {
@@ -300,39 +219,6 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
       stats.quotes.added++;
     };
 
-    // The old site: works and their quote spans, then the Quotes module's standalone quotes.
-    if (opts.drupal) {
-      for (const work of opts.drupal.works) {
-        if (!work.notes.trim()) continue;
-        const { quotes, outside } = splitQuotes(work.notes);
-        if (!quotes.length) {
-          skip("drupal note without quotes");
-          continue;
-        }
-        const workId = drupalWork(work);
-        for (const [i, span] of quotes.entries()) {
-          const parsed = parseNote(span.html, span.concepts);
-          if (parsed.kind !== "quote") {
-            skip(`drupal span: ${parsed.kind}`);
-            continue;
-          }
-          if (i === 0 && outside) parsed.commentary = [parsed.commentary, outside].filter(Boolean).join("\n\n");
-          upsert({ kind: "drupal", ref: `${work.nid}#${i + 1}`, version: null, raw: i === 0 && outside ? `${span.html}\n${outside}` : span.html,
-            parsed, workId, tags: span.concepts.map((tag) => ({ tag, origin: "span" })) });
-        }
-      }
-      for (const q of opts.drupal.quotes) {
-        // Everything in the Quotes module is a quote, with or without quotation marks.
-        const parsed = parseNote(`<p><span class="quote">${q.body}</span></p>`);
-        if (parsed.kind !== "quote") {
-          skip(`drupal quote: ${parsed.kind}`);
-          continue;
-        }
-        upsert({ kind: "drupal-quote", ref: String(q.nid), version: null, raw: q.body, parsed, workId: null, tags: [],
-          attribution: [q.author, q.citation].filter(Boolean).join(", ") || null });
-      }
-    }
-
     /** A margin note's fields: a trailing locator, concept tags read from its words, and the rest as its comment. */
     const marginNote = (html: string, noteTags: string[]): Pick<Incoming, "parsed" | "tags"> | null => {
       const { body, locator, chapterAuthor } = readLocator(noteText(html));
@@ -412,12 +298,6 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
     }
     stats.unresolvedTags = (db.prepare("SELECT tag, COUNT(*) AS n FROM quote_tags WHERE concept_id IS NULL GROUP BY tag COLLATE NOCASE ORDER BY n DESC, tag").all() as { tag: string; n: number }[])
       .map((r) => [r.tag, r.n]);
-    if (opts.dryRun) throw ROLLBACK;
-  });
-  try {
-    run();
-  } catch (error) {
-    if (error !== ROLLBACK) throw error;
-  }
+  })();
   return stats;
 }

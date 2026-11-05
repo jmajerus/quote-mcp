@@ -9,6 +9,7 @@ import { holdingsCounts } from "../src/holdings.js";
 import { runImport } from "../src/import.js";
 import { citeQuote, searchQuotes, worklist } from "../src/queries.js";
 import { drupal, makeStore } from "./fixture.js";
+import { importWithSite } from "./seed.js";
 
 const PRIMARY = "users/1";
 const PAGE = "Mobbing is an emotional assault. It begins when an individual becomes the target of disrespectful behavior.";
@@ -236,7 +237,7 @@ describe("add_quote", () => {
 
   it("is left alone by the import's OCR check once verified", async () => {
     const id = saved(await addQuote(db, { work: "main:42", text: "disrespectful behavior" }, options())).id;
-    runImport(db, { drupal, primary: PRIMARY, sources: [PRIMARY], dictionary: new Set(["mobbing"]) });
+    importWithSite(db, { drupal, primary: PRIMARY, sources: [PRIMARY], dictionary: new Set(["mobbing"]) });
     expect(db.prepare("SELECT flags FROM quotes WHERE id = ?").pluck().get(id)).toBe("[]");
   });
 });
@@ -428,12 +429,12 @@ describe("following corpus-mcp's anchor changes", () => {
     expect(await followAnchors(db, corpus)).toMatchObject({ read: 1, lost: 1 });
   });
 
-  it("keeps a verified quote's words, status, and anchor flags when its Zotero note or old-site record changes", () => {
-    runImport(db, { drupal, primary: PRIMARY, sources: [PRIMARY], dictionary: new Set(["mobbing"]) });
-    const { quote_id: id, kind } = db.prepare("SELECT quote_id, kind FROM quote_origins WHERE kind IN ('drupal', 'zotero') LIMIT 1").get() as { quote_id: number; kind: string };
+  it("keeps a verified quote's words, status, and anchor flags when its Zotero note changes", () => {
+    importWithSite(db, { drupal, primary: PRIMARY, sources: [PRIMARY], dictionary: new Set(["mobbing"]) });
+    const { quote_id: id, kind } = db.prepare("SELECT quote_id, kind FROM quote_origins WHERE kind = 'zotero-note' LIMIT 1").get() as { quote_id: number; kind: string };
     db.prepare("UPDATE quotes SET status = 'verified', text = 'The book’s own words.', flags = '[\"anchor_lost\"]' WHERE id = ?").run(id);
     db.prepare("UPDATE quote_origins SET raw = 'an older version' WHERE quote_id = ? AND kind = ?").run(id, kind);
-    runImport(db, { drupal, primary: PRIMARY, sources: [PRIMARY], dictionary: new Set(["mobbing"]) });
+    importWithSite(db, { drupal, primary: PRIMARY, sources: [PRIMARY], dictionary: new Set(["mobbing"]) });
     expect(db.prepare("SELECT status, text, flags FROM quotes WHERE id = ?").get(id)).toEqual({ status: "verified", text: "The book’s own words.", flags: '["anchor_lost"]' });
     expect(db.prepare("SELECT reason FROM history WHERE quote_id = ? AND kind = 'source_changed'").pluck().get(id)).toMatch(/checked against its book/);
   });

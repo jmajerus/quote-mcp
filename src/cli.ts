@@ -9,7 +9,6 @@ import { reviewProposal } from "./edits.js";
 import { ToolError } from "./common.js";
 import { listProposals, openReadOnly } from "./queries.js";
 import { servePublic, serveHttp, serveStdio } from "./server.js";
-import { drupalUrl, emptyFields, loadDrupal, loadDrupalYears } from "./drupal.js";
 import { exportAll } from "./export.js";
 import { runImport } from "./import.js";
 import { loadDictionary } from "./ocr.js";
@@ -21,19 +20,16 @@ import { openReplicaState, pending, startDrain, tick } from "./drain.js";
 import { replicaScript } from "./replica.js";
 import { type ConceptSet, listSets, loadSets } from "./sets.js";
 import { configReport, siteSetting } from "./settings.js";
-import { takeOldSiteYears, rematchWorks } from "./rematch.js";
+import { rematchWorks } from "./rematch.js";
 import { type SnapshotOptions, buildSnapshot, readMapsFile } from "./snapshot.js";
 import { syncLibrary } from "./sync.js";
 import { acceptHeldChange, clearCursor, proposal, readCursor, reportProgress, runTermSync, startTermSync, terminologyClient, terminologyConfig } from "./terminology.js";
 import { ZoteroClient, zoteroConfig } from "./zotero.js";
 
 /**
- *   quote-mcp import [--no-drupal] [--no-zotero] [--dry-run]
- *       Syncs the Zotero mirror (QUOTE_ZOTERO_LIBRARY plus QUOTE_ZOTERO_SOURCES), reads the old site
- *       (QUOTE_DRUPAL_URL, when set), and imports. Safe to run again; run it on a timer to pick up new
- *       quote notes typed into Zotero.
- *   quote-mcp take-old-site-years [--dry-run]
- *       Saves the old site's years on works that keep their own details. Reads nothing else from the old site.
+ *   quote-mcp import [--no-zotero]
+ *       Syncs the Zotero mirror (QUOTE_ZOTERO_LIBRARY plus QUOTE_ZOTERO_SOURCES) and imports quote notes. Safe to
+ *       run again; a timer runs it to pick up new notes typed into Zotero.
  *   quote-mcp rematch [--dry-run]
  *       Matches works to Zotero from the store: those not matched yet, and those whose item has gone. Reads no source
  *       but Zotero. The dry run lists what would move, and saves nothing.
@@ -76,47 +72,43 @@ const flag = (name: string) => argv.includes(name);
 const option = (name: string) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined);
 const say = (text: string) => process.stderr.write(text);
 
+/** Stops on a flag a command doesn't take, before it touches anything: a flag ignored can turn a dry run into a real one. */
+function onlyFlags(command: string, allowed: string[], removed: Record<string, string> = {}) {
+  for (const arg of argv) {
+    if (!arg.startsWith("-") || allowed.includes(arg)) continue;
+    throw new Error(`${command} doesn't take ${arg}${removed[arg] ? `: ${removed[arg]}` : ""}. Nothing was done.`);
+  }
+}
+
 /** The libraries quotes come from: the primary one first, then QUOTE_ZOTERO_SOURCES. */
 const zoteroSources = (primary: string) => [...new Set([primary, ...(process.env.QUOTE_ZOTERO_SOURCES ?? "").split(",").map((s) => s.trim()).filter(Boolean)])];
 
 async function importCommand() {
-  // A dry run saves nothing, the mirror and the schema included, so it reads the store as the last sync left it.
-  const dryRun = flag("--dry-run");
-  const db = dryRun ? openExisting() : openDb();
+  onlyFlags("import", ["--no-zotero"], { "--no-drupal": "the old site's import is gone, so an import reads only Zotero notes", "--dry-run": "use rematch --dry-run to see what would move" });
+  const db = openDb();
   const config = zoteroConfig();
   const sources = zoteroSources(config.library);
-  if (!flag("--no-zotero") && !dryRun) {
+  if (!flag("--no-zotero")) {
     for (const library of sources) {
       const r = await syncLibrary(db, new ZoteroClient({ ...config, library }, (t) => say(`\n${t}`)), library, say);
       say(`${library}: ${r.changed} changed, ${r.deleted} deleted, now at version ${r.version}.\n`);
     }
   }
-  const useDrupal = !flag("--no-drupal") && !!process.env.QUOTE_DRUPAL_URL;
-  const drupal = useDrupal ? await loadDrupal(drupalUrl()) : undefined;
-  if (drupal) for (const field of emptyFields(drupal.works)) say(`Warning: none of the old site's ${drupal.works.length} works has ${field === "year" ? "a year" : "authors"}, so matching can't use them. Has a column changed?\n`);
-  else if (dryRun) say("The old site isn't being read (--no-drupal, or no QUOTE_DRUPAL_URL), so works aren't matched again.\n");
   let dictionary: Set<string> | undefined;
   try {
     dictionary = loadDictionary();
   } catch (error) {
     say(`No word list (${(error as Error).message}); the OCR check is skipped.\n`);
   }
-  const s = runImport(db, { drupal, primary: config.library, sources, dictionary, dryRun });
+  const s = runImport(db, { primary: config.library, sources, dictionary });
   const counts = db.prepare("SELECT kind, status, COUNT(*) AS n FROM quotes GROUP BY kind, status ORDER BY kind DESC, status").all() as { kind: string; status: string; n: number }[];
   console.log([
-    `Concepts: ${s.concepts.added} added, ${s.concepts.relations} relations added.`,
     `Quotes: ${s.quotes.added} added, ${s.quotes.merged} merged from a second source, ${s.quotes.updated} re-imported, ${s.quotes.unchanged} unchanged, ${s.quotes.keptEdited} edited or checked against a book and left alone.`,
     `In the store: ${counts.map((c) => (c.kind === "note" ? `${c.n} notes` : `${c.n} ${c.status}`)).join(", ")}; ${s.ocrSuspects} with suspect words.`,
     `Works with quotes: ${Object.entries(s.works).map(([k, n]) => `${n} ${k}`).join(", ")}.`,
     `Skipped: ${Object.entries(s.skipped).map(([k, n]) => `${n} ${k}`).join(", ") || "nothing"}.`,
     `Tags not in a concept scheme: ${s.unresolvedTags.length}${s.unresolvedTags.length ? ` (${s.unresolvedTags.slice(0, 25).map(([t, n]) => `${t} ${n}`).join(", ")}${s.unresolvedTags.length > 25 ? ", …" : ""})` : ""}.`,
   ].join("\n"));
-  for (const c of s.workChanges) console.log(`Work ${dryRun ? "would move" : "moved"}: ${c.title} (${c.from} → ${c.to}, ${c.quotes} quote${c.quotes === 1 ? "" : "s"}).`);
-  for (const m of s.authorMismatches) console.log(`Check this match, no author in common: ${m.title} (${m.authors.join("; ")}) and Zotero ${m.zotero} (${m.creators.join("; ")}).`);
-  if (dryRun) {
-    console.log("Dry run: nothing was saved.");
-    return;
-  }
   const corpus = corpusConfig();
   if (corpus) {
     try {
@@ -376,23 +368,9 @@ function publishFrom(db: Database.Database) {
   if (publish) console.log(snapshotLine(buildSnapshot(db, publish, snapshotFile())));
 }
 
-/** Saves the old site's years, once, on works that keep their own details. Nothing else is read from the old site. */
-async function takeOldSiteYearsCommand() {
-  const dryRun = flag("--dry-run");
-  const years = await loadDrupalYears(drupalUrl());
-  const db = dryRun ? openExisting() : openDb();
-  try {
-    const r = takeOldSiteYears(db, years, { dryRun });
-    console.log(`Old-site works: ${r.read}, ${r.withYear} with a year. ${dryRun ? "Would save" : "Saved"} ${r.filled}; ${r.alreadySet} already had one, ${r.matched} are matched to Zotero and use its year, ${r.notHere} aren't in the store.`);
-    if (dryRun) console.log("Dry run: nothing was saved.");
-    else if (r.filled) publishFrom(db);
-  } finally {
-    db.close();
-  }
-}
-
 /** Matches works to Zotero from the store, after bringing the mirror of each library up to date. */
 async function rematchCommand() {
+  onlyFlags("rematch", ["--dry-run"]);
   const dryRun = flag("--dry-run");
   const config = zoteroConfig();
   const db = dryRun ? openExisting() : openDb();
@@ -460,7 +438,7 @@ function proposalsCommand() {
 
 const commands: Record<string, () => unknown> = {
   import: importCommand, migrate: migrateCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, sets: setsCommand, publish: publishCommand, config: configCommand, serve: serveCommand,
-  terms: termsCommand, propose: proposeCommand, "take-corpus-quotes": takeCorpusQuotesCommand, "take-old-site-years": takeOldSiteYearsCommand, rematch: rematchCommand, proposals: proposalsCommand,
+  terms: termsCommand, propose: proposeCommand, "take-corpus-quotes": takeCorpusQuotesCommand, rematch: rematchCommand, proposals: proposalsCommand,
   stdio: () => serveStdio(openReadOnly(), sets(), capture()),
 };
 const command = commands[process.argv[2] ?? ""];

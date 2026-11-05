@@ -6,9 +6,8 @@ How quote-mcp is run, configured, and deployed.
 
 | Command | What it does |
 |---|---|
-| `npm run import` | Syncs the Zotero mirror, reads the old site, and imports (see [Importing](importing.md)). Safe to run again. Not needed to match works: see `rematch`. |
+| `npm run import` | Syncs the Zotero mirror and imports quote notes (see [Importing](importing.md)). Safe to run again. Not needed to match works: see `rematch`. |
 | `npm run quotes -- rematch` | Matches works to Zotero from the store, for works not matched yet and those whose item has gone. `--dry-run` lists what would move and saves nothing. |
-| `npm run quotes -- take-old-site-years` | Saves the old site's years on works that keep their own details, and reads nothing else from it. `--dry-run` as above. |
 | `npm run serve` | MCP at `/mcp`, the admin pages at `/admin`, the JSON API at `/api`, the maps at `/map/` (with `QUOTE_MAP_DIR`), the public site's preview at `/`, `/health`, and on the LAN only, holdings-mcp's counts feed at `/api/holdings/counts` and corpus-mcp's reader routes at `/api/corpus/quotes` (see [the dev-brief](dev-briefs/holdings-and-quotes.md)); port `QUOTE_PORT` (8010 by default). With D1 settings it also runs the replica's drain. |
 | `npm run quotes -- stdio` | MCP over stdio. |
 | `npm run quotes -- migrate` | Brings the store up to this build's schema. Deploy runs it with `--backup`, which copies the store first when its schema will change, so a rolled-back deploy can put the old store back. If that restore fails, the rollback leaves quote-mcp and the import timer stopped, prints `store_restore_failed` with where each store is, and a person puts the right one back. |
@@ -24,7 +23,7 @@ How quote-mcp is run, configured, and deployed.
 | `quote-mcp proposals` | Agents' proposed changes to quotes' text, page, or chapter author; `--accept <n>` or `--reject <n>` (with `--note "…"`) reviews one. Accepting applies it as your edit. |
 | `npm run quotes -- export --out quotes.json` | Everything as JSON. |
 | `npm run quotes -- backup` | A SQLite backup in `data/backups`, keeping 14. |
-| `npm run survey` | Phase 0's read-only survey of the sources (`-- --source drupal` for the old site). |
+| `npm run survey` | Phase 0's read-only survey of the Zotero notes. |
 | `npm run worker:load`, `npm run worker:dev` | Loads the snapshot into a local D1 and runs the public Worker on it at `http://localhost:8787`. |
 | `npm run worker:proxy` | The D1 proxy Worker, locally on port 8788. |
 | `npm run worker:deploy` | Runs the tests, then deploys the public Worker to quotes.majerus.us. |
@@ -44,7 +43,6 @@ Only `QUOTE_ZOTERO_LIBRARY` and `QUOTE_ZOTERO_API_KEY` are needed, and the key o
 |---|---|---|
 | `QUOTE_ZOTERO_LIBRARY`, `QUOTE_ZOTERO_API_KEY` | required | The Zotero library (`users/<id>` or `groups/<id>`) and an API key; read-only is enough. The key isn't needed when `QUOTE_ZOTERO_API` is holdings-mcp's copy. |
 | `QUOTE_ZOTERO_SOURCES` | none | Other Zotero libraries to import quote notes from, comma-separated. |
-| `QUOTE_DRUPAL_URL` | none | The old Drupal site's database (`mysql://…`), read-only. |
 | `QUOTE_MAP_DIR` | none | quote-atlas's built maps, served at `/map/`. |
 | `QUOTE_TERMS_SYNC` | `off` | `on`: the server follows terminology-mcp's `human-work` scheme every minute. Set it in `/etc/quote-mcp/env` only; a second follower would fight the server's cursor. |
 | `TERMINOLOGY_BASE` | `http://terminology-mcp.localdomain:8000` | terminology-mcp on the LAN, where progress reports name the caller; `off` turns following off. |
@@ -68,8 +66,7 @@ Only `QUOTE_ZOTERO_LIBRARY` and `QUOTE_ZOTERO_API_KEY` are needed, and the key o
 
 quote-mcp runs on a Debian LXC, quote-mcp.localdomain, on port 8000.
 
-- **Services.** `quote-mcp.service` (the server), `quote-import.timer` (an import every 30 minutes, without the
-  old site), and `quote-backup.timer` (a backup at 03:45, keeping 14 in `/var/lib/quote-mcp/backups`).
+- **Services.** `quote-mcp.service` (the server), `quote-import.timer` (an import every 30 minutes), and `quote-backup.timer` (a backup at 03:45, keeping 14 in `/var/lib/quote-mcp/backups`).
 - **Files.** The store, the snapshot (`public.db`), the replica's queue (`replica.db`), and the deploy record
   (`deployed.json`) are in `/var/lib/quote-mcp`; releases in `/opt/quote-mcp/releases`, the current one linked
   as `/opt/quote-mcp/current`; the maps in `/opt/quote-mcp/map`.
@@ -91,9 +88,8 @@ The **Deploy Quotes** button in VS Code's status bar runs the deploys, as `npm r
 |---|---|---|
 | Deploy this checkout | `npm run deploy` | Builds, tests, installs this checkout as a new release, migrates the store, builds the public snapshot, restarts, checks `/health`, and rolls back to the previous release if it fails. |
 | Deploy this checkout without tests | `npm run deploy -- --skip-tests` | The same, without the tests. |
-| Push the server's settings | `npm run deploy -- --env` | Copies the server's settings from `.env` into `/etc/quote-mcp/env` and restarts, waiting until the server answers: the Zotero settings (`QUOTE_ZOTERO_API` among them), the old site's, and the D1 proxy's. Only those set in `.env` are replaced. |
+| Push the server's settings | `npm run deploy -- --env` | Copies the server's settings from `.env` into `/etc/quote-mcp/env` and restarts, waiting until the server answers: the Zotero settings (`QUOTE_ZOTERO_API` among them), and the D1 proxy's. Only those set in `.env` are replaced. |
 | Deploy the public Worker | `npm run worker:deploy` | Tests, then deploys the public Worker with `CLOUDFLARE_API_TOKEN` from `.env`. |
-| Import with the old site | `npm run deploy -- --import-drupal` | Runs an import on the server with the old site included. |
 
 A release that adds a migration under `worker/migrations` needs it in D1 before the server's drain ships rows
 with the new columns: `npx wrangler d1 migrations apply DB --remote -c worker/wrangler.jsonc`, then the

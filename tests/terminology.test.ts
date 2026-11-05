@@ -13,6 +13,7 @@ import {
 } from "../src/terminology.js";
 import { runImport } from "../src/import.js";
 import { drupal, makeStore } from "./fixture.js";
+import { importWithSite } from "./seed.js";
 
 /** The fixture's three concepts as terminology-mcp holds them after importing quote-mcp's export. */
 function imported(): Term[] {
@@ -96,7 +97,7 @@ describe("the bootstrap", () => {
     const after = imported();
     const client = await bootstrapped([{ n: 11, kind: "slugged", afterTerms: [{ ...after[2], slug: "human-dignity", formerSlugs: ["dignity"] }] }]);
     await runTermSync({ db, client, sets: SETS });
-    runImport(db, { drupal, primary: "users/1", sources: ["users/1"] });
+    importWithSite(db, { drupal, primary: "users/1", sources: ["users/1"] });
     expect(db.prepare("SELECT slug FROM concepts ORDER BY slug").pluck().all()).toEqual(["abuse", "human-dignity", "mobbing"]);
   });
 

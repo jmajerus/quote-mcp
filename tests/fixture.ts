@@ -1,5 +1,5 @@
 import { type DB, openDb } from "../src/db.js";
-import type { DrupalSite } from "../src/drupal.js";
+import { type DrupalSite, importWithSite } from "./seed.js";
 import { runImport } from "../src/import.js";
 
 /**
@@ -41,6 +41,6 @@ export function makeStore(): DB {
     .run(PRIMARY, key, JSON.stringify({ itemType: "note", parentItem: "MOBB0001", note: `<p>${text} (p. 41)</p>`, tags: tags.map((tag) => ({ tag })) }));
   note("MARGIN01", `${SHARED_NOTE}'s forty-five behaviours, which she leaves out.`, ["margin", "mobbing"]);
   note("MARGIN02", `${PRIVATE_NOTE}, I think, but she's right about the HR department.`, ["margin", "private", "mobbing"]);
-  runImport(db, { drupal, primary: PRIMARY, sources: [PRIMARY] });
+  importWithSite(db, { drupal, primary: PRIMARY, sources: [PRIMARY] });
   return db;
 }
