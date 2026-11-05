@@ -88,7 +88,7 @@ The **Deploy Quotes** button in VS Code's status bar runs the deploys, as `npm r
 |---|---|---|
 | Deploy this checkout | `npm run deploy` | Builds, tests, installs this checkout as a new release, migrates the store, builds the public snapshot, restarts, checks `/health`, and rolls back to the previous release if it fails. |
 | Deploy this checkout without tests | `npm run deploy -- --skip-tests` | The same, without the tests. |
-| Push the server's settings | `npm run deploy -- --env` | Copies the server's settings from `.env` into `/etc/quote-mcp/env` and restarts, waiting until the server answers: the Zotero settings (`QUOTE_ZOTERO_API` among them), the old site's, and the D1 proxy's. Only those set in `.env` are replaced. |
+| Push the server's settings | `npm run deploy -- --env` | Copies the server's settings from `.env` into `/etc/quote-mcp/env` and restarts, waiting until the server answers: the Zotero settings (`QUOTE_ZOTERO_API` among them), and the D1 proxy's. Only those set in `.env` are replaced. |
 | Deploy the public Worker | `npm run worker:deploy` | Tests, then deploys the public Worker with `CLOUDFLARE_API_TOKEN` from `.env`. |
 
 A release that adds a migration under `worker/migrations` needs it in D1 before the server's drain ships rows
