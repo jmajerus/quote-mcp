@@ -38,10 +38,11 @@ function seedOldSite(db: DB, site: DrupalSite, primary: string): void {
     return concepts.find((c) => c.label.toLowerCase() === t || (JSON.parse(c.alt_labels) as string[]).some((a) => a.toLowerCase() === t) || c.slug === t)?.id ?? null;
   };
   const { candidates, zoteroWork, setOrigin, workByOrigin } = workMatcher(db, primary, stamp);
-  const addQuote = (kind: string, ref: string, raw: string, html: string, tags: string[], workId: number | null, attribution: string | null) => {
+  const addQuote = (kind: string, ref: string, raw: string, html: string, tags: string[], workId: number | null, attribution: string | null, outside = "") => {
     if (db.prepare("SELECT 1 FROM quote_origins WHERE kind = ? AND ref = ?").get(kind, ref)) return;
     const p = parseNote(html, tags);
     if (p.kind !== "quote") return;
+    if (outside) p.commentary = [p.commentary, outside].filter(Boolean).join("\n\n");
     const { id } = db.prepare(`INSERT INTO quotes (id, kind, work_id, text, text_key, locator_kind, locator, chapter_author, comment, attribution, source_url, status, grade, flags, created_at, created_by, updated_at, updated_by)
       VALUES (${NEXT_QUOTE_ID}, 'quote', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'import', ?, 'import') RETURNING id`).get(workId, p.text ?? "", quoteKey(p.text), p.locator?.kind ?? "none", p.locator?.value ?? null,
       p.chapterAuthor ?? null, p.commentary ?? null, attribution, p.sourceUrl ?? null, p.grade === "C" ? "unparsed" : "transcribed", p.grade ?? null, JSON.stringify(p.flags), stamp, stamp) as { id: number };
@@ -51,8 +52,14 @@ function seedOldSite(db: DB, site: DrupalSite, primary: string): void {
     for (const k of p.kwic) db.prepare("INSERT OR IGNORE INTO quote_kwic (quote_id, phrase, tag, concept_id) VALUES (?, ?, ?, ?)").run(id, k.phrase, k.concept, conceptOf(k.concept));
   };
   for (const w of site.works) {
-    const spans = quoteSpans(parse(w.notes));
+    const root = parse(w.notes);
+    const spans = quoteSpans(root);
     if (!spans.length) continue;
+    const quotes = spans.map((s) => s.toString());
+    const titles = spans.map((s) => s.getAttribute("title") ?? "");
+    for (const s of spans) s.remove();
+    // Text outside the spans went on the first quote's comment.
+    const outside = root.text.trim();
     const known = workByOrigin.get("drupal", String(w.nid)) as { work_id: number } | undefined;
     let workId = known?.work_id;
     if (workId === undefined) {
@@ -61,9 +68,10 @@ function seedOldSite(db: DB, site: DrupalSite, primary: string): void {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`).get(w.title, JSON.stringify(w.authors), w.year, w.type, w.isbn, w.url, hits.length ? "ambiguous" : "unmatched", hits.length ? JSON.stringify(hits.map((h) => h.key)) : null, stamp, stamp) as { id: number }).id;
       setOrigin.run("drupal", String(w.nid), workId);
     }
-    for (const [i, span] of spans.entries()) {
-      const tags = (span.getAttribute("title") ?? "").split(",").map((t) => t.trim()).filter(Boolean);
-      addQuote("drupal", `${w.nid}#${i + 1}`, span.toString(), span.toString(), tags, workId, null);
+    for (const [i, html] of quotes.entries()) {
+      const tags = titles[i].split(",").map((t) => t.trim()).filter(Boolean);
+      const extra = i === 0 ? outside : "";
+      addQuote("drupal", `${w.nid}#${i + 1}`, extra ? `${html}\n${extra}` : html, html, tags, workId, null, extra);
     }
   }
   for (const q of site.quotes) addQuote("drupal-quote", String(q.nid), q.body, `<p><span class="quote">${q.body}</span></p>`, [], null, [q.author, q.citation].filter(Boolean).join(", ") || null);

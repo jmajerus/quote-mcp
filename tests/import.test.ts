@@ -62,6 +62,11 @@ beforeEach(() => {
 });
 
 describe("import", () => {
+  it("keeps an old-site quote's commentary through an import", () => {
+    importWithSite(db, opts());
+    expect(quoteLike("respect and dignity").comment).toBe("See also [bib]Kantrow1988[/bib]");
+  });
+
   it("merges the same quote from Zotero notes into one quote with every origin and tag", () => {
     const s = importWithSite(db, opts());
     const quote = quoteLike("worst enemies");

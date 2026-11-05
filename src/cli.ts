@@ -72,10 +72,19 @@ const flag = (name: string) => argv.includes(name);
 const option = (name: string) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined);
 const say = (text: string) => process.stderr.write(text);
 
+/** Stops on a flag a command doesn't take, before it touches anything: a flag ignored can turn a dry run into a real one. */
+function onlyFlags(command: string, allowed: string[], removed: Record<string, string> = {}) {
+  for (const arg of argv) {
+    if (!arg.startsWith("-") || allowed.includes(arg)) continue;
+    throw new Error(`${command} doesn't take ${arg}${removed[arg] ? `: ${removed[arg]}` : ""}. Nothing was done.`);
+  }
+}
+
 /** The libraries quotes come from: the primary one first, then QUOTE_ZOTERO_SOURCES. */
 const zoteroSources = (primary: string) => [...new Set([primary, ...(process.env.QUOTE_ZOTERO_SOURCES ?? "").split(",").map((s) => s.trim()).filter(Boolean)])];
 
 async function importCommand() {
+  onlyFlags("import", ["--no-zotero"], { "--no-drupal": "the old site's import is gone, so an import reads only Zotero notes", "--dry-run": "use rematch --dry-run to see what would move" });
   const db = openDb();
   const config = zoteroConfig();
   const sources = zoteroSources(config.library);
@@ -361,6 +370,7 @@ function publishFrom(db: Database.Database) {
 
 /** Matches works to Zotero from the store, after bringing the mirror of each library up to date. */
 async function rematchCommand() {
+  onlyFlags("rematch", ["--dry-run"]);
   const dryRun = flag("--dry-run");
   const config = zoteroConfig();
   const db = dryRun ? openExisting() : openDb();

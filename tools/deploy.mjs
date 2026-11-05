@@ -16,8 +16,7 @@ const USAGE = `Usage: npm run deploy -- [--provision | --env] [--skip-tests]
 
   (no flag)        build, test, install this checkout as a new release, restart, health-check, roll
                    back on failure, and record the branch and commit in /var/lib/quote-mcp/deployed.json
-                   (the server's /health reports it); the first deploy also runs the first import,
-                   the old site included
+                   (the server's /health reports it); the first deploy also runs the first import
   --provision      one-time setup of the LXC (Node 22, build tools, word list, quote user, directories)
   --env            copy the server's settings from .env into its /etc/quote-mcp/env (mode 0640) and
                    restart: QUOTE_ZOTERO_LIBRARY, QUOTE_ZOTERO_API_KEY, QUOTE_ZOTERO_SOURCES,
@@ -65,7 +64,7 @@ async function provision() {
 
 /**
  * Sets the server's settings from this machine's .env, so keys never pass through a chat or a command
- * line: the Zotero and old-site settings, and the D1 proxy the public replica ships through. Only the
+ * line: the Zotero settings, and the D1 proxy the public replica ships through. Only the
  * ones set in .env are replaced, so one left out (or left empty, as a second, empty line in .env makes
  * it) never deletes the server's.
  */

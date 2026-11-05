@@ -30,6 +30,11 @@ interface Row {
 function args() {
   const argv = process.argv.slice(2);
   const at = (name: string) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined);
+  // An option ignored would give a different report from the one asked for.
+  argv.forEach((arg, i) => {
+    if (arg.startsWith("-") && arg !== "--refresh" && arg !== "--out") throw new Error(`The survey doesn't take ${arg}: it reads Zotero notes only.`);
+    if (!arg.startsWith("-") && argv[i - 1] !== "--out") throw new Error(`The survey doesn't take ${arg}.`);
+  });
   return { refresh: argv.includes("--refresh"), out: at("--out") ?? "survey" };
 }
 
