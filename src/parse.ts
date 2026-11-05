@@ -177,6 +177,24 @@ export function parseNote(html: string, tags: string[] = []): ParsedNote {
   const spans = quoteSpans(root);
   const quoteBlock = root.querySelector("blockquote");
   if (!form) form = spans.length ? "span" : quoteBlock ? "blockquote" : undefined;
+  // Concepts belong to their span: each span of several is read alone, so its quotes keep its own concepts.
+  if (spans.length > 1) {
+    const read = spans.flatMap((s) => {
+      const p = parseNote(s.toString(), tags);
+      return p.kind === "quote" ? [p, ...(p.more ?? [])] : [];
+    }).map((p) => ({ ...p, more: undefined }));
+    if (read.length) {
+      for (const s of spans) s.remove();
+      const outside = joinBlocks(blocks(root));
+      const last = read[read.length - 1];
+      if (outside) {
+        last.commentary = [last.commentary, outside].filter(Boolean).join("\n\n");
+        last.flags = [...last.flags, "commentary_mixed"];
+        last.grade = gradeOf(last);
+      }
+      return { ...read[0], form: form ?? "span", more: read.length > 1 ? read.slice(1) : undefined };
+    }
+  }
   const titleTags = uniqueTerms(spans.flatMap((s) => splitTerms(s.getAttribute("title") ?? "")));
   const kwic = root.querySelectorAll("span.kwic")
     .map((s) => ({ phrase: tidy(inline(s)).replace(/\n/g, " "), concept: (s.getAttribute("title") ?? "").trim() }))
@@ -226,6 +244,19 @@ const hasDoubleMark = (body: string) => /["“”]/.test(body);
 
 const joined = (...parts: (string | undefined)[]) => parts.map((p) => p?.trim()).filter(Boolean).join("\n\n") || undefined;
 
+/** Whole quotes at the start of some words, each in its own marks and ending its line, and how far they run. */
+function pairsBefore(words: string): { quotes: Read[]; length: number } {
+  const quotes: Read[] = [];
+  let at = 0;
+  for (;;) {
+    const m = /^(["“])([^"“”\n]*(?:\n[^"“”\n]*)*?)(["”])\s*\n+\s*(?=["“])/.exec(words.slice(at));
+    if (!m) break;
+    quotes.push({ text: m[2].trim(), flags: [] });
+    at += m[0].length;
+  }
+  return { quotes, length: at };
+}
+
 /**
  * The quotes in a note's words. Each page ends a quote, which starts at the first opening mark since the last one ended;
  * with no closing mark before it, the page stands in for one, and the missing mark is flagged. Words before that mark are a comment on it; words after the last page, on the last.
@@ -247,7 +278,10 @@ function readQuotes(raw: string): { quotes: Read[]; unsure?: undefined } | { quo
       const located = readLocator(end[3]);
       return { quotes: [{ text: `${part}${close}${end[2] ?? ""}`.trim(), locator: located.locator, chapterAuthor: located.chapterAuthor, commentary: text.slice(end.index + end[0].length).trim() || undefined, flags: [close ? "unbalanced_quotes" : "no_marks"] }] };
     }
-    const body = part.slice(opening + 1);
+    // Quotes grouped under a concept needn't each have a page: those before this one end at their closing mark, and have none.
+    const earlier = pairsBefore(part.slice(opening));
+    quotes.push(...earlier.quotes);
+    const body = part.slice(opening + earlier.length + 1);
     if (body.match(ANY_LOCATOR)) return { unsure: "a page reference inside a quote: several quotes?" };
     const located = readLocator(end[3]);
     const place = { locator: located.locator, chapterAuthor: located.chapterAuthor };
@@ -270,7 +304,7 @@ function readQuotes(raw: string): { quotes: Read[]; unsure?: undefined } | { quo
     }
     if (hasDoubleMark(body)) {
       // Off the pattern, so nothing says which marks are the quote's: its words stay as they are.
-      quotes.push({ text: `${part}${close}${end[2] ?? ""}`.trim(), ...place, flags: ["unbalanced_quotes"] });
+      quotes.push({ text: `${part.slice(0, opening)}${part.slice(opening + earlier.length)}${close}${end[2] ?? ""}`.trim(), ...place, flags: ["unbalanced_quotes"] });
     } else {
       const lead = part.slice(0, opening).trim();
       const emphasis = /^\*+$/.test(lead);
@@ -280,6 +314,11 @@ function readQuotes(raw: string): { quotes: Read[]; unsure?: undefined } | { quo
     from = end.index + end[0].length;
   }
   const rest = text.slice(from).trim();
+  // Another quote after the last page, in its own marks on its own line, with no page of its own.
+  if (OPEN.has(rest[0] ?? "")) {
+    const after = readWithoutPage(rest);
+    if (after.quotes && !after.quotes.some((q) => q.flags.includes("unbalanced_quotes") || q.flags.includes("no_marks"))) return { quotes: [...quotes, ...after.quotes] };
+  }
   if (rest) {
     const last = quotes[quotes.length - 1];
     last.commentary = joined(last.commentary, rest);
@@ -289,7 +328,7 @@ function readQuotes(raw: string): { quotes: Read[]; unsure?: undefined } | { quo
 }
 
 /** A note with no closing mark and page: one pair of marks around its words, or it stays as it is, flagged. */
-function readWithoutPage(text: string): { quotes: Read[] } | { unsure: string } {
+function readWithoutPage(text: string): { quotes: Read[]; unsure?: undefined } | { quotes?: undefined; unsure: string } {
   const located = readLocator(text);
   const words = located.body;
   const place = { locator: located.locator, chapterAuthor: located.chapterAuthor };
@@ -300,12 +339,25 @@ function readWithoutPage(text: string): { quotes: Read[] } | { unsure: string } 
   if (closing <= opening) return { quotes: [{ text: words.trim(), ...place, flags: ["unbalanced_quotes"] }] };
   const body = words.slice(opening + 1, closing);
   if (body.match(ANY_LOCATOR)) return { unsure: "a page reference inside a quote: several quotes?" };
-  if (/["”]\s*\n+\s*["“]/.test(body)) return { unsure: "a closing mark then an opening mark, with no page: several quotes?" };
+  if (/["”]\s*\n+\s*["“]/.test(body)) {
+    // Quotes grouped under a concept, in their own marks, with no page.
+    const lines = words.trim().split(/\n+/).map((l) => l.trim()).filter(Boolean);
+    const clean = lines.every((l) => OPEN.has(l[0]) && CLOSE.has(l.at(-1) ?? "") && !hasDoubleMark(l.slice(1, -1)));
+    if (clean && !place.locator) return { quotes: lines.map((l) => ({ text: l.slice(1, -1).trim(), flags: [] })) };
+    return { unsure: "a closing mark then an opening mark, not each a clean quote: several quotes?" };
+  }
   if (hasDoubleMark(body)) return { quotes: [{ text: words.trim(), ...place, flags: ["unbalanced_quotes"] }] };
   const lead = words.slice(0, opening).trim();
   const leadEmphasis = /^\*+$/.test(lead);
-  const rest = words.slice(closing + 1).trim();
-  const emphasis = /^\*+$/.test(rest);
+  let rest = words.slice(closing + 1).trim();
+  let emphasis = /^\*+$/.test(rest);
+  // Emphasis around the marks and a remark: *"The words." (III, iii)*. It closes on the words, not the remark.
+  let closesEmphasis = "";
+  if (leadEmphasis && !emphasis && rest.endsWith(lead)) {
+    closesEmphasis = lead;
+    rest = rest.slice(0, -lead.length).trim();
+    emphasis = false;
+  }
   // Marks in the middle of a sentence are a phrase being quoted, not the quote: the note has no marks of its own.
   if (lead && !leadEmphasis && rest && !emphasis && !/[:,]$|\n$/.test(words.slice(0, opening).trimEnd()) && !readLocator(rest).locator) return { quotes: [{ text: words.trim(), ...place, flags: ["no_marks"] }] };
   const tail = emphasis ? undefined : readLocator(rest);
@@ -313,7 +365,7 @@ function readWithoutPage(text: string): { quotes: Read[] } | { unsure: string } 
   if (lead && !leadEmphasis) flags.push("lead_in");
   if (tail?.body) flags.push("commentary_mixed");
   return { quotes: [{
-    text: `${leadEmphasis ? lead : ""}${body}${emphasis ? rest : ""}`.trim(), locator: place.locator ?? tail?.locator, chapterAuthor: place.chapterAuthor ?? tail?.chapterAuthor,
+    text: `${leadEmphasis ? lead : ""}${body}${closesEmphasis}${emphasis ? rest : ""}`.trim(), locator: place.locator ?? tail?.locator, chapterAuthor: place.chapterAuthor ?? tail?.chapterAuthor,
     commentary: joined(leadEmphasis ? undefined : lead, tail?.body), flags,
   }] };
 }

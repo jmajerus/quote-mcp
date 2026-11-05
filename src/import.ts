@@ -107,6 +107,13 @@ export function workMatcher(db: DB, primary: string, stamp: string) {
   return { primaryByKey, candidates, zoteroWork, setOrigin, workByOrigin };
 }
 
+/** The search index, from the quotes as they are. */
+export function rebuildSearch(db: DB): void {
+  db.exec(`DELETE FROM quotes_fts;
+    INSERT INTO quotes_fts (rowid, text, comment, tags)
+    SELECT q.id, q.text, COALESCE(q.comment, ''), COALESCE((SELECT group_concat(tag, ' ') FROM quote_tags WHERE quote_id = q.id), '') FROM quotes q;`);
+}
+
 export function runImport(db: DB, opts: ImportOptions): ImportStats {
   const actor = opts.actor ?? "import";
   const stamp = now();
@@ -279,15 +286,24 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
           passagesGone(n.key, n.version, data.note ?? "", 1);
           continue;
         }
-        const titleOnly = parsed.titleTags.filter((t) => !noteTags.some((n2) => n2.toLowerCase() === t.toLowerCase()));
-        upsert({ kind: "zotero-note", ref: `${library}:${n.key}`, version: String(n.version), raw: data.note ?? "", parsed,
-          workId: noteWork(library, n.parent_key),
-          tags: [...noteTags.map((tag) => ({ tag, origin: "note" })), ...titleOnly.map((tag) => ({ tag, origin: "title" }))] });
-        // A note with several passages, each with its own page: one quote each, sharing the note's tags.
-        for (const [i, more] of (parsed.more ?? []).entries()) {
-          upsert({ kind: "zotero-note", ref: `${library}:${n.key}#${i + 2}`, version: String(n.version), raw: data.note ?? "", parsed: more,
-            workId: noteWork(library, n.parent_key),
-            tags: [...noteTags.map((tag) => ({ tag, origin: "note" })), ...titleOnly.map((tag) => ({ tag, origin: "title" }))] });
+        const parts = [parsed, ...(parsed.more ?? [])];
+        const lower = (tags: string[]) => tags.map((t) => t.toLowerCase());
+        /** A part's concepts: the note's tags, less those that only another part's span names, and its own span's. */
+        const tagsOf = (part: ParsedNote) => {
+          const own = lower(part.titleTags);
+          const elsewhere = new Set(parts.flatMap((p) => lower(p.titleTags)).filter((t) => !own.includes(t)));
+          const titleOnly = part.titleTags.filter((t) => !noteTags.some((n2) => n2.toLowerCase() === t.toLowerCase()));
+          return [...noteTags.filter((t) => !elsewhere.has(t.toLowerCase())).map((tag) => ({ tag, origin: "note" })), ...titleOnly.map((tag) => ({ tag, origin: "title" }))];
+        };
+        // A note already imported and unchanged stays as it is: only a changed or new note is divided (`quote-mcp repair` does the rest).
+        const known = getOrigin.get("zotero-note", `${library}:${n.key}`) as { raw: string } | undefined;
+        const unchanged = known?.raw === (data.note ?? "");
+        upsert({ kind: "zotero-note", ref: `${library}:${n.key}`, version: String(n.version), raw: data.note ?? "", parsed, workId: noteWork(library, n.parent_key), tags: tagsOf(parsed) });
+        if (!unchanged) {
+          // A note with several passages: one quote each, with the concepts that are theirs.
+          for (const [i, more] of (parsed.more ?? []).entries()) {
+            upsert({ kind: "zotero-note", ref: `${library}:${n.key}#${i + 2}`, version: String(n.version), raw: data.note ?? "", parsed: more, workId: noteWork(library, n.parent_key), tags: tagsOf(more) });
+          }
         }
         passagesGone(n.key, n.version, data.note ?? "", 1 + (parsed.more?.length ?? 0));
       }
@@ -341,9 +357,7 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
     }
 
     // --- Search index -----------------------------------------------------------------------------
-    db.exec(`DELETE FROM quotes_fts;
-      INSERT INTO quotes_fts (rowid, text, comment, tags)
-      SELECT q.id, q.text, COALESCE(q.comment, ''), COALESCE((SELECT group_concat(tag, ' ') FROM quote_tags WHERE quote_id = q.id), '') FROM quotes q;`);
+    rebuildSearch(db);
 
     for (const r of db.prepare("SELECT match, COUNT(*) AS n FROM works w WHERE EXISTS (SELECT 1 FROM quotes WHERE work_id = w.id) GROUP BY match").all() as { match: string; n: number }[]) {
       stats.works[r.match] = r.n;

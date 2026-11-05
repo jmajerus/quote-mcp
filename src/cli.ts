@@ -21,6 +21,7 @@ import { replicaScript } from "./replica.js";
 import { type ConceptSet, listSets, loadSets } from "./sets.js";
 import { configReport, siteSetting } from "./settings.js";
 import { rematchWorks } from "./rematch.js";
+import { repairQuotes } from "./repair.js";
 import { AUDIT_KINDS, type AuditKind, auditOf, auditStore } from "./audit.js";
 import { type SnapshotOptions, buildSnapshot, readMapsFile } from "./snapshot.js";
 import { syncLibrary } from "./sync.js";
@@ -36,6 +37,9 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *       but Zotero. The dry run lists what would move, and saves nothing.
  *   quote-mcp audit [--kind <kind>] [--id <n>] [--json]
  *       Compares typed quotes with their stored raw, and changes nothing. --id shows one side by side.
+ *   quote-mcp repair [--dry-run] [--id <n>] [--json]
+ *       Repairs typed quotes from their stored raw where the reading is clean, and lists the rest for a person.
+ *       --id applies the reading to one record, even a flagged one, unless it's edited or verified.
  *   quote-mcp migrate [--backup <file>] Brings the store up to this build's schema (the server opens it read-only);
  *                                       with --backup, copies it to <file> first when its schema will change, so
  *                                       a deploy that rolls back can put back a store the previous build opens.
@@ -367,18 +371,26 @@ async function migrateCommand() {
 }
 
 /** Rebuilds the public snapshot after a change to the store, when the site is public. */
-function publishFrom(db: Database.Database) {
+function publishFrom(db: Database.Database, report: (line: string) => void = console.log) {
   const publish = snapshotOptions();
-  if (publish) console.log(snapshotLine(buildSnapshot(db, publish, snapshotFile())));
+  if (publish) report(snapshotLine(buildSnapshot(db, publish, snapshotFile())));
+}
+
+/** The quote --id names, if it's given. A missing or bad value stops here: it must never read as "every quote". */
+function quoteIdOption(command: string): number | undefined {
+  if (!flag("--id")) return undefined;
+  const value = option("--id");
+  if (!value || !/^[1-9]\d*$/.test(value)) throw new Error(`${command} --id needs a quote's number. Nothing was done.`);
+  return Number(value);
 }
 
 /** Compares typed quotes with their stored raw, and changes nothing. */
 function auditCommand() {
-  onlyFlags("audit", ["--json", "--id", "--kind"].concat(argv.filter((a) => /^\d+$/.test(a))));
+  onlyFlags("audit", ["--json", "--id", "--kind"]);
+  const id = quoteIdOption("audit");
   const db = openReadOnly();
-  const id = option("--id");
   if (id !== undefined) {
-    const r = auditOf(db, Number(id));
+    const r = auditOf(db, id);
     if (!r) throw new Error(`Quote ${id} isn't a typed quote with a stored raw.`);
     console.log(flag("--json") ? JSON.stringify(r, null, 2) : [
       `Quote ${r.id} (${r.status}${r.edited ? ", edited" : ""}), from ${r.origin.kind} ${r.origin.ref}`, `Kinds: ${r.kinds.join(", ") || "none"}`,
@@ -404,6 +416,42 @@ function auditCommand() {
     console.log(`${String(v.count).padStart(4)}  ${k}: ${about}${v.verified ? `, ${v.verified} verified` : ""}${v.edited ? `, ${v.edited} edited` : ""}${v.count ? `\n      ${v.ids.join(", ")}` : ""}`);
   }
   console.log("\nA record can be in several kinds. quote-mcp audit --id <n> shows one side by side. This changed nothing.");
+}
+
+/** Repairs typed quotes from their stored raw, by the pattern they were typed to. */
+function repairCommand() {
+  onlyFlags("repair", ["--dry-run", "--id", "--json"]);
+  const dryRun = flag("--dry-run");
+  const json = flag("--json");
+  const only = quoteIdOption("repair");
+  const db = dryRun ? openExisting() : openDb();
+  try {
+    const r = repairQuotes(db, { dryRun, only });
+    if (json) {
+      console.log(JSON.stringify(r, null, 2));
+    } else {
+      for (const c of r.repairs) {
+        console.log(`\n=== Quote ${c.id}: ${c.why.join(", ")}\n--- Before (${c.before.status}), page ${c.before.locator ?? "none"}\n${c.before.text}${c.before.comment ? `\ncomment: ${c.before.comment}` : ""}`);
+        if (c.removedConcepts.length) console.log(`--- Concepts removed, as another passage's: ${c.removedConcepts.join(", ")}`);
+        if (c.addedConcepts.length) console.log(`--- Concepts added, from its own span: ${c.addedConcepts.join(", ")}`);
+        if (c.existingIds.length) console.log(`--- Another passage already has its own quote: ${c.existingIds.join(", ")}`);
+        for (const [i, a] of c.after.entries()) console.log(`--- After${c.after.length > 1 ? `, part ${i + 1} of ${c.after.length}` : ""} (${a.status}), page ${a.locator ?? "none"}\n${a.text}${a.comment ? `\ncomment: ${a.comment}` : ""}`);
+      }
+      if (r.forPerson.length) {
+        console.log(`\n=== For a person to decide, not changed: ${r.forPerson.length}`);
+        for (const p of r.forPerson) console.log(`#${p.id} (${p.status}) ${p.why}: ${p.text.replace(/\s+/g, " ").slice(0, 90)}`);
+        console.log("quote-mcp audit --id <n> shows one side by side. quote-mcp repair --id <n> applies the parser's reading to one, unless it's edited or verified; or change it on its admin page.");
+      }
+      const splits = r.repairs.filter((c) => c.after.length > 1);
+      console.log(`\nChecked ${r.checked}. ${dryRun ? "Would repair" : "Repaired"} ${r.repairs.length}, ${splits.length} of them split into ${splits.reduce((n, c) => n + c.after.length, 0)} quotes. ${r.forPerson.length} for a person. ${r.alreadyRight} already right.`);
+    }
+    // With --json, stdout holds the JSON and nothing else.
+    const report = json ? console.error : console.log;
+    if (dryRun) report("Dry run: nothing was saved.");
+    else if (r.repairs.length) publishFrom(db, report);
+  } finally {
+    db.close();
+  }
 }
 
 /** Matches works to Zotero from the store, after bringing the mirror of each library up to date. */
@@ -476,7 +524,7 @@ function proposalsCommand() {
 
 const commands: Record<string, () => unknown> = {
   import: importCommand, migrate: migrateCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, sets: setsCommand, publish: publishCommand, config: configCommand, serve: serveCommand,
-  terms: termsCommand, propose: proposeCommand, "take-corpus-quotes": takeCorpusQuotesCommand, rematch: rematchCommand, audit: auditCommand, proposals: proposalsCommand,
+  terms: termsCommand, propose: proposeCommand, "take-corpus-quotes": takeCorpusQuotesCommand, rematch: rematchCommand, audit: auditCommand, repair: repairCommand, proposals: proposalsCommand,
   stdio: () => serveStdio(openReadOnly(), sets(), capture()),
 };
 const command = commands[process.argv[2] ?? ""];
@@ -484,7 +532,8 @@ if (!command) {
   say(`Usage: quote-mcp ${Object.keys(commands).join(" | ")}\n`);
   process.exit(2);
 }
-Promise.resolve(command()).catch((error) => {
+// Through then, so a command that throws at once is reported the same way as one that fails later.
+Promise.resolve().then(command).catch((error) => {
   say(`${(error as Error).message}\n`);
   process.exit(1);
 });

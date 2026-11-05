@@ -8,6 +8,7 @@ How quote-mcp is run, configured, and deployed.
 |---|---|
 | `npm run import` | Syncs the Zotero mirror and imports quote notes (see [Importing](importing.md)). Safe to run again. Not needed to match works: see `rematch`. |
 | `npm run quotes -- audit` | Compares typed quotes with their stored raw, by kind of problem, and changes nothing. `--id <n>` shows one side by side; `--kind <kind>` lists one kind. |
+| `npm run quotes -- repair` | Repairs typed quotes from their stored raw where the reading is clean, and lists the rest. `--dry-run` shows before and after and saves nothing; `--id <n>` applies one. Back up first (`quote-mcp backup`). |
 | `npm run quotes -- rematch` | Matches works to Zotero from the store, for works not matched yet and those whose item has gone. `--dry-run` lists what would move and saves nothing. |
 | `npm run serve` | MCP at `/mcp`, the admin pages at `/admin`, the JSON API at `/api`, the maps at `/map/` (with `QUOTE_MAP_DIR`), the public site's preview at `/`, `/health`, and on the LAN only, holdings-mcp's counts feed at `/api/holdings/counts` and corpus-mcp's reader routes at `/api/corpus/quotes` (see [the dev-brief](dev-briefs/holdings-and-quotes.md)); port `QUOTE_PORT` (8010 by default). With D1 settings it also runs the replica's drain. |
 | `npm run quotes -- stdio` | MCP over stdio. |

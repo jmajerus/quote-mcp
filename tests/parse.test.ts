@@ -158,10 +158,41 @@ describe("legacy span", () => {
     expect(parseNote(`<span class="quote">No marks at all here. (p. 9)</span>`).flags).toContain("no_marks");
   });
 
-  it("holds two quotes with no page between them, as they stand (#752)", () => {
-    const p = parseNote(`<span class="quote">"The vampire lives on."\n\n"I suppose it is thus."</span>`);
-    expect(p.grade).toBe("C");
-    expect(p.text).toBe(`"The vampire lives on."\n"I suppose it is thus."`);
+  it("closes emphasis around the marks on the words, not the remark after them (#315)", () => {
+    const p = parseNote(`<span class="quote"><em>"Good name in man and woman." (III, iii)</em></span>`);
+    expect(p).toMatchObject({ text: "*Good name in man and woman.*", commentary: "(III, iii)" });
+  });
+
+  it("splits quotes grouped under a concept with no pages (#752)", () => {
+    const p = parseNote(`<span class="quote" title="psychic vampirism">"The vampire lives on."\n\n"I suppose it is thus."</span>`);
+    expect([p.text, p.more?.[0].text]).toEqual(["The vampire lives on.", "I suppose it is thus."]);
+    expect([p.locator, p.more?.[0].locator]).toEqual([undefined, undefined]);
+    expect(p.titleTags).toEqual(["psychic vampirism"]);
+    expect(p.more?.[0].titleTags).toEqual(["psychic vampirism"]);
+  });
+
+  it("gives a page only to the quote it follows, in a concept group", () => {
+    const p = parseNote(`<span class="quote">"One without a page."\n"One with a page." (p. 5)</span>`);
+    expect([p.text, p.locator?.value, p.more?.[0].text, p.more?.[0].locator?.value]).toEqual(["One without a page.", undefined, "One with a page.", "5"]);
+  });
+
+  it("splits a quote after the last page, with no page of its own (#342)", () => {
+    const p = parseNote(`<span class="quote">"Every employee is family." (p. 165)\n"The right person, continuously." ([bib]Deming1982[/bib], p. 115)</span>`);
+    expect(p).toMatchObject({ text: "Every employee is family.", locator: { value: "165" } });
+    expect(p.more?.[0]).toMatchObject({ text: "The right person, continuously.", commentary: "([bib]Deming1982[/bib], p. 115)" });
+  });
+
+  it("keeps each span's concepts and page with its own quote (#353)", () => {
+    const p = parseNote(`<p><span class="quote" title="disability"> "Stress is the biggest reason for disability claims." </span> <span class="quote" title="stress"> "Employees with stress had higher costs." (p. 15) </span></p>`, ["disability", "stress"]);
+    expect(p).toMatchObject({ text: "Stress is the biggest reason for disability claims.", titleTags: ["disability"], locator: undefined });
+    expect(p.more?.[0]).toMatchObject({ text: "Employees with stress had higher costs.", titleTags: ["stress"], locator: { value: "15" } });
+    expect(p.problems).toEqual([]);
+  });
+
+  it("gives every passage in one span that span's concepts (#490)", () => {
+    const p = parseNote(`<span class="quote" title="power, control">"First passage." (p. 394)\n"Second passage." (p. 395)</span>`);
+    expect(p.titleTags).toEqual(["power", "control"]);
+    expect(p.more?.[0].titleTags).toEqual(["power", "control"]);
   });
 
   it("holds a page inside a quote that doesn't close, as it stands", () => {
