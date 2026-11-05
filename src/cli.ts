@@ -148,7 +148,8 @@ function exportCommand() {
 }
 
 async function backupCommand() {
-  const dir = option("--dir") ?? "data/backups";
+  // Beside the store, wherever it is: a path relative to where the command is run from fails on the server.
+  const dir = option("--dir") ?? join(dirname(process.env.QUOTE_DB ?? "data/quotes.db"), "backups");
   const keep = Number(option("--keep") ?? 14);
   mkdirSync(dir, { recursive: true });
   const file = join(dir, `quotes-${new Date().toISOString().slice(0, 10)}.db`);
