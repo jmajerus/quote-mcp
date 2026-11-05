@@ -22,7 +22,7 @@ export type QuoteForm = "span" | "escaped-span" | "blockquote" | "typed";
 export type Grade = "A" | "B" | "C";
 export type Flag =
   | "no_locator" | "kindle_locator" | "chapter_author" | "unbalanced_quotes" | "list_quote"
-  | "title_tag_only" | "compound_tag" | "commentary_mixed" | "long" | "ocr_suspect" | "lead_in" | "no_marks";
+  | "title_tag_only" | "compound_tag" | "commentary_mixed" | "long" | "ocr_suspect" | "lead_in" | "no_marks" | "passage_gone";
 
 export interface Locator {
   kind: "page" | "kindle";
@@ -72,6 +72,8 @@ const ANY_LOCATOR = new RegExp(String.raw`\(\s*(?:pp?[.,]?\s*(?:${PAGE})|kindle\
 const PAGES = String.raw`(?:${PAGE})(?:\s*[-–—]\s*(?:${PAGE}))?`;
 const INSIDE_MARK = new RegExp(String.raw`[ \t]*(\([ \t]*(?:pp?[.,]?|pages?)[ \t]*${PAGES}[ \t]*\))[ \t]*(["”])[ \t]*$`, "gim");
 const BARE_PAGE = new RegExp(String.raw`(["”])[ \t]+(pp?\.[ \t]*${PAGES})[ \t]*$`, "gim");
+/** Every form of page reference, as metadata beside a quote's words: in parentheses anywhere, or bare after a closing mark at a line's end. */
+export const PAGE_REFERENCE = new RegExp(String.raw`\(\s*(?:pp?[.,]?|pages?)\s*${PAGES}[^()]*\)|\(\s*kindle\s+loc[^()]*\)|(?<=["”][ \t]+)pp?\.[ \t]*${PAGES}[ \t]*$`, "gim");
 /** A closing mark, any emphasis or footnote that closes after it, and the page that ends the quote. */
 const QUOTE_END = new RegExp(String.raw`(["”])(\*+|\.?\[\/fn\])?\s*(${LOCATOR.source.replace(String.raw`\s*$`, "")})`, "gi");
 const CATALOG = [

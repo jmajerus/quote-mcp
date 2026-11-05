@@ -193,6 +193,31 @@ describe("import", () => {
     expect(importWithSite(db, opts()).quotes.added).toBe(0);
   });
 
+  it("keeps and flags a passage its note no longer holds, once, for a person to decide", () => {
+    const two = `<p><span class="quote" title="power">"The first passage of this note is here." (p. 224)<br />"The second passage of this note is here." (p. 225)</span></p>`;
+    addItem(db, PRIMARY, "NOTE0004", note("ATTILA01", two, ["power"]));
+    importWithSite(db, opts());
+    const second = quoteLike("second passage of this");
+    const one = `<p><span class="quote" title="power">"The first passage of this note is here." (p. 224)</span></p>`;
+    addItem(db, PRIMARY, "NOTE0004", note("ATTILA01", one, ["power"]), 2);
+    importWithSite(db, opts());
+    expect(quoteLike("first passage of this").locator).toBe("224");
+    expect(JSON.parse(quoteLike("second passage of this").flags as string)).toContain("passage_gone");
+    const gone = () => db.prepare("SELECT reason FROM history WHERE quote_id = ? AND kind = 'source_changed'").pluck().all(second.id);
+    expect(gone()).toEqual([`zotero-note ${PRIMARY}:NOTE0004#2 no longer holds this passage; the quote was left for a person`]);
+    importWithSite(db, opts());
+    expect(gone()).toHaveLength(1);
+    expect(JSON.parse(quoteLike("second passage of this").flags as string)).toContain("passage_gone");
+  });
+
+  it("flags the later passages when a note stops being a quote", () => {
+    addItem(db, PRIMARY, "NOTE0004", note("ATTILA01", `<p>"The first passage of this note is here." (p. 224)</p><p>"The second passage of this note is here." (p. 225)</p>`));
+    importWithSite(db, opts());
+    addItem(db, PRIMARY, "NOTE0004", note("ATTILA01", "<p>Nothing quoted here now.</p>"), 2);
+    importWithSite(db, opts());
+    expect(JSON.parse(quoteLike("second passage of this").flags as string)).toContain("passage_gone");
+  });
+
   describe("a note that takes its quote to another work", () => {
     const WORDS = "Patience is a form of wisdom that takes its own time";
     const SPAN = `<p><span class="quote" title="power">"${WORDS}" (p. 9)</span></p>`;

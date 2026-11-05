@@ -71,6 +71,35 @@ describe("the audit", () => {
     expect(auditOf(db, id)).toMatchObject({ origin: { kind: "zotero-note" }, matches: true });
   });
 
+  it("doesn't take a bare page for a lost word, and counts it among pages (#302)", () => {
+    const id = record({ text: "A better way.", locator: "222" }, span(`"A better way." p. 222`));
+    expect(kindsOf(id)).toEqual([]);
+    expect(kindsOf(record({ text: "x", status: "unparsed" }, span(`"First." (p. 158)\n"Second." p. 122`)))).toContain("pages_backward");
+  });
+
+  it("compares each record of a split note with its own passage", () => {
+    const raw = `<p>${span(`"First passage here." (p. 224)\n"Second passage here." (p. 225)`)}</p>`;
+    const one = record({ text: "First passage here.", locator: "224" }, raw, "zotero-note");
+    const two = record({ text: "Second passage here.", locator: "225" }, raw, "zotero-note");
+    db.prepare("UPDATE quote_origins SET ref = 'users/1:N' WHERE quote_id = ?").run(one);
+    db.prepare("UPDATE quote_origins SET ref = 'users/1:N#2' WHERE quote_id = ?").run(two);
+    expect(kindsOf(one)).toEqual([]);
+    expect(kindsOf(two)).toEqual([]);
+    expect(auditOf(db, two)).toMatchObject({ matches: true, lost: [], added: [] });
+  });
+
+  it("doesn't read an old-site span's own number as a passage", () => {
+    const id = record({ text: "From a later span.", locator: "9" }, span(`"From a later span." (p. 9)`));
+    db.prepare("UPDATE quote_origins SET ref = '1146#3' WHERE quote_id = ?").run(id);
+    expect(kindsOf(id)).toEqual([]);
+  });
+
+  it("reports a passage its note no longer holds", () => {
+    const id = record({ text: "Second passage here.", locator: "225" }, `<p>${span(`"First passage here." (p. 224)`)}</p>`, "zotero-note");
+    db.prepare("UPDATE quote_origins SET ref = 'users/1:N#2' WHERE quote_id = ?").run(id);
+    expect(kindsOf(id)).toEqual(["passage_gone"]);
+  });
+
   it("changes nothing", () => {
     record({ text: "An unclosed quote." }, span(`"An unclosed quote.`));
     const before = db.prepare("SELECT total_changes()").pluck().get();
