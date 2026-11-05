@@ -99,6 +99,29 @@ describe("rematching works", () => {
     expect(work()).toMatchObject({ match: "unmatched", zotero_library: null, zotero_key: null, title: "Images of organization" });
   });
 
+  it("matches a work again when its item goes from a secondary library", () => {
+    const GROUP = "groups/2";
+    db.prepare("INSERT INTO zotero_items (library, key, version, item_type, parent_key, deleted, data) VALUES (?, 'GROUP001', 1, 'book', NULL, 0, ?)").run(GROUP, JSON.stringify(book("In a group", "2001", "Morgan")));
+    db.prepare("INSERT INTO zotero_items (library, key, version, item_type, parent_key, deleted, data) VALUES (?, 'NOTE0001', 1, 'note', 'GROUP001', 0, ?)")
+      .run(GROUP, JSON.stringify({ itemType: "note", parentItem: "GROUP001", note: `<p><span class="quote" title="x">"${WORDS}" (p. 1)</span></p>`, tags: [] }));
+    runImport(db, { primary: PRIMARY, sources: [PRIMARY, GROUP] });
+    expect(work()).toMatchObject({ zotero_library: GROUP, zotero_key: "GROUP001" });
+    expect(rematch()).toMatchObject({ checked: 0, updated: false });
+    db.prepare("UPDATE zotero_items SET deleted = 1 WHERE key = 'GROUP001'").run();
+    expect(rematch().changes).toMatchObject([{ from: "zotero GROUP001", to: "unmatched", quotes: 1 }]);
+    expect(work()).toMatchObject({ match: "unmatched", zotero_library: null, zotero_key: null });
+  });
+
+  it("says it wrote something when only an ambiguous work's candidates changed, and not when nothing did", () => {
+    addItem(db, "EDITION1", book("Images of organization", "1986", "Morgan"));
+    addItem(db, "EDITION2", book("Images of organization", "2006", "Morgan"));
+    load("Images of Organization");
+    expect(rematch()).toMatchObject({ changes: [], updated: false });
+    addItem(db, "EDITION3", book("Images of organization", "2010", "Morgan"));
+    expect(rematch()).toMatchObject({ changes: [], updated: true });
+    expect(rematch()).toMatchObject({ changes: [], updated: false });
+  });
+
   it("doesn't take an item the mirror has never seen for a deleted one", () => {
     addItem(db, "IMAGES01", book("Images of organization", "1986", "Morgan"));
     load("Images of Organization");

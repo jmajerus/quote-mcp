@@ -67,7 +67,7 @@ To match works again, after filing or merging items in Zotero:
     quote-mcp rematch --dry-run     # lists what would move, and saves nothing
     quote-mcp rematch
 
-It brings the primary library's mirror up to date, except in a dry run, then checks each work that isn't matched and each
+It brings each library's mirror up to date, except in a dry run, then checks each work that isn't matched and each
 whose item has gone. A move adds a `work_matched` history entry per quote. It also lists each match whose item shares no author
 with the work, or has none, since it may be another book. The timer's import doesn't match works, and a work made by `add_quote`
 is matched this way too.

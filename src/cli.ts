@@ -76,12 +76,15 @@ const flag = (name: string) => argv.includes(name);
 const option = (name: string) => (argv.includes(name) ? argv[argv.indexOf(name) + 1] : undefined);
 const say = (text: string) => process.stderr.write(text);
 
+/** The libraries quotes come from: the primary one first, then QUOTE_ZOTERO_SOURCES. */
+const zoteroSources = (primary: string) => [...new Set([primary, ...(process.env.QUOTE_ZOTERO_SOURCES ?? "").split(",").map((s) => s.trim()).filter(Boolean)])];
+
 async function importCommand() {
   // A dry run saves nothing, the mirror and the schema included, so it reads the store as the last sync left it.
   const dryRun = flag("--dry-run");
   const db = dryRun ? openExisting() : openDb();
   const config = zoteroConfig();
-  const sources = [...new Set([config.library, ...(process.env.QUOTE_ZOTERO_SOURCES ?? "").split(",").map((s) => s.trim()).filter(Boolean)])];
+  const sources = zoteroSources(config.library);
   if (!flag("--no-zotero") && !dryRun) {
     for (const library of sources) {
       const r = await syncLibrary(db, new ZoteroClient({ ...config, library }, (t) => say(`\n${t}`)), library, say);
@@ -367,6 +370,12 @@ async function migrateCommand() {
   console.log(`The store is at schema ${openDb().pragma("user_version", { simple: true })}.`);
 }
 
+/** Rebuilds the public snapshot after a change to the store, when the site is public. */
+function publishFrom(db: Database.Database) {
+  const publish = snapshotOptions();
+  if (publish) console.log(snapshotLine(buildSnapshot(db, publish, snapshotFile())));
+}
+
 /** Saves the old site's years, once, on works that keep their own details. Nothing else is read from the old site. */
 async function takeOldSiteYearsCommand() {
   const dryRun = flag("--dry-run");
@@ -376,19 +385,20 @@ async function takeOldSiteYearsCommand() {
     const r = takeOldSiteYears(db, years, { dryRun });
     console.log(`Old-site works: ${r.read}, ${r.withYear} with a year. ${dryRun ? "Would save" : "Saved"} ${r.filled}; ${r.alreadySet} already had one, ${r.matched} are matched to Zotero and use its year, ${r.notHere} aren't in the store.`);
     if (dryRun) console.log("Dry run: nothing was saved.");
+    else if (r.filled) publishFrom(db);
   } finally {
     db.close();
   }
 }
 
-/** Matches works to Zotero from the store, after bringing the primary library's mirror up to date. */
+/** Matches works to Zotero from the store, after bringing the mirror of each library up to date. */
 async function rematchCommand() {
   const dryRun = flag("--dry-run");
   const config = zoteroConfig();
   const db = dryRun ? openExisting() : openDb();
   try {
     if (dryRun) say("Reading the Zotero mirror as the last sync left it.\n");
-    else await syncLibrary(db, new ZoteroClient(config, (t) => say(`\n${t}`)), config.library, say);
+    else for (const library of zoteroSources(config.library)) await syncLibrary(db, new ZoteroClient({ ...config, library }, (t) => say(`\n${t}`)), library, say);
     const r = rematchWorks(db, { primary: config.library, dryRun });
     console.log(`Checked ${r.checked} works. ${dryRun ? "Would change" : "Changed"} ${r.changes.length}, moving ${r.changes.reduce((n, c) => n + c.quotes, 0)} quotes.`);
     for (const c of r.changes) console.log(`  ${c.title} (${c.from} \u2192 ${c.to}, ${c.quotes} quote${c.quotes === 1 ? "" : "s"})`);
@@ -398,8 +408,7 @@ async function rematchCommand() {
       console.log("Dry run: nothing was saved.");
       return;
     }
-    const publish = r.changes.length ? snapshotOptions() : null;
-    if (publish) console.log(snapshotLine(buildSnapshot(db, publish, snapshotFile())));
+    if (r.updated) publishFrom(db);
   } finally {
     db.close();
   }
