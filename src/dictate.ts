@@ -11,8 +11,9 @@ import type { DB } from "./db.js";
  * The capture page (/admin/capture): a book is chosen first, then each quote is spoken into a microphone
  * or read from a scanned page, corrected in the same editor, and saved with its page and a concept tag.
  * A recording is turned into 16 kHz mono wav by ffmpeg. QUOTE_TRANSCRIBE, when set, prints the transcript
- * of that wav; otherwise PocketSphinx's US English model does. A page image is read by QUOTE_OCR, or by
- * Tesseract, and the printed page number is taken from the header or footer.
+ * of that wav. Otherwise Home Assistant's speech engine does, when QUOTE_HA_URL is set (Cloud, or another
+ * engine named by QUOTE_HA_STT), and otherwise PocketSphinx's US English model does. A page image is read
+ * by QUOTE_OCR, or by Tesseract, and the printed page number is taken from the header or footer.
  */
 
 export const DEFAULT_MODEL = "/usr/share/pocketsphinx/model/en-us";
@@ -106,10 +107,13 @@ export function dictationStatus(env: NodeJS.ProcessEnv): { on: boolean; note: st
   const ffmpeg = spawnSync("ffmpeg", ["-hide_banner", "-version"], { stdio: "ignore" });
   if (ffmpeg.error || ffmpeg.status !== 0) return { on: false, note: "off without ffmpeg, which converts the recording" };
   if (env.QUOTE_TRANSCRIBE?.trim()) return { on: true, note: "QUOTE_TRANSCRIBE transcribes the recording" };
+  const ha = haSettings(env);
+  if (ha && "missing" in ha) return { on: false, note: ha.missing };
+  if (ha) return { on: true, note: ha.engine ? `Home Assistant (${ha.engine}) transcribes the recording` : "Home Assistant transcribes the recording" };
   const dir = modelDir(env);
   return modelReady(dir)
     ? { on: true, note: "PocketSphinx transcribes the recording" }
-    : { on: false, note: `off until PocketSphinx's US English model is at ${dir}, or QUOTE_TRANSCRIBE is set` };
+    : { on: false, note: `off until PocketSphinx's US English model is at ${dir}, or Home Assistant or QUOTE_TRANSCRIBE is set` };
 }
 
 interface RunResult { code: number; stdout: string; stderr: string }
@@ -223,6 +227,118 @@ if __name__ == "__main__":
         sys.exit("PocketSphinx isn't available (%s)." % error)
 `;
 
+interface HaSpeech {
+  url: string;
+  token: string;
+  engine: string;
+  language: string;
+}
+
+/** Home Assistant speech, when both the address and the token are set. A half-set pair says what is missing. */
+function haSettings(env: NodeJS.ProcessEnv): HaSpeech | { missing: string } | null {
+  const url = env.QUOTE_HA_URL?.trim().replace(/\/$/, "") ?? "";
+  const token = env.QUOTE_HA_TOKEN?.trim() ?? "";
+  if (!url && !token) return null;
+  if (!url || !token) return { missing: "Home Assistant speech needs both QUOTE_HA_URL and QUOTE_HA_TOKEN." };
+  return { url, token, engine: env.QUOTE_HA_STT?.trim() ?? "", language: env.QUOTE_HA_STT_LANGUAGE?.trim() || "en" };
+}
+
+/** The engine to call. An explicit one wins; otherwise Home Assistant Cloud, then the only engine. */
+export function chooseSttEngine(engines: string[], preferred?: string): string {
+  const asked = preferred?.trim();
+  if (asked) return asked;
+  if (engines.includes("stt.home_assistant_cloud")) return "stt.home_assistant_cloud";
+  if (engines.length === 1) return engines[0]!;
+  if (!engines.length) throw new TranscribeError("Home Assistant has no speech-to-text engine. Add one, or set QUOTE_HA_STT.");
+  throw new TranscribeError(`Home Assistant has more than one speech engine (${engines.join(", ")}). Set QUOTE_HA_STT to the one to use.`);
+}
+
+/** A language the engine lists. `en` matches `en-US`. A language it doesn't offer is said so, rather than guessed. */
+export function sttLanguage(wanted: string, supported: string[]): string {
+  const ask = wanted.trim() || "en";
+  if (!supported.length) return ask;
+  const norm = (value: string) => value.toLowerCase().replaceAll("_", "-");
+  const have = supported.map(norm);
+  const goal = norm(ask);
+  const exact = have.indexOf(goal);
+  if (exact >= 0) return supported[exact]!;
+  const stem = goal.split("-")[0]!;
+  const close = have.findIndex((value) => value === stem || value.startsWith(`${stem}-`));
+  if (close >= 0) return supported[close]!;
+  throw new TranscribeError(`That speech engine doesn't offer ${ask}. It offers ${supported.join(", ")}. Set QUOTE_HA_STT_LANGUAGE.`);
+}
+
+interface SttInfo {
+  languages?: unknown;
+  formats?: unknown;
+  codecs?: unknown;
+  sample_rates?: unknown;
+  bit_rates?: unknown;
+  channels?: unknown;
+}
+
+const listed = (value: unknown): string[] => Array.isArray(value) ? value.map(String) : [];
+const allows = (value: unknown, wanted: string) => !Array.isArray(value) || value.length === 0 || value.map(String).includes(wanted);
+
+async function haRequest(speech: HaSpeech, path: string, init: RequestInit = {}): Promise<Response> {
+  let response: Response;
+  try {
+    response = await fetch(`${speech.url}${path}`, {
+      ...init,
+      signal: AbortSignal.timeout(90_000),
+      headers: { authorization: `Bearer ${speech.token}`, ...init.headers },
+    });
+  } catch (error) {
+    const timedOut = (error as Error).name === "TimeoutError" || (error as Error).name === "AbortError";
+    throw new TranscribeError(timedOut
+      ? "Home Assistant took too long to transcribe. Try a shorter quote, or type it."
+      : "Home Assistant couldn't be reached. Check QUOTE_HA_URL, or type the quote.");
+  }
+  if (response.status === 401 || response.status === 403) throw new TranscribeError("Home Assistant refused the token (QUOTE_HA_TOKEN).");
+  return response;
+}
+
+async function haJson<T>(response: Response): Promise<T> {
+  try {
+    return await response.json() as T;
+  } catch {
+    throw new TranscribeError("Home Assistant's answer wasn't a transcript.");
+  }
+}
+
+/** Words from one Home Assistant speech engine. The wav is 16 kHz mono PCM, which is what the engines accept. */
+async function transcribeWithHomeAssistant(wav: Buffer, speech: HaSpeech): Promise<string> {
+  let engine = speech.engine;
+  if (!engine) {
+    const states = await haRequest(speech, "/api/states");
+    if (!states.ok) throw new TranscribeError("Home Assistant didn't list its speech engines.");
+    const body = await haJson<{ entity_id?: string }[]>(states);
+    const engines = (Array.isArray(body) ? body : []).flatMap((row) => row.entity_id?.startsWith("stt.") ? [row.entity_id] : []);
+    engine = chooseSttEngine(engines);
+  }
+  const infoResponse = await haRequest(speech, `/api/stt/${encodeURIComponent(engine)}`);
+  if (infoResponse.status === 404) throw new TranscribeError(`Home Assistant has no speech engine ${engine}. Set QUOTE_HA_STT to one it has.`);
+  if (!infoResponse.ok) throw new TranscribeError("Home Assistant didn't describe that speech engine.");
+  const info = await haJson<SttInfo>(infoResponse);
+  if (!allows(info.formats, "wav") || !allows(info.codecs, "pcm") || !allows(info.sample_rates, "16000") || !allows(info.bit_rates, "16") || !allows(info.channels, "1")) {
+    throw new TranscribeError(`${engine} doesn't accept a 16 kHz mono wav. Set QUOTE_HA_STT to an engine that does.`);
+  }
+  const language = sttLanguage(speech.language, listed(info.languages));
+  const heard = await haRequest(speech, `/api/stt/${encodeURIComponent(engine)}`, {
+    method: "POST",
+    headers: {
+      "content-type": "audio/wav",
+      "x-speech-content": `format=wav; codec=pcm; sample_rate=16000; bit_rate=16; channel=1; language=${language}`,
+    },
+    body: new Uint8Array(wav),
+  });
+  if (heard.status === 415) throw new TranscribeError(`${engine} rejected the recording's format. Set QUOTE_HA_STT to another engine.`);
+  if (!heard.ok) throw new TranscribeError("Home Assistant couldn't transcribe the recording.");
+  const result = await haJson<{ text?: string | null; result?: string }>(heard);
+  if (result.result && result.result !== "success") throw new TranscribeError("Home Assistant's speech engine returned an error. Try again, or type the quote.");
+  return result.text ?? "";
+}
+
 async function recognizeWav(wav: Buffer, env: NodeJS.ProcessEnv): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), "quote-capture-"));
   const file = path.join(dir, "quote.wav");
@@ -242,7 +358,10 @@ async function recognizeWav(wav: Buffer, env: NodeJS.ProcessEnv): Promise<string
       return result.stdout;
     }
     const model = modelDir(env);
-    if (!modelReady(model)) throw new TranscribeError(`PocketSphinx's US English model isn't at ${model}, and QUOTE_TRANSCRIBE isn't set. Type the quote, or set one of those up.`);
+    const ha = haSettings(env);
+    if (ha && "missing" in ha) throw new TranscribeError(ha.missing);
+    if (ha) return await transcribeWithHomeAssistant(wav, ha);
+    if (!modelReady(model)) throw new TranscribeError(`PocketSphinx's US English model isn't at ${model}. Set Home Assistant (QUOTE_HA_URL and QUOTE_HA_TOKEN) or QUOTE_TRANSCRIBE, or type the quote.`);
     const script = path.join(dir, "decode.py");
     await writeFile(script, POCKETSPHINX);
     let result: RunResult;

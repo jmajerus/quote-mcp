@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { CorpusClient } from "../src/capture.js";
-import { commandArgs, pageFromOcr, pageNumber, readCapture, saveSpokenQuote, searchWorks, transcribeAudio } from "../src/dictate.js";
+import { chooseSttEngine, commandArgs, dictationStatus, pageFromOcr, pageNumber, readCapture, saveSpokenQuote, searchWorks, sttLanguage, transcribeAudio } from "../src/dictate.js";
 import { ToolError } from "../src/common.js";
 import type { DB } from "../src/db.js";
 import { deleteQuote } from "../src/edits.js";
@@ -162,6 +163,87 @@ describe("transcription", () => {
     expect(heard).toBe("hello there");
     await expect(transcribeAudio(Buffer.alloc(0), "audio/wav")).rejects.toThrow(/empty/);
     await expect(transcribeAudio(Buffer.alloc(1), "audio/wav", { convert: async () => Buffer.from("wav"), recognize: async () => "  " })).rejects.toThrow(/No words/);
+  });
+
+  it("picks Home Assistant Cloud, then the only engine, and matches its language", () => {
+    expect(chooseSttEngine(["stt.faster_whisper", "stt.home_assistant_cloud"])).toBe("stt.home_assistant_cloud");
+    expect(chooseSttEngine(["stt.faster_whisper"])).toBe("stt.faster_whisper");
+    expect(chooseSttEngine(["stt.faster_whisper", "stt.openai"], "stt.openai")).toBe("stt.openai");
+    expect(() => chooseSttEngine(["stt.a", "stt.b"])).toThrow(/QUOTE_HA_STT/);
+    expect(sttLanguage("en", ["de-DE", "en-US"])).toBe("en-US");
+    expect(sttLanguage("en-US", ["en-US"])).toBe("en-US");
+    expect(() => sttLanguage("en", ["de-DE"])).toThrow(/QUOTE_HA_STT_LANGUAGE/);
+  });
+
+  it("sends the recording to Home Assistant's speech engine", async () => {
+    let posted = "";
+    let speech = "";
+    const ha = http.createServer((req, res) => {
+      const token = req.headers.authorization;
+      if (token !== "Bearer secret-token") {
+        res.writeHead(401).end();
+        return;
+      }
+      if (req.method === "GET" && req.url === "/api/states") {
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify([
+          { entity_id: "light.kitchen" },
+          { entity_id: "stt.faster_whisper" },
+          { entity_id: "stt.home_assistant_cloud" },
+        ]));
+        return;
+      }
+      if (req.method === "GET" && req.url === "/api/stt/stt.home_assistant_cloud") {
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({
+          languages: ["en-US", "de-DE"], formats: ["wav"], codecs: ["pcm"], sample_rates: [16000], bit_rates: [16], channels: [1],
+        }));
+        return;
+      }
+      if (req.method === "POST" && req.url === "/api/stt/stt.home_assistant_cloud") {
+        speech = String(req.headers["x-speech-content"] ?? "");
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk: Buffer) => chunks.push(chunk));
+        req.on("end", () => {
+          posted = Buffer.concat(chunks).toString("utf8");
+          res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ text: "Mobbing is an emotional assault.", result: "success" }));
+        });
+        return;
+      }
+      res.writeHead(404).end();
+    });
+    await new Promise<void>((resolve) => ha.listen(0, "127.0.0.1", () => resolve()));
+    const { port } = ha.address() as import("node:net").AddressInfo;
+    try {
+      const text = await transcribeAudio(Buffer.from("audio"), "audio/webm", {
+        convert: async () => Buffer.from("RIFFwav"),
+        env: { QUOTE_HA_URL: `http://127.0.0.1:${port}`, QUOTE_HA_TOKEN: "secret-token" },
+      });
+      expect(text).toBe("Mobbing is an emotional assault.");
+      expect(posted).toBe("RIFFwav");
+      expect(speech).toContain("language=en-US");
+      expect(speech).toContain("sample_rate=16000");
+      expect(dictationStatus({ QUOTE_HA_URL: "http://ha.local", QUOTE_HA_TOKEN: "t", QUOTE_HA_STT: "stt.home_assistant_cloud" }).note).toContain("stt.home_assistant_cloud");
+    } finally {
+      await new Promise<void>((resolve) => ha.close(() => resolve()));
+    }
+  });
+
+  it("says when Home Assistant's engine fails, and a local command still wins", async () => {
+    const ha = http.createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ text: null, result: "error" }));
+    });
+    await new Promise<void>((resolve) => ha.listen(0, "127.0.0.1", () => resolve()));
+    const { port } = ha.address() as import("node:net").AddressInfo;
+    const env = { QUOTE_HA_URL: `http://127.0.0.1:${port}/`, QUOTE_HA_TOKEN: "secret-token", QUOTE_HA_STT: "stt.home_assistant_cloud" };
+    try {
+      await expect(transcribeAudio(Buffer.from("audio"), "audio/webm", { convert: async () => Buffer.from("RIFFwav"), env })).rejects.toThrow(/speech engine returned an error/);
+      const text = await transcribeAudio(Buffer.from("audio"), "audio/webm", {
+        convert: async () => Buffer.from("RIFFwav"),
+        env: { ...env, QUOTE_TRANSCRIBE: "node -e \"process.stdout.write('Spoken from the book.')\" {wav}" },
+      });
+      expect(text).toBe("Spoken from the book.");
+    } finally {
+      await new Promise<void>((resolve) => ha.close(() => resolve()));
+    }
   });
 
   it.skipIf(!ffmpeg())("runs QUOTE_TRANSCRIBE on the converted recording", async () => {

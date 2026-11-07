@@ -64,9 +64,12 @@ keeps the book and clears the quote, ready for the next one. The quote is `trans
 checked against a Calibre text. A tag that isn't a concept yet is kept, and shows on the unresolved-tags
 worklist. The recording and the page image are not stored.
 
-A recording is transcribed on the server. With nothing else set, that uses PocketSphinx's US English
-model and ffmpeg. `QUOTE_TRANSCRIBE` names another command instead. A page is read by Tesseract, or by
-`QUOTE_OCR` (see [Operations](operations.md#settings)). The quote can also be typed into the box.
+A recording is transcribed on the server. With Home Assistant set (`QUOTE_HA_URL` and `QUOTE_HA_TOKEN`),
+that is one of its speech engines: Home Assistant Cloud when that engine is present, or the engine named
+by `QUOTE_HA_STT`, such as an AI subscription already set up there. The recording is sent to that engine
+and is not stored. Otherwise PocketSphinx's US English model and ffmpeg are used. `QUOTE_TRANSCRIBE`
+names a local command instead. A page is read by Tesseract, or by `QUOTE_OCR` (see
+[Operations](operations.md#settings)). The quote can also be typed into the box.
 
 ## Concepts
 
