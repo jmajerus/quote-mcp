@@ -47,16 +47,6 @@ export function quoteKey(text: string | null | undefined): string {
   return String(text ?? "").toLowerCase().replace(/[^a-z]+/g, "").slice(0, 120);
 }
 
-/**
- * Text from a Calibre book as running prose, by corpus-mcp's rule (its reflow, kept identical): a line break
- * mid-sentence becomes a space; one after closing punctuation, before anything but a lowercase letter,
- * stays a paragraph break ("\n\n").
- */
-export function reflow(text: string): string {
-  return text.replace(/[ \t]*\n\s*/g, (brk: string, at: number, all: string) =>
-    /[.!?:;"'”’)\]]/.test(all[at - 1] ?? "") && !/\p{Ll}/u.test(all[at + brk.length] ?? "") ? "\n\n" : " ");
-}
-
 /** A concept label as a slug: "work-life balance" → "work-life-balance". */
 export function slugify(label: string): string {
   return label.toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");

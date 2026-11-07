@@ -79,7 +79,7 @@ export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture)
 
   server.registerTool("cite_quote", {
     title: "Cite a quote",
-    description: "The quote with a CSL JSON item for its work (from Zotero, or the old site's record when the work isn't in Zotero yet), the locator, the Better BibTeX citekey, and a Pandoc citation such as [@roberts1993victory, p. 44]. A quote checked against a Calibre book comes as prose (line breaks inside sentences joined, paragraph breaks as \\n\\n), with book (the Calibre book, its book_id for corpus-mcp's cite_passage) and position (section, for citing an EPUB by chapter, and page_label). Warnings say what to check: no page, possible OCR errors, a work not yet in Zotero.",
+    description: "The quote with a CSL JSON item for its work (from Zotero, or the old site's record when the work isn't in Zotero yet), the locator, the Better BibTeX citekey, and a Pandoc citation such as [@roberts1993victory, p. 44]. A quote checked against a Calibre book keeps its stored text, including paragraph breaks, verse lines, lists, and indentation supplied by corpus-mcp's extractor, with book (the Calibre book, its book_id for corpus-mcp's cite_passage) and position (section, for citing an EPUB by chapter, and page_label). Warnings say what to check: no page, possible OCR errors, a work not yet in Zotero.",
     inputSchema: { id: quoteId },
     annotations: readOnly,
   }, ({ id }) => run(() => citeQuote(db, id)));

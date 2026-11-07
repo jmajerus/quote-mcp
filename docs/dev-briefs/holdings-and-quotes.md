@@ -122,7 +122,7 @@ new quotes landing in corpus-mcp soonest:
 
 2. **The `cited-article` skill** (in corpus-mcp's `skills/`) switches to
    `add_quote` and this repo's `cite_quote`. `cite_quote` needs what the
-   skill uses from corpus-mcp's: the quote as reflowed prose, and the BibTeX
+   skill uses from corpus-mcp's: the stored quote text, and the BibTeX
    for filing a book not yet in Zotero (which comes from corpus-mcp's
    `cite_passage` until it's filed, as this repo's PLAN.md says).
 
@@ -131,7 +131,7 @@ new quotes landing in corpus-mcp soonest:
    corpus-mcp's `cite_passage` (by `book.book_id`) for filing data when
    `zotero` or `citekey` is null. `pin_citekey` stays with corpus-mcp.
    For a quote checked against a Calibre book, `cite_quote` gives `quote`
-   as prose (corpus-mcp's `reflow`, copied exactly), `book` (verify's book)
+   as stored text (paragraphs and intentional line breaks preserved; supersedes the copied `reflow` heuristic), `book` (verify's book)
    and `position` (`section`, `page_label`), which the quote's origin
    keeps. `add_quote`'s answer carries `book` too.
 3. **Import corpus-mcp's five quotes**, origin `corpus`, status `verified`,

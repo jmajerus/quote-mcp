@@ -4,7 +4,6 @@ import { ToolError } from "./common.js";
 import type { DB } from "./db.js";
 import type { Capture } from "./mcp.js";
 import { locatorText } from "./queries.js";
-import { reflow } from "./text.js";
 
 /**
  * Routes for corpus-mcp's book reader, on the LAN only (docs/dev-briefs/holdings-and-quotes.md; corpus-mcp's
@@ -43,7 +42,7 @@ export function bookQuotes(db: DB, book: string) {
     if (seen.has(q.id)) continue;
     seen.add(q.id);
     quotes.push({
-      id: q.id, kind: q.kind, text: q.text, prose: q.text ? reflow(q.text) : q.text, ...(q.kind === "note" ? { note: q.comment } : {}),
+      id: q.id, kind: q.kind, text: q.text, prose: q.text, ...(q.kind === "note" ? { note: q.comment } : {}),
       comment: q.comment, tags: JSON.parse(q.tags) as string[], status: q.status, flags: JSON.parse(q.flags) as string[],
       locator: locatorText(q.locator_kind, q.locator), anchor: (JSON.parse(q.raw) as { anchor?: unknown }).anchor ?? null, admin_path: `/admin/quotes/${q.id}`,
     });
