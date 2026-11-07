@@ -195,7 +195,7 @@ describe("MCP over HTTP", () => {
 });
 
 describe("admin pages", () => {
-  it.each(["/admin", "/admin/quotes?q=dignity", "/admin/concepts", "/admin/concepts/abuse", "/admin/worklists", "/admin/worklists/unmatched_works", "/admin/worklists/kindle_locator"])("serves %s", async (path) => {
+  it.each(["/admin", "/admin/quotes?q=dignity", "/admin/capture", "/admin/concepts", "/admin/concepts/abuse", "/admin/worklists", "/admin/worklists/unmatched_works", "/admin/worklists/kindle_locator"])("serves %s", async (path) => {
     const res = await fetch(base + path);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("<title>");

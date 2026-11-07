@@ -49,6 +49,12 @@ Only `QUOTE_ZOTERO_LIBRARY` and `QUOTE_ZOTERO_API_KEY` are needed, and the key o
 | `QUOTE_TERMS_SYNC` | `off` | `on`: the server follows terminology-mcp's `human-work` scheme every minute. Set it in `/etc/quote-mcp/env` only; a second follower would fight the server's cursor. |
 | `TERMINOLOGY_BASE` | `http://terminology-mcp.localdomain:8000` | terminology-mcp on the LAN, where progress reports name the caller; `off` turns following off. |
 | `CORPUS_BASE` | `http://corpus-mcp.localdomain:8000` | corpus-mcp on the LAN, which checks `add_quote`'s words against a Calibre book; `off` saves every quote transcribed (a Calibre book id then needs the work's key from `find_work` instead). |
+| `QUOTE_HA_URL`, `QUOTE_HA_TOKEN` | none | Home Assistant and a long-lived access token. The [capture page](admin-ui.md#capturing-a-quote) sends a recording to one of its speech engines. |
+| `QUOTE_HA_STT` | Home Assistant Cloud, or the only engine | The speech engine, such as `stt.home_assistant_cloud` or an AI subscription's speech-to-text entity. |
+| `QUOTE_HA_STT_LANGUAGE` | `en` | The language to ask for, matched to one the engine offers (`en` matches `en-US`). |
+| `QUOTE_TRANSCRIBE` | none | A command that prints the words of a 16 kHz mono wav, with `{wav}` as the file. When set, it is used instead of Home Assistant and PocketSphinx. |
+| `QUOTE_POCKETSPHINX_MODEL` | `/usr/share/pocketsphinx/model/en-us` | That model's directory, when neither Home Assistant nor `QUOTE_TRANSCRIBE` is set. |
+| `QUOTE_OCR` | Tesseract | A command that prints the words of a scanned page, with `{image}` as the file. Unset, the capture page uses Tesseract (`eng`). A PDF is its first page. |
 | `QUOTE_D1_PROXY_URL`, `QUOTE_D1_PROXY_TOKEN` | none | The D1 proxy and its token, for the public replica's drain. |
 | `QUOTE_PUBLIC`, `QUOTE_PUBLIC_NOTES` | `public:` and `notes:` in `vocab/site.md` | Override the public site's choices on one machine. |
 | `QUOTE_PUBLIC_PORT` | none | A port serving only the public site, for a hostname with no login. |

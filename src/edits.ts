@@ -283,15 +283,16 @@ export function reviewProposal(db: DB, id: number, decision: "accept" | "reject"
 }
 
 /**
- * Deletes a quote an agent saved or took over from corpus-mcp, first dropping its anchor there. A quote with any
- * other origin (a Zotero note, the old site) is refused: the next import would bring it back from its source.
+ * Deletes a quote an agent saved, one taken over from corpus-mcp, or one spoken on the capture page, first dropping
+ * its anchor there. A quote with any other origin (a Zotero note, the old site) is refused: the next import would
+ * bring it back from its source.
  * The quote as it was goes into history, which a deleted quote keeps.
  */
 export async function deleteQuote(db: DB, corpus: CorpusClient | null, id: number, reason: string, actor: string) {
   const why = reason?.trim();
   if (!why) throw new ToolError("Say why: give a reason.");
   const imported = (quoteId: number) =>
-    db.prepare("SELECT kind || ' ' || ref FROM quote_origins WHERE quote_id = ? AND kind NOT IN ('agent', 'corpus') ORDER BY kind, ref").pluck().all(quoteId) as string[];
+    db.prepare("SELECT kind || ' ' || ref FROM quote_origins WHERE quote_id = ? AND kind NOT IN ('agent', 'corpus', 'capture') ORDER BY kind, ref").pluck().all(quoteId) as string[];
   const refuse = (from: string[]) =>
     new ToolError(`Quote ${id} came from ${from.join(", ")}, which the import reads again; delete it there (or change its tags and comment here) instead.`);
   const q = getQuote(db, id);

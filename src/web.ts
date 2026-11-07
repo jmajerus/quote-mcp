@@ -1,4 +1,7 @@
+import { randomUUID } from "node:crypto";
 import type { DB } from "./db.js";
+import { type AddQuoteOptions } from "./capture.js";
+import { type WorkHit, getWork, saveSpokenQuote, searchWorks } from "./dictate.js";
 import { editQuote } from "./edits.js";
 import { emphasisHtml } from "./public.js";
 import {
@@ -8,10 +11,10 @@ import { CSS, esc } from "./style.js";
 
 /**
  * The admin pages, rendered on the server: an overview, search over quotes and notes, a record's page, the concept
- * scheme, and the worklists. Read-only in phase 1; editing arrives with phase 2 behind Cloudflare Access.
+ * scheme, the worklists, and the capture page. Read-only in phase 1; editing arrives with phase 2 behind Cloudflare Access.
  */
 
-type Section = "overview" | "quotes" | "concepts" | "worklists";
+type Section = "overview" | "quotes" | "capture" | "concepts" | "worklists";
 
 
 
@@ -23,7 +26,7 @@ function qs(params: Record<string, unknown>): string {
 }
 
 function page(title: string, section: Section, body: string): string {
-  const nav: [Section, string, string][] = [["overview", "Overview", "/admin"], ["quotes", "Quotes", "/admin/quotes"], ["concepts", "Concepts", "/admin/concepts"], ["worklists", "Worklists", "/admin/worklists"]];
+  const nav: [Section, string, string][] = [["overview", "Overview", "/admin"], ["quotes", "Quotes", "/admin/quotes"], ["capture", "Capture", "/admin/capture"], ["concepts", "Concepts", "/admin/concepts"], ["worklists", "Worklists", "/admin/worklists"]];
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)} · Quotes</title><link rel="icon" type="image/png" href="/favicon.png"><style>${CSS}</style></head><body>
 <header class="topbar"><div class="topbar-inner"><span class="brand">Quote MCP</span><nav class="nav">
@@ -236,10 +239,233 @@ export function saveAdminEdit(writer: DB, path: string, form: URLSearchParams, e
   }
 }
 
+const CAPTURE_SCRIPT = `
+const mic = document.querySelector("#mic");
+const record = document.querySelector("#record");
+const scan = document.querySelector("#scan");
+const text = document.querySelector("#text");
+const page = document.querySelector("#page");
+const status = document.querySelector("#mic-status");
+const view = document.querySelector("#scan-view");
+const shot = document.querySelector("#scan-preview");
+const pageText = document.querySelector("#page-text");
+const KEY = "quote-capture-mic";
+let recorder = null, chunks = [], stream = null, timer = null;
+const say = (message) => { status.textContent = message; };
+const remember = (id) => { try { localStorage.setItem(KEY, id); } catch (e) {} };
+const remembered = () => { try { return localStorage.getItem(KEY); } catch (e) { return null; } };
+const busy = (on) => { record.disabled = on; scan.disabled = on; };
+async function inputs() {
+  let devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audioinput");
+  if (devices.length && devices.every((d) => !d.label)) {
+    const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+    probe.getTracks().forEach((t) => t.stop());
+    devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audioinput");
+  }
+  return devices;
+}
+function fill(devices) {
+  if (!devices.length) { say("No microphone was found. Plug in the USB microphone, or scan the page."); record.disabled = true; return; }
+  const stored = remembered();
+  const named = devices.find((d) => /usb/i.test(d.label));
+  const external = devices.filter((d) => !/^default$/i.test(d.label) && !/built-in|internal|monitor/i.test(d.label));
+  const chosen = devices.find((d) => d.deviceId === stored) ?? named ?? (external.length === 1 ? external[0] : devices[0]);
+  mic.replaceChildren();
+  for (const d of devices) {
+    const option = document.createElement("option");
+    option.value = d.deviceId;
+    option.textContent = d.label || "Microphone";
+    option.selected = d.deviceId === chosen.deviceId;
+    mic.append(option);
+  }
+  const usb = named || (external.length === 1 && chosen === external[0]);
+  say(usb ? chosen.label + " is selected. Record one quote, or scan the page." : "Choose the USB microphone, then record one quote. Or scan the page.");
+}
+async function fillMics() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices || typeof MediaRecorder === "undefined") {
+    say("This browser can't use a microphone. Scan the page, or type the quote.");
+    record.disabled = true;
+    return;
+  }
+  try { fill(await inputs()); }
+  catch (e) { say("Allow the microphone for this page, then reload. Or scan the page."); }
+}
+async function deliver(blob, waiting, failed) {
+  say(waiting);
+  busy(true);
+  try {
+    const res = await fetch("/admin/capture/read", { method: "POST", headers: { "content-type": blob.type || "application/octet-stream" }, body: blob });
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body || typeof body.text !== "string") say((body && body.error) || failed);
+    else if (body.kind === "page") showPage(body);
+    else showSpeech(body.text);
+  } catch (e) { say(failed); }
+  busy(false);
+}
+function showSpeech(words) {
+  text.value = words;
+  say(view.hidden ? "Check the wording, then set the page and the concept and approve." : "Check the wording against the page, then set the concept and approve.");
+  (page.value.trim() ? document.querySelector("#tag") : page).focus();
+}
+function showPage(body) {
+  view.hidden = false;
+  pageText.textContent = body.text;
+  if (body.page && !page.value.trim()) page.value = body.page;
+  text.value = "";
+  say(body.page ? "Page " + body.page + " is from the scan. Mark the quote in the page text, then set the concept and approve." : "Mark the quote in the page text. Set the page number, then the concept, and approve.");
+}
+mic.addEventListener("change", () => remember(mic.value));
+pageText.addEventListener("pointerup", () => {
+  const sel = document.getSelection();
+  if (!sel || sel.isCollapsed || !pageText.contains(sel.anchorNode)) return;
+  const marked = sel.toString().replace(/[ \\t]+\\n/g, "\\n").replace(/[ \\t]{2,}/g, " ").replace(/\\n{3,}/g, "\\n\\n").trim();
+  if (!marked) return;
+  text.value = marked;
+  say("The marked passage is the quote. Correct it, set the concept, and approve.");
+});
+scan.addEventListener("change", () => {
+  const file = scan.files && scan.files[0];
+  if (!file) return;
+  if (file.type.startsWith("image/")) {
+    if (shot.dataset.objectUrl) URL.revokeObjectURL(shot.dataset.objectUrl);
+    const url = URL.createObjectURL(file);
+    shot.dataset.objectUrl = url;
+    shot.src = url;
+    shot.hidden = false;
+  } else shot.hidden = true;
+  view.hidden = false;
+  pageText.textContent = "";
+  deliver(file, "Reading the page…", "The page couldn't be read. Type the quote instead.");
+});
+record.addEventListener("click", async () => {
+  if (recorder && recorder.state === "recording") { recorder.stop(); return; }
+  record.disabled = true;
+  let devices;
+  try { devices = await inputs(); }
+  catch (e) { say("The browser didn't allow the microphone."); record.disabled = false; return; }
+  if (!devices.length) { say("No microphone was found. Plug in the USB microphone, or scan the page."); record.disabled = false; return; }
+  fill(devices);
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: mic.value ? { exact: mic.value } : undefined, channelCount: 1 } });
+  } catch (e) {
+    say("That microphone couldn't be opened. Choose it again, or plug it in.");
+    record.disabled = false;
+    return;
+  }
+  remember(mic.value);
+  chunks = [];
+  const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : (MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "");
+  recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  recorder.onstop = async () => {
+    clearTimeout(timer);
+    stream.getTracks().forEach((t) => t.stop());
+    record.textContent = "Record";
+    record.classList.remove("recording");
+    const blob = new Blob(chunks, { type: recorder.mimeType || "application/octet-stream" });
+    if (blob.size < 400) { say("That recording was too short. Record the quote, then stop."); busy(false); return; }
+    await deliver(blob, "Transcribing…", "The recording couldn't be transcribed. Type the quote instead.");
+  };
+  recorder.start();
+  record.disabled = false;
+  scan.disabled = true;
+  record.textContent = "Stop";
+  record.classList.add("recording");
+  say("Listening. Speak the quote, then stop.");
+  timer = setTimeout(() => { if (recorder && recorder.state === "recording") recorder.stop(); }, 180000);
+});
+fillMics();
+`;
+
+function workChoice(w: WorkHit): string {
+  const who = w.authors.slice(0, 2).join("; ") + (w.authors.length > 2 ? " et al." : "");
+  return `<a href="/admin/capture?work=${w.id}"><cite>${esc(w.title)}</cite></a>${w.year ? ` (${esc(w.year)})` : ""}${who ? `<div class="note">${esc(who)}</div>` : ""}`;
+}
+
+/** A quote just saved on this book, linked, with a note when its tag isn't a concept. */
+function savedNote(db: DB, workId: number, params: URLSearchParams): string {
+  const id = Number(params.get("saved"));
+  if (!id) return "";
+  let quote: ReturnType<typeof getQuote>;
+  try {
+    quote = getQuote(db, id);
+  } catch {
+    return "";
+  }
+  if (quote.work?.id !== workId) return "";
+  const unresolved = params.get("unresolved") ?? "";
+  const again = params.get("again") === "1";
+  return `<p class="note">${again ? "The book already had these words" : "Saved"}: <a href="/admin/quotes/${id}">quote ${id}</a>.${
+    unresolved ? ` ${esc(unresolved)} ${unresolved.includes(",") ? "aren't concepts" : "isn't a concept"} yet; the tag stays on the quote.` : ""
+  } Capture the next one when you're ready.</p>`;
+}
+
+/**
+ * Choose the book, then speak a quote or mark one on a scanned page. Without a book, a search; with one,
+ * the microphone, the scan, the page, and the concept. `sent` is a form that didn't save, shown again with what was wrong.
+ */
+function capturePage(db: DB, params: URLSearchParams, error?: string, sent?: URLSearchParams): string {
+  const asked = params.get("work");
+  if (!asked) {
+    const q = params.get("q") ?? "";
+    const found = q.trim() ? searchWorks(db, q) : [];
+    const rows = found.map((w) => `<tr><td>${workChoice(w)}</td><td>${esc(w.year)}</td></tr>`).join("");
+    return page("Capture", "capture", `<h1>Capture</h1>
+<p class="sub">Choose the book these quotes come from. Each one is then spoken, or marked on a scanned page, with its page and a concept tag.</p>
+${error ? `<p class="error">${esc(error)}</p>` : ""}
+<form class="filters" method="get" action="/admin/capture"><input name="q" placeholder="Title, author, citekey, or ISBN" value="${esc(q)}" aria-label="Find a book" autofocus><button>Find</button></form>
+${q.trim() ? (found.length ? `<div class="scroll"><table><tr><th>Book</th><th>Year</th></tr>${rows}</table></div>` : `<p class="note">No book matches.</p>`) : ""}`);
+  }
+  const id = Number(asked);
+  const work = Number.isInteger(id) && id > 0 ? getWork(db, id) : undefined;
+  if (!work) throw new ToolError(`No work ${asked}.`);
+  const value = (name: string) => esc(sent?.get(name) ?? "");
+  const concepts = listConcepts(db);
+  const options = concepts.flatMap((c) => [c.label, ...c.alt_labels]).map((label) => `<option value="${esc(label)}">`).join("");
+  const who = work.authors.slice(0, 2).join("; ") + (work.authors.length > 2 ? " et al." : "");
+  return page(`Capture · ${work.title}`, "capture", `<h1>Capture</h1>
+<p class="sub">${who ? `${esc(who)}, ` : ""}<cite>${esc(work.title)}</cite>${work.year ? ` (${esc(work.year)})` : ""} · <a href="/admin/capture">Choose another book</a></p>
+${error ? `<p class="error">${esc(error)}</p>` : ""}${sent ? "" : savedNote(db, work.id, params)}
+<p>Speak one quote, or scan one page and mark the passage. Set the page and the concept, correct the wording, and approve it. The next quote stays on this book.</p>
+<form class="edit capture" method="post" action="/admin/capture">
+<input type="hidden" name="work" value="quote:${work.id}">
+<input type="hidden" name="request_id" value="${esc(sent?.get("request_id") ?? randomUUID())}">
+<label for="mic">Microphone</label><select id="mic" aria-label="Microphone"><option value="">Allow the microphone to see its name</option></select>
+<div class="actions"><button type="button" id="record">Record</button><label class="file" for="scan">Scan a page</label><input id="scan" type="file" accept="image/*,application/pdf" capture="environment"><span id="mic-status" class="note live" role="status">Plug in the USB microphone if it isn't listed.</span></div>
+<div id="scan-view" class="scan-view" hidden><img id="scan-preview" alt="The scanned page" hidden><pre id="page-text" class="page-text"></pre></div>
+<label for="text">Quote</label><textarea id="text" name="text" required>${value("text")}</textarea>
+<p class="note">Correct the wording, or mark the quote in the page text. Approving saves that passage.</p>
+<label for="page">Page</label><input id="page" name="page" required inputmode="numeric" value="${value("page")}" placeholder="40 or 211-212">
+<label for="tag">Concept</label><input id="tag" name="tag" required list="concepts" value="${value("tag")}" placeholder="mobbing">
+<datalist id="concepts">${options}</datalist>
+<div class="actions"><button>Approve</button></div>
+</form>
+<script>${CAPTURE_SCRIPT}</script>`);
+}
+
+/** Saves the capture form: a redirect back to the same book, or the form again with what was wrong. */
+export async function saveCaptureForm(writer: DB, form: URLSearchParams, editor: string, o: Omit<AddQuoteOptions, "origin" | "actor">): Promise<{ redirect: string } | { status: number; html: string }> {
+  const work = form.get("work") ?? "";
+  const id = /^quote:(\d+)$/.exec(work)?.[1];
+  try {
+    const saved = await saveSpokenQuote(writer, {
+      work, text: form.get("text") ?? "", page: form.get("page") ?? "", tag: form.get("tag") ?? "", request_id: form.get("request_id") ?? undefined,
+    }, editor, o);
+    const next = new URLSearchParams({ work: id ?? "", saved: String(saved.id) });
+    if (!saved.saved) next.set("again", "1");
+    if (saved.unresolved.length) next.set("unresolved", saved.unresolved.join(", "));
+    return { redirect: `/admin/capture?${next}` };
+  } catch (error) {
+    if (!(error instanceof ToolError)) throw error;
+    return { status: 400, html: capturePage(writer, new URLSearchParams(id ? { work: id } : {}), error.message, form) };
+  }
+}
+
 /** The HTML for an /admin path, or null when there is no such page. */
 export function renderAdmin(db: DB, path: string, params: URLSearchParams): string | null {
   if (path === "/admin" || path === "/admin/") return overviewPage(db);
   if (path === "/admin/quotes") return quotesPage(db, params);
+  if (path === "/admin/capture") return capturePage(db, params);
   let m = /^\/admin\/quotes\/(\d+)$/.exec(path);
   if (m) return quotePage(db, Number(m[1]));
   m = /^\/admin\/quotes\/(\d+)\/edit$/.exec(path);

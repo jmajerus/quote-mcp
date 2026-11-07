@@ -238,8 +238,12 @@ export interface AddQuoteArgs {
 
 export interface AddQuoteOptions {
   corpus: CorpusClient | null; primary?: string | null; actor?: string;
-  /** Where the quote came from: an agent (the default), or corpus-mcp's own quotes, taken over by importCorpusQuotes. */
-  origin?: "agent" | "corpus";
+  /**
+   * Where the quote came from: an agent (the default), corpus-mcp's own quotes taken over by importCorpusQuotes,
+   * or the capture page, where a person speaks a paper book's quote. A capture is saved transcribed and isn't
+   * checked against a Calibre text: speech is a draft the person corrects, and a near miss would otherwise save nothing.
+   */
+  origin?: "agent" | "corpus" | "capture";
   /** Kept with the origin, beside the request: corpus-mcp's record of a quote taken over. */
   source?: Record<string, unknown>;
   /**
@@ -348,7 +352,8 @@ async function addQuoteOnce(db: DB, args: AddQuoteArgs, o: AddQuoteOptions): Pro
   // checked anyway: one whose words are already here is taken over (save), which needs the fresh anchor.
   const same = t.known !== undefined && origin !== "corpus" ? alreadySaved(db, origin, requestId, t.known, text) : undefined;
   if (same) return same;
-  const plan = await planQuote(db, t, text, args.page, o.corpus);
+  const spoken = origin === "capture";
+  const plan = await planQuote(db, t, text, args.page, spoken ? null : o.corpus, spoken);
 
   const saving = save(db, args, plan, requestId, o.actor ?? origin, origin, o.source);
   if (typeof saving !== "number" && !("takenOver" in saving)) return saving;
@@ -375,9 +380,14 @@ function alreadySaved(db: DB, origin: string, requestId: string, work?: number, 
   return byWords !== undefined ? { saved: false, reason: "The work already has this quote.", book: calibreSource(db, byWords)?.book ?? null, quote: getQuote(db, byWords) } : undefined;
 }
 
-async function planQuote(db: DB, t: Target, text: string, page: string | undefined, corpus: CorpusClient | null): Promise<Plan> {
+async function planQuote(db: DB, t: Target, text: string, page: string | undefined, corpus: CorpusClient | null, spoken = false): Promise<Plan> {
   const transcribed = (work: number, note: string, book: Book | null = null): Plan =>
     ({ status: "transcribed", work, text, locator: page?.trim() || null, section: null, position: null, anchor: null, book, exact: true, note });
+  // Spoken on the capture page: the words are what was heard, corrected by the person, not a passage to prove against a file.
+  if (spoken) {
+    if (!t.work) throw new ToolError(`${t.label} isn't a work in the store. Choose the book on the capture page.`);
+    return transcribed(t.work(), "Saved transcribed: spoken from the book, not checked against a text.");
+  }
   if (!t.book || !corpus) {
     if (!t.work) throw new ToolError(`${t.label} is a Calibre book with no work here yet, and corpus-mcp, which would say which work it is, is off (CORPUS_BASE). Pass the work's key from find_work instead.`);
     return transcribed(t.work(), t.book ? "Saved transcribed: corpus-mcp is off here, so the words weren't checked against the book." : "Saved transcribed: the work has no Calibre book to check against.");
@@ -438,8 +448,9 @@ function save(db: DB, args: AddQuoteArgs, plan: Plan, requestId: string, actor: 
     const tags = [...new Set((args.tags ?? []).map((t) => t.trim()).filter(Boolean))];
     for (const tag of tags) db.prepare("INSERT OR IGNORE INTO quote_tags (quote_id, tag, concept_id, origin) VALUES (?, ?, ?, ?)").run(id, tag, conceptOf(db, tag), origin);
     const how = plan.status === "verified" ? `checked against Calibre book ${plan.book!.book_id}${plan.exact ? "" : "; the wording is the book's"}` : plan.note;
+    const lead = origin === "capture" ? "capture" : "add_quote";
     db.prepare("INSERT INTO history (quote_id, at, kind, before, after, actor, reason) VALUES (?, ?, 'added', ?, ?, ?, ?)")
-      .run(id, stamp, plan.exact ? null : args.text, plan.text, actor, `add_quote: ${how}`);
+      .run(id, stamp, plan.exact ? null : args.text, plan.text, actor, `${lead}: ${how}`);
     db.prepare("INSERT INTO quotes_fts (rowid, text, comment, tags) VALUES (?, ?, ?, ?)").run(id, plan.text, comment ?? "", tags.join(" "));
     return id;
   })();

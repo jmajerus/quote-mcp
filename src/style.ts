@@ -58,6 +58,16 @@ th { color: var(--muted); font-weight: 600; font-size: 0.82rem; }
 pre { background: var(--quote); padding: 10px; border-radius: 8px; overflow-x: auto; font-size: 0.82rem; }
 mark { background: var(--warn-bg); color: inherit; }
 .pager { display: flex; gap: 12px; margin-top: 14px; }
+form.capture select { font: inherit; width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
+form.capture label.file { display: inline-block; margin: 0; font-weight: 600; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--accent); color: var(--accent); background: var(--surface); cursor: pointer; }
+form.capture input#scan { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); border: 0; }
+button.recording { background: var(--warn); border-color: var(--warn); color: #1d1d1b; }
+.live { min-height: 1.4em; }
+.scan-view { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin-top: 12px; }
+.scan-view[hidden] { display: none; }
+.scan-view img { width: 100%; max-height: 28rem; object-fit: contain; background: var(--quote); border-radius: 8px; }
+.page-text { margin: 0; max-height: 28rem; overflow: auto; white-space: pre-wrap; }
+@media (max-width: 720px) { .scan-view { grid-template-columns: 1fr; } }
 `;
 
 export const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
