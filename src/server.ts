@@ -20,7 +20,8 @@ import { type ConceptSet, currentSets } from "./sets.js";
 import { isSitePath, renderSite } from "./site.js";
 import { VERSION, createServer } from "./mcp.js";
 import { ToolError, overview } from "./queries.js";
-import { renderAdmin, saveAdminEdit } from "./web.js";
+import { MAX_AUDIO, MAX_IMAGE, TranscribeError, captureKind, readCapture, transcribeAudio } from "./dictate.js";
+import { renderAdmin, saveAdminEdit, saveCaptureForm } from "./web.js";
 
 /**
  * Streamable HTTP at /mcp (stateless: a fresh server per request, JSON responses), the admin pages at
@@ -105,20 +106,94 @@ function listen(server: http.Server, port: number, host: string, what: string): 
   }));
 }
 
+/** A form or recording posted from the admin pages, taken only from a page this server served. */
+function postedFromHere(req: http.IncomingMessage): boolean {
+  const from = req.headers.origin ?? req.headers.referer;
+  try {
+    return Boolean(from) && new URL(from!).host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
+
+/** The body, or null when it grows past the limit (the request is then closed). */
+async function readBody(req: http.IncomingMessage, limit: number): Promise<Buffer | null> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  try {
+    for await (const chunk of req) {
+      size += (chunk as Buffer).length;
+      if (size > limit) {
+        req.destroy();
+        return null;
+      }
+      chunks.push(chunk as Buffer);
+    }
+  } catch (error) {
+    if (size > limit) return null;
+    throw error;
+  }
+  return Buffer.concat(chunks);
+}
+
+function sendHtml(res: http.ServerResponse, answer: { redirect: string } | { status: number; html: string } | null): void {
+  if (!answer) res.writeHead(404, { "content-type": "text/plain" }).end("Not found");
+  else if ("redirect" in answer) res.writeHead(303, { location: answer.redirect }).end();
+  else res.writeHead(answer.status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }).end(answer.html);
+}
+
+/** A recording or a scanned page from the capture editor, read and returned as JSON. */
+async function readPost(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const type = String(req.headers["content-type"] ?? "");
+  const kind = captureKind(type);
+  if (!kind) {
+    res.writeHead(415, { "content-type": "application/json; charset=utf-8" }).end(JSON.stringify({ error: "Send a recording or a page image." }));
+    return;
+  }
+  const body = await readBody(req, kind === "page" ? MAX_IMAGE : MAX_AUDIO);
+  if (!body) {
+    const error = kind === "page" ? "That page image is too large. Photograph one page." : "That recording is too long. Speak one quote, then stop.";
+    res.writeHead(413, { "content-type": "application/json; charset=utf-8" }).end(JSON.stringify({ error }));
+    return;
+  }
+  try {
+    const read = await readCapture(body, type);
+    res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }).end(JSON.stringify(read));
+  } catch (error) {
+    if (!(error instanceof TranscribeError)) throw error;
+    res.writeHead(422, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }).end(JSON.stringify({ error: error.message }));
+  }
+}
+
+/** A recording from the capture page, transcribed and returned as JSON. */
+async function transcribePost(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const type = String(req.headers["content-type"] ?? "");
+  if (!type.startsWith("audio/") && type !== "application/octet-stream") {
+    res.writeHead(415, { "content-type": "application/json; charset=utf-8" }).end(JSON.stringify({ error: "Send the recording as audio." }));
+    return;
+  }
+  const body = await readBody(req, MAX_AUDIO);
+  if (!body) {
+    res.writeHead(413, { "content-type": "application/json; charset=utf-8" }).end(JSON.stringify({ error: "That recording is too long. Speak one quote, then stop." }));
+    return;
+  }
+  try {
+    const text = await transcribeAudio(body, type);
+    res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }).end(JSON.stringify({ text }));
+  } catch (error) {
+    if (!(error instanceof TranscribeError)) throw error;
+    res.writeHead(422, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }).end(JSON.stringify({ error: error.message }));
+  }
+}
+
 /**
- * A form posted from the admin pages: the edit form. It's taken only from a page this server served (Origin, or
- * failing that Referer, naming this host), so another site can't post it with the person's Access session. Writes
- * go through the writable connection; the redirect's GET then reads them through the read-only one.
+ * A form posted from the admin pages: the edit form, or the capture form and its recording. It's taken only from a
+ * page this server served (Origin, or failing that Referer, naming this host), so another site can't post it with
+ * the person's Access session. Writes go through the writable connection; the redirect's GET then reads them
+ * through the read-only one.
  */
 async function adminPost(req: http.IncomingMessage, res: http.ServerResponse, path: string, capture: Capture | undefined, editor: string): Promise<void> {
-  const from = req.headers.origin ?? req.headers.referer;
-  let sameHost = false;
-  try {
-    sameHost = Boolean(from) && new URL(from!).host === req.headers.host;
-  } catch {
-    sameHost = false;
-  }
-  if (!sameHost) {
+  if (!postedFromHere(req)) {
     res.writeHead(403, { "content-type": "text/plain; charset=utf-8" }).end("Forms are taken only from this server's own pages.");
     return;
   }
@@ -126,20 +201,25 @@ async function adminPost(req: http.IncomingMessage, res: http.ServerResponse, pa
     res.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end("Editing isn't set up on this server.");
     return;
   }
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    size += (chunk as Buffer).length;
-    if (size > 64 * 1024) {
-      res.writeHead(413, { "content-type": "text/plain; charset=utf-8" }).end("The form is too large.");
-      return;
-    }
-    chunks.push(chunk as Buffer);
+  if (path === "/admin/capture/transcribe") {
+    await transcribePost(req, res);
+    return;
   }
-  const answer = saveAdminEdit(capture.writer(), path, new URLSearchParams(Buffer.concat(chunks).toString("utf8")), editor);
-  if (!answer) res.writeHead(404, { "content-type": "text/plain" }).end("Not found");
-  else if ("redirect" in answer) res.writeHead(303, { location: answer.redirect }).end();
-  else res.writeHead(answer.status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }).end(answer.html);
+  if (path === "/admin/capture/read") {
+    await readPost(req, res);
+    return;
+  }
+  const body = await readBody(req, 64 * 1024);
+  if (!body) {
+    res.writeHead(413, { "content-type": "text/plain; charset=utf-8" }).end("The form is too large.");
+    return;
+  }
+  const form = new URLSearchParams(body.toString("utf8"));
+  if (path === "/admin/capture") {
+    sendHtml(res, await saveCaptureForm(capture.writer(), form, editor, { corpus: capture.corpus, primary: capture.primary, refreshZotero: capture.refreshZotero }));
+    return;
+  }
+  sendHtml(res, saveAdminEdit(capture.writer(), path, form, editor));
 }
 
 export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
@@ -181,7 +261,7 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
         return;
       }
       if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
-        if (req.method === "POST" && /^\/admin\/quotes\/\d+\/edit$/.test(url.pathname)) {
+        if (req.method === "POST" && (url.pathname === "/admin/capture" || url.pathname === "/admin/capture/transcribe" || url.pathname === "/admin/capture/read" || /^\/admin\/quotes\/\d+\/edit$/.test(url.pathname))) {
           await adminPost(req, res, url.pathname, options.capture, auth.via === "access" ? (auth.email ?? auth.subject ?? "access") : "lan");
           return;
         }

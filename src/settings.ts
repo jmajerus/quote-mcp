@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { d1ConfigFrom } from "./d1-http.js";
+import { dictationStatus, ocrStatus } from "./dictate.js";
 import { needsKey } from "./zotero.js";
 
 /**
@@ -37,6 +38,9 @@ export const SETTINGS: Setting[] = [
   { name: "QUOTE_TERMS_SYNC", group: "Concepts from terminology-mcp", about: "on: the server follows terminology-mcp's human-work scheme every minute", fallback: "off" },
   { name: "TERMINOLOGY_BASE", group: "Concepts from terminology-mcp", about: "terminology-mcp on the LAN, where progress reports name the caller; off turns following off", fallback: "http://terminology-mcp.localdomain:8000" },
   { name: "CORPUS_BASE", group: "Saving quotes", about: "corpus-mcp on the LAN, which checks add_quote's words against a Calibre book; off saves every quote transcribed, by work key", fallback: "http://corpus-mcp.localdomain:8000" },
+  { name: "QUOTE_TRANSCRIBE", group: "Saving quotes", about: "a command that prints the words of a 16 kHz mono wav; {wav} is the file. Unset, the capture page uses PocketSphinx" },
+  { name: "QUOTE_POCKETSPHINX_MODEL", group: "Saving quotes", about: "PocketSphinx's US English model directory, used when QUOTE_TRANSCRIBE is unset", fallback: "/usr/share/pocketsphinx/model/en-us" },
+  { name: "QUOTE_OCR", group: "Saving quotes", about: "a command that prints the words of a scanned page; {image} is the file. Unset, the capture page uses Tesseract" },
   { name: "QUOTE_MAP_DIR", group: "Maps", about: "quote-atlas's built maps, served at /map/" },
   { name: "QUOTE_PUBLIC", group: "Public site", about: "none, catalogue (no quoted text), or quotes", fallback: "none", site: "public" },
   { name: "QUOTE_PUBLIC_NOTES", group: "Public site", about: "notes on the public site: none or all", fallback: "none", site: "notes" },
@@ -91,9 +95,13 @@ function features(env: NodeJS.ProcessEnv, site: Record<string, string>, wrangler
   const mapDir = env.QUOTE_MAP_DIR?.trim();
   const terminology = env.TERMINOLOGY_BASE?.trim().toLowerCase() === "off";
   const following = env.QUOTE_TERMS_SYNC?.trim().toLowerCase() === "on";
+  const speech = dictationStatus(env);
+  const scan = ocrStatus(env);
   return [
     { name: "Import from Zotero", on: !zotero.length, note: zotero.length ? `needs ${zotero.join(" and ")}` : "" },
     { name: "Concepts from terminology-mcp", on: following && !terminology, note: !following ? "off; the store's concepts change only by hand (`quote-mcp terms`) until QUOTE_TERMS_SYNC=on" : terminology ? "off: TERMINOLOGY_BASE is off" : "" },
+    { name: "Microphone capture", on: speech.on, note: speech.note },
+    { name: "Page scan on the capture page", on: scan.on, note: scan.note },
     { name: "Maps at /map/", on: !!mapDir && fs.existsSync(mapDir), note: !mapDir ? "off without QUOTE_MAP_DIR" : fs.existsSync(mapDir) ? "" : `${mapDir} doesn't exist here` },
     { name: "Public site", on: level !== "none", note: level === "none" ? "off; set public: in vocab/site.md, or QUOTE_PUBLIC" : `level ${level}` },
     { name: "Public-only port", on: level !== "none" && has("QUOTE_PUBLIC_PORT"), note: has("QUOTE_PUBLIC_PORT") ? "" : "off without QUOTE_PUBLIC_PORT" },

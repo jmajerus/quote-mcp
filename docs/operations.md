@@ -49,6 +49,9 @@ Only `QUOTE_ZOTERO_LIBRARY` and `QUOTE_ZOTERO_API_KEY` are needed, and the key o
 | `QUOTE_TERMS_SYNC` | `off` | `on`: the server follows terminology-mcp's `human-work` scheme every minute. Set it in `/etc/quote-mcp/env` only; a second follower would fight the server's cursor. |
 | `TERMINOLOGY_BASE` | `http://terminology-mcp.localdomain:8000` | terminology-mcp on the LAN, where progress reports name the caller; `off` turns following off. |
 | `CORPUS_BASE` | `http://corpus-mcp.localdomain:8000` | corpus-mcp on the LAN, which checks `add_quote`'s words against a Calibre book; `off` saves every quote transcribed (a Calibre book id then needs the work's key from `find_work` instead). |
+| `QUOTE_TRANSCRIBE` | PocketSphinx | A command that prints the words of a 16 kHz mono wav, with `{wav}` as the file. Unset, the [capture page](admin-ui.md#capturing-a-quote) uses PocketSphinx's US English model. |
+| `QUOTE_POCKETSPHINX_MODEL` | `/usr/share/pocketsphinx/model/en-us` | That model's directory, when `QUOTE_TRANSCRIBE` is unset. |
+| `QUOTE_OCR` | Tesseract | A command that prints the words of a scanned page, with `{image}` as the file. Unset, the capture page uses Tesseract (`eng`). A PDF is its first page. |
 | `QUOTE_D1_PROXY_URL`, `QUOTE_D1_PROXY_TOKEN` | none | The D1 proxy and its token, for the public replica's drain. |
 | `QUOTE_PUBLIC`, `QUOTE_PUBLIC_NOTES` | `public:` and `notes:` in `vocab/site.md` | Override the public site's choices on one machine. |
 | `QUOTE_PUBLIC_PORT` | none | A port serving only the public site, for a hostname with no login. |
