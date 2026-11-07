@@ -34,6 +34,7 @@ quote-mcp never changes Zotero. Its MCP tools save quotes and change tags and co
 | [Concepts, collections, and concept sets](docs/concepts.md) | Concept schemes, collections on the public site, and the sets file |
 | [The public site](docs/public-site.md) | What's public, `vocab/site.md`, the snapshot, the Worker and its D1 replica, the pages, and the maps' API |
 | [Operations](docs/operations.md) | Commands, settings, the server, deploying, and the status-bar items |
+| [Pandoc quote text](docs/dev-briefs/pandoc-quote-text.md) | Extraction ownership, preserved line breaks, and the migration handoff to corpus-mcp |
 | [PLAN.md](PLAN.md) | The plan of record: design decisions, what the survey found, the phases, and open questions |
 
 ## Quick start

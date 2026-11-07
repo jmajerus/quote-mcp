@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { type AnchorChange, type Book, type CorpusClient, CorpusError, type CorpusQuote, type Verified, addQuote, followAnchors, importCorpusQuotes, retryAnchors, zoteroRefresher } from "../src/capture.js";
 import http from "node:http";
 import { ToolError } from "../src/common.js";
-import { handleCorpusQuotes } from "../src/corpus-api.js";
+import { bookQuotes, handleCorpusQuotes } from "../src/corpus-api.js";
 import { deleteQuote } from "../src/edits.js";
 import type { DB } from "../src/db.js";
 import { holdingsCounts } from "../src/holdings.js";
@@ -105,20 +105,40 @@ describe("add_quote", () => {
     expect(searchQuotes(db, { query: "individual target" }).quotes.map((x) => x.id)).toEqual([q.id]);
   });
 
-  it("cites a quote checked against a book as prose, with the book and its place", async () => {
+  it("preserves extracted line breaks when citing, with the book and its place", async () => {
     corpus.books.set("main:7", { book: unfiledBook, text: "Work is a story\nwe tell ourselves.\nAnd then\nit ends." });
     const r = await addQuote(db, { work: "main:7", text: "Work is a story we tell ourselves. And then it ends." }, options());
     expect((r.book as Book).book_id).toBe("main:7");
     const id = saved(r).id;
     expect(saved(r).text).toBe("Work is a story\nwe tell ourselves.\nAnd then\nit ends.");
     expect(citeQuote(db, id)).toMatchObject({
-      quote: "Work is a story we tell ourselves.\n\nAnd then it ends.", book: { book_id: "main:7", calibre_uuid: unfiledBook.calibre_uuid },
+      quote: "Work is a story\nwe tell ourselves.\nAnd then\nit ends.", book: { book_id: "main:7", calibre_uuid: unfiledBook.calibre_uuid },
       position: { section: "Chapter 1", page_label: "40" },
     });
     const again = await addQuote(db, { work: "main:7", text: "Work is a story we tell ourselves. And then it ends." }, options());
     expect(again).toMatchObject({ saved: false, book: { book_id: "main:7" } });
     const other = db.prepare("SELECT id FROM quotes WHERE id != ? AND kind = 'quote' LIMIT 1").pluck().get(id) as number;
     expect(citeQuote(db, other)).not.toHaveProperty("position");
+  });
+
+  it("preserves Pandoc paragraphs, verse, lists, and code in citations and the reader feed", async () => {
+    const text = "A verse line\nAnother line.\n\n- First item\n- Second item\n\n    code()\n      indented()";
+    // The verify response is canonical extraction output, not the caller's whitespace.
+    corpus.verify = async () => ({ match: true, exact: false, text, locator: null, page_label: null, section: "Verse",
+      anchor: { calibre_uuid: unfiledBook.calibre_uuid, sha256: "abc", text }, book: unfiledBook });
+    const id = saved(await addQuote(db, { work: "main:7", text: "A verse line Another line." }, options())).id;
+    for (const flags of [[], ["anchor_lost"]]) {
+      db.prepare("UPDATE quotes SET flags = ? WHERE id = ?").run(JSON.stringify(flags), id);
+      expect(citeQuote(db, id).quote).toBe(text);
+      for (const book of ["main:7", unfiledBook.calibre_uuid]) {
+        expect(bookQuotes(db, book).quotes).toEqual([expect.objectContaining({ id, text, prose: text })]);
+      }
+    }
+    // Editorial marks remain the quote's own text, rather than being replaced with anchor.text.
+    const edited = text.replace("A verse", "[A] *verse*");
+    db.prepare("UPDATE quotes SET text = ? WHERE id = ?").run(edited, id);
+    expect(citeQuote(db, id).quote).toBe(edited);
+    expect(bookQuotes(db, "main:7").quotes[0].prose).toBe(edited);
   });
 
   it("gives a new quote an id past a deleted one's", async () => {

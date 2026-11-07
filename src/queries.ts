@@ -2,7 +2,6 @@ import Database from "better-sqlite3";
 import { citekeyOf, zoteroToCsl } from "./csl.js";
 import type { DB } from "./db.js";
 import { RELATION_LABEL, ToolError, ftsQuery } from "./common.js";
-import { reflow } from "./text.js";
 import type { ApiItem } from "./zotero.js";
 
 export { RELATION_LABEL, ToolError, ftsQuery };
@@ -330,10 +329,10 @@ export function citeQuote(db: DB, id: number) {
   const kindle = q.locator?.startsWith("Kindle");
   const locator = q.locator && !kindle ? { label: "page", locator: q.locator.replace(/^pp?\. /, "") } : null;
   const pandoc = citekey ? `[@${citekey}${locator ? `, ${q.locator}` : kindle ? `, ${q.locator}` : ""}]` : null;
-  // A quote checked against a Calibre book is the book's text, line breaks and all; cite it as prose.
+  // Extraction owns paragraph structure; preserve the stored wording and intentional breaks.
   const source = q.status === "verified" ? calibreSource(db, id) : null;
   return {
-    kind: q.kind, quote: q.kind === "note" ? null : source ? reflow(q.text) : q.text,
+    kind: q.kind, quote: q.kind === "note" ? null : q.text,
     ...(source ? { book: source.book, position: source.position } : {}), ...(q.kind === "note" ? { note: q.note } : {}), locator, locator_text: q.locator, chapter_author: q.chapter_author, csl, citekey, pandoc, ...(editions ? { editions } : {}),
     ...(q.chapter_author ? { note: `The passage is by ${q.chapter_author}, in an edited volume; cite the chapter if your style needs it.` } : {}),
     warnings,
