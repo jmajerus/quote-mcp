@@ -116,15 +116,20 @@ function postedFromHere(req: http.IncomingMessage): boolean {
   }
 }
 
-/** The body, or null when it grows past the limit (the request is then closed). */
+/** The body, or null when it is larger than the limit. The rest is discarded so the 413 can still be sent. */
 async function readBody(req: http.IncomingMessage, limit: number): Promise<Buffer | null> {
+  const declared = Number(req.headers["content-length"]);
+  if (Number.isFinite(declared) && declared > limit) {
+    req.resume();
+    return null;
+  }
   const chunks: Buffer[] = [];
   let size = 0;
   try {
     for await (const chunk of req) {
       size += (chunk as Buffer).length;
       if (size > limit) {
-        req.destroy();
+        req.resume();
         return null;
       }
       chunks.push(chunk as Buffer);

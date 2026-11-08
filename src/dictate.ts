@@ -490,28 +490,33 @@ function imageExtension(contentType: string): string {
   return ".img";
 }
 
-/** Tesseract, or QUOTE_OCR, prints the page. A PDF is its first page, rendered by pdftoppm. */
+/** Tesseract, or QUOTE_OCR, prints the page. A PDF is its first page, rendered by pdftoppm, for either reader. */
 async function readPageFile(file: string, env: NodeJS.ProcessEnv): Promise<string> {
-  const command = env.QUOTE_OCR?.trim();
-  if (command) {
-    const args = commandArgs(command, file);
-    const result = await run(args[0] ?? "", args.slice(1));
-    if (result.code !== 0) throw new TranscribeError(result.stderr.trim().split("\n").pop() || "The page couldn't be read.");
-    return result.stdout;
-  }
   let image = file;
   let dir = "";
-  if (file.endsWith(".pdf")) {
-    dir = await mkdtemp(path.join(tmpdir(), "quote-page-"));
-    const rendered = path.join(dir, "page.png");
-    const result = await run("pdftoppm", ["-f", "1", "-l", "1", "-png", "-singlefile", file, path.join(dir, "page")]);
-    if (result.code !== 0) throw new TranscribeError(result.stderr.trim().split("\n").pop() || "The PDF page couldn't be rendered.");
-    image = rendered;
-  }
   try {
+    if (file.endsWith(".pdf")) {
+      dir = await mkdtemp(path.join(tmpdir(), "quote-page-"));
+      const rendered = path.join(dir, "page.png");
+      const result = await run("pdftoppm", ["-f", "1", "-l", "1", "-png", "-singlefile", file, path.join(dir, "page")]);
+      if (result.code !== 0) throw new TranscribeError(result.stderr.trim().split("\n").pop() || "The PDF page couldn't be rendered.");
+      image = rendered;
+    }
+    const command = env.QUOTE_OCR?.trim();
+    if (command) {
+      const args = commandArgs(command, image);
+      const result = await run(args[0] ?? "", args.slice(1));
+      if (result.code !== 0) throw new TranscribeError(result.stderr.trim().split("\n").pop() || "The page couldn't be read.");
+      return result.stdout;
+    }
     const result = await run("tesseract", [image, "stdout", "-l", "eng"], 120_000);
     if (result.code !== 0) throw new TranscribeError(result.stderr.trim().split("\n").pop() || "The page couldn't be read.");
     return result.stdout;
+  } catch (error) {
+    if (error instanceof TranscribeError) throw error;
+    const missing = error as NodeJS.ErrnoException;
+    if (missing.code === "ENOENT") throw new TranscribeError(`${missing.path ?? "the page reader"} isn't installed, so the page can't be read. Type the quote instead.`);
+    throw error;
   } finally {
     if (dir) await rm(dir, { recursive: true, force: true });
   }

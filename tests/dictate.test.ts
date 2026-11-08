@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { CorpusClient } from "../src/capture.js";
-import { chooseSttEngine, commandArgs, dictationStatus, pageFromOcr, pageNumber, readCapture, saveSpokenQuote, searchWorks, sttLanguage, transcribeAudio } from "../src/dictate.js";
+import { chooseSttEngine, commandArgs, dictationStatus, MAX_AUDIO, pageFromOcr, pageNumber, readCapture, saveSpokenQuote, searchWorks, sttLanguage, transcribeAudio } from "../src/dictate.js";
 import { ToolError } from "../src/common.js";
 import type { DB } from "../src/db.js";
 import { deleteQuote } from "../src/edits.js";
@@ -21,6 +21,10 @@ const ffmpeg = () => {
   return !run.error && run.status === 0;
 };
 const pocketsphinx = fs.existsSync("/usr/share/pocketsphinx/model/en-us/en-us.lm.bin");
+const pdftoppm = () => {
+  const run = spawnSync("pdftoppm", ["-v"], { stdio: "ignore" });
+  return !run.error && run.status === 0;
+};
 const tesseract = () => {
   const run = spawnSync("tesseract", ["--version"], { stdio: "ignore" });
   return !run.error && run.status === 0 && fs.existsSync("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
@@ -75,7 +79,10 @@ describe("a spoken quote", () => {
     expect(db.prepare("SELECT kind FROM quote_origins WHERE quote_id = ?").pluck().get(saved.id)).toBe("capture");
     expect(db.prepare("SELECT tag, origin FROM quote_tags WHERE quote_id = ?").get(saved.id)).toEqual({ tag: "dignity", origin: "capture" });
     expect(db.prepare("SELECT actor, reason FROM history WHERE quote_id = ? AND kind = 'added'").get(saved.id)).toMatchObject({ actor: "lan", reason: expect.stringContaining("capture:") });
-    await deleteQuote(db, null, saved.id, "misheard", "lan");
+    const dropped: number[] = [];
+    const result = await deleteQuote(db, { dropAnchor: async (id: number) => void dropped.push(id) } as unknown as CorpusClient, saved.id, "misheard", "lan");
+    expect(dropped).toEqual([]);
+    expect(result).toMatchObject({ deleted: saved.id, anchor_dropped: false });
     expect(db.prepare("SELECT id FROM quotes WHERE id = ?").get(saved.id)).toBeUndefined();
   });
 
@@ -308,6 +315,9 @@ describe("transcription", () => {
       const heard = await post(base, silenceWav(), "audio/wav");
       expect(heard.status).toBe(200);
       expect(await heard.json()).toEqual({ text: "Spoken from the book." });
+      const tooLong = await post(base, Buffer.alloc(MAX_AUDIO + 1), "audio/wav");
+      expect(tooLong.status).toBe(413);
+      expect(await tooLong.json()).toEqual({ error: "That recording is too long. Speak one quote, then stop." });
     } finally {
       if (previous === undefined) delete process.env.QUOTE_TRANSCRIBE;
       else process.env.QUOTE_TRANSCRIBE = previous;
@@ -364,6 +374,44 @@ describe("a scanned page", () => {
       const read = await post(base, Buffer.from("png"), "image/png");
       expect(read.status).toBe(200);
       expect(await read.json()).toEqual({ kind: "page", text: "63\n\nMobbing is an emotional assault.", page: "63" });
+      const before = fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("quote-page-"));
+      const pdf = await post(base, Buffer.from("%PDF-1.4\nnot a page"), "application/pdf");
+      expect(pdf.status).toBe(422);
+      const after = fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("quote-page-"));
+      expect(after).toEqual(before);
+    } finally {
+      if (previous === undefined) delete process.env.QUOTE_OCR;
+      else process.env.QUOTE_OCR = previous;
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it.skipIf(!pdftoppm())("renders a PDF's first page before the OCR command", async () => {
+    const previous = process.env.QUOTE_OCR;
+    process.env.QUOTE_OCR = "node -e \"process.stdout.write(String(process.argv[1]).endsWith('.png') ? '63\\n\\nMobbing is an emotional assault.' : 'raw pdf')\"";
+    const server = await serveHttp(db, { host: "127.0.0.1", port: 0, capture: { writer: () => db, corpus: null, primary: "users/1" } });
+    const { port } = server.address() as import("node:net").AddressInfo;
+    const base = `http://127.0.0.1:${port}`;
+    const pdf = Buffer.from(`%PDF-1.4
+1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj
+2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj
+3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj
+4 0 obj<</Length 44>>stream
+BT /F1 24 Tf 40 100 Td (63) Tj ET
+endstream
+endobj
+5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj
+trailer<</Size 6/Root 1 0 R>>
+%%EOF
+`);
+    try {
+      const before = fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("quote-page-"));
+      const read = await fetch(`${base}/admin/capture/read`, {
+        method: "POST", body: new Uint8Array(pdf), headers: { "content-type": "application/pdf", origin: base },
+      });
+      expect(read.status).toBe(200);
+      expect(await read.json()).toEqual({ kind: "page", text: "63\n\nMobbing is an emotional assault.", page: "63" });
+      expect(fs.readdirSync(os.tmpdir()).filter((name) => name.startsWith("quote-page-"))).toEqual(before);
     } finally {
       if (previous === undefined) delete process.env.QUOTE_OCR;
       else process.env.QUOTE_OCR = previous;
