@@ -7,6 +7,9 @@ Wants=network-online.target
 User=quote
 Group=quote
 EnvironmentFile=/etc/quote-mcp/env
+Environment=QUOTE_TLS_CERT=/var/lib/quote-mcp/tls/cert.pem
+Environment=QUOTE_TLS_KEY=/var/lib/quote-mcp/tls/key.pem
+Environment=QUOTE_TLS_PORT=8443
 WorkingDirectory=/opt/quote-mcp/current
 ExecStart=/usr/bin/node /opt/quote-mcp/current/dist/cli.js serve
 Restart=on-failure

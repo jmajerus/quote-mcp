@@ -62,6 +62,7 @@ Only `QUOTE_ZOTERO_LIBRARY` and `QUOTE_ZOTERO_API_KEY` are needed, and the key o
 | `QUOTE_PUBLIC_PORT` | none | A port serving only the public site, for a hostname with no login. |
 | `QUOTE_DB` | `data/quotes.db` | The store. |
 | `QUOTE_HOST`, `QUOTE_PORT` | `0.0.0.0`, `8010` | Where the service listens. |
+| `QUOTE_TLS_CERT`, `QUOTE_TLS_KEY`, `QUOTE_TLS_PORT` | none, none, `8443` | A certificate for the same server on HTTPS. The [capture page](admin-ui.md#capturing-a-quote) needs it before a browser will offer a microphone. Deploy creates one for quote-mcp.localdomain when these are unset. |
 | `QUOTE_SETS` | `vocab/sets.json` | The concept sets, used only while the store has none from terminology-mcp. |
 | `QUOTE_INTRO` | `vocab/site.md` | The front page and the public site's choices. |
 | `QUOTE_SNAPSHOT` | `public.db` beside the store | The public snapshot. |
@@ -80,7 +81,7 @@ quote-mcp runs on a Debian LXC, quote-mcp.localdomain, on port 8000.
 - **Files.** The store, the snapshot (`public.db`), the replica's queue (`replica.db`), and the deploy record
   (`deployed.json`) are in `/var/lib/quote-mcp`; releases in `/opt/quote-mcp/releases`, the current one linked
   as `/opt/quote-mcp/current`; the maps in `/opt/quote-mcp/map`.
-- **Access.** On the LAN, `http://quote-mcp.localdomain:8000`. From outside, `https://quote-mcp.majerus.us`,
+- **Access.** On the LAN, `http://quote-mcp.localdomain:8000`, and `https://quote-mcp.localdomain:8443` for the capture page's microphone. From outside, `https://quote-mcp.majerus.us`,
   behind Cloudflare Access (Claude's connector and the admin pages). The public site is separate, at
   quotes.majerus.us.
 - **Commands.** Log in as `authoring` and run `quote-mcp <command>` (`quote-mcp terms`, `quote-mcp stats`,

@@ -1,6 +1,8 @@
 import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair } from 'jose';
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
+import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -394,6 +396,39 @@ describe("the map at /map/", () => {
   });
 });
 
+
+it.skipIf(!openssl())("serves the same health check over HTTPS", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "quote-tls-"));
+  const key = path.join(dir, "key.pem");
+  const cert = path.join(dir, "cert.pem");
+  execFileSync("openssl", ["req", "-x509", "-newkey", "rsa:2048", "-sha256", "-days", "1", "-nodes", "-keyout", key, "-out", cert, "-subj", "/CN=localhost"], { stdio: "pipe" });
+  const secure = await serveHttp(db, { host: "127.0.0.1", port: 0, tls: { cert: fs.readFileSync(cert), key: fs.readFileSync(key), port: 0 } });
+  const httpsServer = (secure as http.Server & { secure?: https.Server }).secure!;
+  const port = (httpsServer.address() as import("node:net").AddressInfo).port;
+  try {
+    const body = await new Promise<string>((resolve, reject) => {
+      const req = https.get({ host: "127.0.0.1", port, path: "/health", rejectUnauthorized: false }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => resolve(Buffer.concat(chunks).toString()));
+      });
+      req.on("error", reject);
+    });
+    expect(JSON.parse(body).ok).toBe(true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    await new Promise<void>((resolve) => secure.close(() => resolve()));
+  }
+});
+
+function openssl(): boolean {
+  try {
+    execFileSync("openssl", ["version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 it("requires a team-signed Access token, from any application, for public-host private API and MCP requests", async () => {
   const {publicKey,privateKey}=await generateKeyPair("RS256");

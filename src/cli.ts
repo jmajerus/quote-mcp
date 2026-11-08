@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import Database from "better-sqlite3";
 import { userInfo } from "node:os";
 import { dirname, join } from "node:path";
@@ -276,9 +276,22 @@ async function serveCommand() {
     }
   };
   const terms = startTermSync({ file: process.env.QUOTE_DB ?? "data/quotes.db", sets: conceptSets, onApplied: rebuild });
-  const options = { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010), mapDir: process.env.QUOTE_MAP_DIR || undefined, sets: conceptSets, snapshot, replica, terms, capture: capture() };
+  const options = { host: process.env.QUOTE_HOST ?? "0.0.0.0", port: Number(process.env.QUOTE_PORT ?? 8010), mapDir: process.env.QUOTE_MAP_DIR || undefined, sets: conceptSets, snapshot, replica, terms, capture: capture(), tls: tlsListener() };
   await serveHttp(openReadOnly(), options);
   if (process.env.QUOTE_PUBLIC_PORT) await servePublic({ ...options, port: Number(process.env.QUOTE_PUBLIC_PORT) });
+}
+
+/** HTTPS for the same server, when a certificate is configured. A missing file leaves HTTP running. */
+function tlsListener(): { cert: Buffer; key: Buffer; port: number } | undefined {
+  const certPath = process.env.QUOTE_TLS_CERT?.trim();
+  const keyPath = process.env.QUOTE_TLS_KEY?.trim();
+  if (!certPath || !keyPath) return undefined;
+  try {
+    return { cert: readFileSync(certPath), key: readFileSync(keyPath), port: Number(process.env.QUOTE_TLS_PORT) || 8443 };
+  } catch (error) {
+    console.error(`HTTPS not started: ${(error as Error).message}`);
+    return undefined;
+  }
 }
 
 /** Each concept set as the store has it now; fails when a set names a concept the scheme doesn't have. */

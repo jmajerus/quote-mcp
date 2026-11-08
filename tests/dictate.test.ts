@@ -122,6 +122,8 @@ describe("the capture page", () => {
     expect(found).toContain(`/admin/capture?work=`);
     const chosen = renderAdmin(db, "/admin/capture", new URLSearchParams({ work: String(workId()) }))!;
     expect(chosen).toContain('id="record"');
+    expect(chosen).toContain("isSecureContext");
+    expect(chosen).toContain("Needs a secure page");
     expect(chosen).toContain('id="scan"');
     expect(chosen).toContain('id="page-text"');
     expect(chosen).toContain(">Approve<");

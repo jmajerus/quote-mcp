@@ -62,7 +62,9 @@ quote saved on the page is attached to it.
 
 With the book chosen, two ways fill the same editor. **Record** speaks one quote into a microphone (a USB
 microphone appears under its own name; the browser asks once for permission) and **Stop** transcribes it
-into the quote box. **Scan a page** takes a photo or a one-page PDF; the printed page number, when the
+into the quote box. Chrome only offers a microphone on a secure page, so on the LAN open
+`https://quote-mcp.localdomain:8443` (the certificate is the server's own; the browser asks once). The
+`http://` page names that address instead of listing microphones. **Scan a page** takes a photo or a one-page PDF; the printed page number, when the
 header or footer is only that number, fills the page field, and the page's text sits beside the picture.
 Mark the passage in that text and it becomes the quote. Either way, correct the wording, set the page
 (`40` or `211-212`) and a concept tag (suggested from the concepts as you type), and **Approve**. Approving

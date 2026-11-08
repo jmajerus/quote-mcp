@@ -282,7 +282,20 @@ function fill(devices) {
   const usb = named || (external.length === 1 && chosen === external[0]);
   say(usb ? chosen.label + " is selected. Record one quote, or scan the page." : "Choose the USB microphone, then record one quote. Or scan the page.");
 }
+function securePage() {
+  const port = mic.dataset.tlsPort;
+  mic.replaceChildren();
+  const option = document.createElement("option");
+  option.textContent = "Needs a secure page";
+  mic.append(option);
+  mic.disabled = true;
+  record.disabled = true;
+  say(port
+    ? "Open https://" + location.hostname + ":" + port + location.pathname + location.search + ". A microphone only works on a secure page, so Chrome has no permission to change on this one."
+    : "A microphone only works on a secure page. This one is " + location.protocol + "//" + location.host + ".");
+}
 async function fillMics() {
+  if (!window.isSecureContext) { securePage(); return; }
   if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices || typeof MediaRecorder === "undefined") {
     say("This browser can't use a microphone. Scan the page, or type the quote.");
     record.disabled = true;
@@ -378,6 +391,12 @@ record.addEventListener("click", async () => {
 fillMics();
 `;
 
+/** The HTTPS port the capture page can send a person to, when this server has a certificate. */
+function captureTlsPort(): string {
+  if (!process.env.QUOTE_TLS_CERT?.trim() || !process.env.QUOTE_TLS_KEY?.trim()) return "";
+  return process.env.QUOTE_TLS_PORT?.trim() || "8443";
+}
+
 function workChoice(w: WorkHit): string {
   const who = w.authors.slice(0, 2).join("; ") + (w.authors.length > 2 ? " et al." : "");
   return `<a href="/admin/capture?work=${w.id}"><cite>${esc(w.title)}</cite></a>${w.year ? ` (${esc(w.year)})` : ""}${who ? `<div class="note">${esc(who)}</div>` : ""}`;
@@ -441,7 +460,7 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}${sent ? "" : savedNote(db, 
 <form class="edit capture" method="post" action="/admin/capture">
 <input type="hidden" name="work" value="quote:${work.id}">
 <input type="hidden" name="request_id" value="${esc(sent?.get("request_id") ?? randomUUID())}">
-<label for="mic">Microphone</label><select id="mic" aria-label="Microphone"><option value="">Allow the microphone to see its name</option></select>
+<label for="mic">Microphone</label><select id="mic" aria-label="Microphone" data-tls-port="${esc(captureTlsPort())}"><option value="">Allow the microphone to see its name</option></select>
 <div class="actions"><button type="button" id="record">Record</button><label class="file" for="scan">Scan a page</label><input id="scan" type="file" accept="image/*,application/pdf" capture="environment"><span id="mic-status" class="note live" role="status">Plug in the USB microphone if it isn't listed.</span></div>
 <div id="scan-view" class="scan-view" hidden><img id="scan-preview" alt="The scanned page" hidden><pre id="page-text" class="page-text"></pre></div>
 <label for="text">Quote</label><textarea id="text" name="text" required>${value("text")}</textarea>

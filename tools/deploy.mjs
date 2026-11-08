@@ -193,14 +193,26 @@ fi
 # The public site's preview reads a snapshot that imports rebuild; build it now so a new build's pages show at once
 # (nothing, when vocab/site.md doesn't make the site public).
 ${asQuote("publish --dry-run --if-public")}
+if [ ! -s /var/lib/quote-mcp/tls/cert.pem ] || [ ! -s /var/lib/quote-mcp/tls/key.pem ]; then
+  install -d -o quote -g quote -m 0750 /var/lib/quote-mcp/tls
+  openssl req -x509 -newkey rsa:2048 -sha256 -days 825 -nodes \\
+    -keyout /var/lib/quote-mcp/tls/key.pem \\
+    -out /var/lib/quote-mcp/tls/cert.pem \\
+    -subj "/CN=quote-mcp.localdomain" \\
+    -addext "subjectAltName=DNS:quote-mcp.localdomain,DNS:quote-mcp,DNS:localhost,IP:127.0.0.1"
+  chown quote:quote /var/lib/quote-mcp/tls/cert.pem /var/lib/quote-mcp/tls/key.pem
+  chmod 0644 /var/lib/quote-mcp/tls/cert.pem
+  chmod 0640 /var/lib/quote-mcp/tls/key.pem
+fi
 systemctl enable --quiet quote-mcp.service quote-import.timer quote-backup.timer
 systemctl start quote-import.timer quote-backup.timer
 systemctl restart quote-mcp.service
 for i in $(seq 1 20); do
-  if curl -sf "http://127.0.0.1:$QUOTE_PORT/health"; then echo; echo "installed=${id}"; break; fi
+  if curl -sf "http://127.0.0.1:$QUOTE_PORT/health" && curl -sfk "https://127.0.0.1:8443/health"; then echo; echo "installed=${id}"; break; fi
   sleep 1
 done
 curl -sf -o /dev/null "http://127.0.0.1:$QUOTE_PORT/health"
+curl -sfk -o /dev/null "https://127.0.0.1:8443/health"
 trap - EXIT
 rm -f "$pre_migrate"
 # Pruning old releases is housekeeping; failing at it doesn't fail the deploy.

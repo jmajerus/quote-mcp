@@ -5,6 +5,7 @@ import { AccessError, authorizeRequest, requestAccessConfig, type RequestAccessC
 import type { JWTVerifyGetKey } from 'jose';
 import fs from "node:fs";
 import http from "node:http";
+import https from "node:https";
 import path from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -52,6 +53,8 @@ export interface ServeOptions {
   terms?: () => TermSyncStatus;
   /** add_quote's writer and corpus-mcp; without it the MCP server is read-only. */
   capture?: Capture;
+  /** The same server on HTTPS, so a browser can use a microphone. Absent, only HTTP is served. */
+  tls?: { cert: Buffer; key: Buffer; port: number };
 }
 
 
@@ -229,7 +232,7 @@ async function adminPost(req: http.IncomingMessage, res: http.ServerResponse, pa
 
 export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
   const access = options.access ?? requestAccessConfig(process.env, ["quote-mcp", "quote-mcp.localdomain"]);
-  const server = http.createServer(async (req, res) => {
+  const onRequest = async (req: http.IncomingMessage, res: http.ServerResponse) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     try {
       const auth = await authorizeRequest(req, url.pathname, access, options.accessKeys);
@@ -323,11 +326,20 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
       console.error(error);
       if (!res.headersSent) res.writeHead(500).end();
     }
-  });
+  };
+  const server = http.createServer(onRequest);
+  const secure = options.tls ? https.createServer({ cert: options.tls.cert, key: options.tls.key }, onRequest) : undefined;
+  if (secure) {
+    (server as http.Server & { secure?: https.Server }).secure = secure;
+    server.on("close", () => { secure.close(); });
+  }
   const setCount = currentSets(db, options.sets).length;
   const sets = setCount ? ` with ${setCount} concept set${setCount === 1 ? "" : "s"}` : "";
   const site = options.snapshot ? ", the public site's preview at /" : "";
-  return listen(server, options.port, options.host, `/mcp, /admin, /api${sets}${options.mapDir ? `, /map/ from ${options.mapDir}` : ""}${site}`);
+  const what = `/mcp, /admin, /api${sets}${options.mapDir ? `, /map/ from ${options.mapDir}` : ""}${site}`;
+  const started = listen(server, options.port, options.host, what);
+  if (secure && options.tls) return listen(secure, options.tls.port, options.host, `https ${what}`).then(() => started);
+  return started;
 }
 
 /** The public listener: the public site and the map's API from the snapshot, and the map; 404 for everything else. */
