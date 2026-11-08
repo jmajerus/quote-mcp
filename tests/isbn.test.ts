@@ -48,6 +48,19 @@ describe("an ISBN", () => {
       { key: "HAVE0001", version: 2, data: { itemType: "book", title: "A Printed Book", ISBN: "978-0-306-40615-7" } },
     ]), { status: 200 })) as typeof fetch);
     expect(again.key).toBe("HAVE0001");
+    const isbn10 = await filePrintBook({ QUOTE_ZOTERO_LIBRARY: "users/1", QUOTE_ZOTERO_WRITE_KEY: "write-key" }, book, "d".repeat(32), (async (_url: string, init?: RequestInit) => {
+      expect(init?.method ?? "GET").toBe("GET");
+      return new Response(JSON.stringify([
+        { key: "OLD00001", version: 2, data: { itemType: "book", title: "A Printed Book", ISBN: "0-306-40615-2" } },
+      ]), { status: 200 });
+    }) as typeof fetch);
+    expect(isbn10.key).toBe("OLD00001");
+    let posted = false;
+    await expect(filePrintBook({ QUOTE_ZOTERO_LIBRARY: "users/1", QUOTE_ZOTERO_WRITE_KEY: "write-key" }, book, "e".repeat(32), (async (_url: string, init?: RequestInit) => {
+      if (init?.method === "POST") posted = true;
+      return new Response("unavailable", { status: 503 });
+    }) as typeof fetch)).rejects.toThrow(/Zotero answered 503/);
+    expect(posted).toBe(false);
     await expect(filePrintBook({ QUOTE_ZOTERO_LIBRARY: "users/1" }, book, "c".repeat(32), fetchImpl)).rejects.toThrow(/QUOTE_ZOTERO_WRITE_KEY/);
   });
 });

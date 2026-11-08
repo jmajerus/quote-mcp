@@ -72,20 +72,22 @@ function digits(value: string): string {
   return value.toUpperCase().replace(/[^0-9X]/g, "");
 }
 
+/** True when the stored ISBN is this ISBN-13 or the ISBN-10 it came from. A field may hold several numbers. */
+function holdsIsbn(stored: string | null | undefined, isbn13: string): boolean {
+  const compact = digits(stored ?? "");
+  const isbn10 = isbn10from13(isbn13);
+  return compact.includes(isbn13) || (isbn10 !== null && compact.includes(isbn10));
+}
+
 /** A work or a mirror item already carrying this ISBN, so Accept doesn't file a second copy. */
 export function filedIsbn(db: DB, isbn13: string): { workId: number } | { library: string; key: string; title: string } | null {
-  const isbn10 = isbn10from13(isbn13);
-  const same = (value: string | null | undefined) => {
-    const compact = digits(value ?? "");
-    return compact.includes(isbn13) || (isbn10 !== null && compact.includes(isbn10));
-  };
   const works = db.prepare("SELECT id, isbn, zotero_library, zotero_key FROM works WHERE isbn IS NOT NULL").all() as { id: number; isbn: string; zotero_library: string | null; zotero_key: string | null }[];
-  const work = works.find((row) => same(row.isbn));
+  const work = works.find((row) => holdsIsbn(row.isbn, isbn13));
   if (work) return { workId: work.id };
   const items = db.prepare(`SELECT library, key, data FROM zotero_items WHERE deleted = 0 AND parent_key IS NULL AND item_type NOT IN ('note', 'attachment', 'annotation')`).all() as { library: string; key: string; data: string }[];
   for (const item of items) {
     const data = JSON.parse(item.data) as ApiItem["data"];
-    if (!same(data.ISBN)) continue;
+    if (!holdsIsbn(data.ISBN, isbn13)) continue;
     const existing = db.prepare("SELECT id FROM works WHERE zotero_library = ? AND zotero_key = ?").pluck().get(item.library, item.key) as number | undefined;
     if (existing !== undefined) return { workId: existing };
     return { library: item.library, key: item.key, title: data.title ?? "(untitled)" };
@@ -232,11 +234,10 @@ async function zoteroJson(url: string, key: string, fetchImpl: typeof fetch, ini
 /** Files the accepted book in Zotero, or returns the item already there for this ISBN. */
 export async function filePrintBook(env: NodeJS.ProcessEnv, book: PrintBook, writeToken: string, fetchImpl: typeof fetch = fetch): Promise<FiledItem> {
   const { library, key } = writeKey(env);
-  const found = await zoteroJson(`${ZOTERO_ORG}/${library}/items?q=${book.isbn}&limit=25`, key, fetchImpl).catch((error: unknown) => {
-    if (error instanceof ToolError && error.message.startsWith("The Zotero key")) throw error;
-    return null;
-  });
-  const existing = (Array.isArray(found) ? found as { key: string; version: number; data?: ApiItem["data"] }[] : []).find((item) => digits(item.data?.ISBN ?? "").includes(book.isbn) && !item.data?.deleted);
+  // A failed search must not become "nothing found": that would file a second copy of a book already in the library.
+  const found = await zoteroJson(`${ZOTERO_ORG}/${library}/items?q=${book.isbn}&limit=25`, key, fetchImpl);
+  if (!Array.isArray(found)) throw new ToolError("Zotero didn't list its items, so the book wasn't filed.");
+  const existing = (found as { key: string; version: number; data?: ApiItem["data"] }[]).find((item) => holdsIsbn(item.data?.ISBN, book.isbn) && !item.data?.deleted);
   if (existing?.data) return { library, key: existing.key, version: existing.version, data: existing.data };
   const created = await zoteroJson(`${ZOTERO_ORG}/${library}/items`, key, fetchImpl, {
     method: "POST",
