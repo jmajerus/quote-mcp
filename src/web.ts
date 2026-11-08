@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DB } from "./db.js";
 import { type AddQuoteOptions, workFromMirror } from "./capture.js";
+import { workLabel } from "./csl.js";
 import { type MirrorBook, type WorkHit, getWork, saveSpokenQuote, searchMirror, searchWorks } from "./dictate.js";
 import { type FiledItem, type PrintBook, filePrintBook, filedIsbn, lookupIsbn, printBookFromForm, rememberFiledItem, canonicalIsbn } from "./isbn.js";
 import { editQuote } from "./edits.js";
@@ -106,7 +107,10 @@ function quotesPage(db: DB, p: URLSearchParams): string {
       query: params.q || undefined, concept: params.concept || undefined, include, exact, tag: params.tag || undefined, author: params.author || undefined,
       work: params.work || undefined, status: (params.status || undefined) as never, kind: (params.kind || undefined) as never, offset: params.offset, limit: 25,
     });
-    if (r.works?.length === 1) add = `<p class="sub"><a href="/admin/capture?work=${r.works[0]}">Add a quote</a> to this book.</p>`;
+    if (r.works?.length === 1) {
+      const itemType = db.prepare("SELECT item_type FROM works WHERE id = ?").pluck().get(r.works[0]) as string | null;
+      add = `<p class="sub"><a href="/admin/capture?work=${r.works[0]}">Add a quote</a> to this ${workLabel(itemType)}.</p>`;
+    }
     body = r.quotes.map(quoteCard).join("") + pager("/admin/quotes", { ...params, offset: undefined }, r.total, r.offset, r.limit);
   } catch (error) {
     if (!(error instanceof ToolError)) throw error;
@@ -493,13 +497,13 @@ function workChoice(w: WorkHit): string {
   return `<a href="/admin/capture?work=${w.id}"><cite>${esc(w.title)}</cite></a>${w.year ? ` (${esc(w.year)})` : ""}${who ? `<div class="note">${esc(who)}</div>` : ""}`;
 }
 
-/** A Zotero book with no quotes yet. Choosing it makes the work, then the quote editor opens. */
+/** A Zotero item with no quotes yet. Choosing it makes the work, then the quote editor opens. */
 function mirrorChoice(book: MirrorBook, q: string): string {
   const who = book.authors.slice(0, 2).join("; ") + (book.authors.length > 2 ? " et al." : "");
   return `<form method="post" action="/admin/capture" class="bring"><input type="hidden" name="bring" value="zotero:${esc(book.library)}/${esc(book.key)}"><input type="hidden" name="q" value="${esc(q)}"><button><cite>${esc(book.title)}</cite></button></form>${book.year ? ` (${esc(book.year)})` : ""}${who ? `<div class="note">${esc(who)}</div>` : ""}<div class="note">In Zotero, no quotes yet</div>`;
 }
 
-/** A quote just saved on this book, linked, with a note when its tag isn't a concept. */
+/** A quote just saved on this work, linked, with a note when its tag isn't a concept. */
 function savedNote(db: DB, workId: number, params: URLSearchParams): string {
   const id = Number(params.get("saved"));
   if (!id) return "";
@@ -512,13 +516,14 @@ function savedNote(db: DB, workId: number, params: URLSearchParams): string {
   if (quote.work?.id !== workId) return "";
   const unresolved = params.get("unresolved") ?? "";
   const again = params.get("again") === "1";
-  return `<p class="note">${again ? "The book already had these words" : "Saved"}: <a href="/admin/quotes/${id}">quote ${id}</a>.${
+  const kind = workLabel(db.prepare("SELECT item_type FROM works WHERE id = ?").pluck().get(workId) as string | null);
+  return `<p class="note">${again ? `This ${kind} already had these words` : "Saved"}: <a href="/admin/quotes/${id}">quote ${id}</a>.${
     unresolved ? ` ${esc(unresolved)} ${unresolved.includes(",") ? "aren't concepts" : "isn't a concept"} yet; the tag stays on the quote.` : ""
   } Capture the next one when you're ready.</p>`;
 }
 
 /**
- * Choose the book, then speak a quote or mark one on a scanned page. Without a book, a search; with one,
+ * Choose the work, then speak a quote or mark one on a scanned page. Without a work, a search; with one,
  * the microphone, the scan, the page, and the concept. `sent` is a form that didn't save, shown again with what was wrong.
  */
 function capturePage(db: DB, params: URLSearchParams, error?: string, sent?: URLSearchParams, sets: ConceptSet[] = []): string {
@@ -529,13 +534,13 @@ function capturePage(db: DB, params: URLSearchParams, error?: string, sent?: URL
     const fresh = q.trim() ? searchMirror(db, q) : [];
     const rows = [...found.map((w) => `<tr><td>${workChoice(w)}</td><td>${esc(w.year)}</td></tr>`), ...fresh.map((b) => `<tr><td>${mirrorChoice(b, q)}</td><td>${esc(b.year)}</td></tr>`)].join("");
     const mirror = params.get("mirror");
-    const check = q.trim() ? `<form class="filters" method="post" action="/admin/capture"><input type="hidden" name="q" value="${esc(q)}"><input type="hidden" name="refresh" value="1"><button>Check Zotero</button><span class="note">For a book filed since the last import.</span></form>` : "";
+    const check = q.trim() ? `<form class="filters" method="post" action="/admin/capture"><input type="hidden" name="q" value="${esc(q)}"><input type="hidden" name="refresh" value="1"><button>Check Zotero</button><span class="note">For a work filed since the last import.</span></form>` : "";
     return page("Capture", "capture", `<h1>Capture</h1>
-<p class="sub">Choose the book these quotes come from. Scan a print book's ISBN, or find a book by title, author, citekey, or ISBN. A book in Zotero with no quotes yet can be brought in here. Each quote is then spoken, or marked on a scanned page, with its page and a concept tag.</p>
+<p class="sub">Choose the work these quotes come from. Scan a print book's ISBN, or find a work by title, author, citekey, or ISBN. A work in Zotero with no quotes yet can be brought in here. Each quote is then spoken, or marked on a scanned page, with its page and a concept tag.</p>
 ${error ? `<p class="error">${esc(error)}</p>` : ""}${mirror ? `<p class="error">${esc(mirror)}</p>` : ""}
 <form class="filters" method="get" action="/admin/capture"><input name="isbn" placeholder="Scan or type an ISBN" aria-label="ISBN" inputmode="text" autocomplete="off" autofocus><button>Look up</button></form>
-<form class="filters" method="get" action="/admin/capture"><input name="q" placeholder="Title, author, citekey, or ISBN" value="${esc(q)}" aria-label="Find a book"><button>Find</button></form>
-${q.trim() ? (rows ? `<div class="scroll"><table><tr><th>Book</th><th>Year</th></tr>${rows}</table></div>${check}` : `<p class="note">No book matches.</p>${check}`) : ""}`);
+<form class="filters" method="get" action="/admin/capture"><input name="q" placeholder="Title, author, citekey, or ISBN" value="${esc(q)}" aria-label="Find a work"><button>Find</button></form>
+${q.trim() ? (rows ? `<div class="scroll"><table><tr><th>Work</th><th>Year</th></tr>${rows}</table></div>${check}` : `<p class="note">No work matches.</p>${check}`) : ""}`);
   }
   const id = Number(asked);
   const work = Number.isInteger(id) && id > 0 ? getWork(db, id) : undefined;
@@ -544,10 +549,11 @@ ${q.trim() ? (rows ? `<div class="scroll"><table><tr><th>Book</th><th>Year</th><
   const spaces = captureSpaces(db, sets);
   const spaceOptions = spaces.map((s) => `<option value="${esc(s.id)}">${esc(s.label)}</option>`).join("");
   const who = work.authors.slice(0, 2).join("; ") + (work.authors.length > 2 ? " et al." : "");
+  const kind = workLabel(work.item_type);
   return page(`Capture · ${work.title}`, "capture", `<h1>Capture</h1>
-<p class="sub">${who ? `${esc(who)}, ` : ""}<cite>${esc(work.title)}</cite>${work.year ? ` (${esc(work.year)})` : ""} · <a href="/admin/quotes?work=${work.id}">This book's quotes</a> · <a href="/admin/capture">Choose another book</a></p>
+<p class="sub">${who ? `${esc(who)}, ` : ""}<cite>${esc(work.title)}</cite>${work.year ? ` (${esc(work.year)})` : ""} · <a href="/admin/quotes?work=${work.id}">This ${kind}'s quotes</a> · <a href="/admin/capture">Choose another ${kind}</a></p>
 ${error ? `<p class="error">${esc(error)}</p>` : ""}${sent ? "" : savedNote(db, work.id, params)}
-<p>Speak one quote, or scan one page and mark the passage. Set the page and the concepts, correct the wording, and approve it. The next quote stays on this book.</p>
+<p>Speak one quote, or scan one page and mark the passage. Set the page and the concepts, correct the wording, and approve it. The next quote stays on this ${kind}.</p>
 <form class="edit capture" method="post" action="/admin/capture">
 <input type="hidden" name="work" value="quote:${work.id}">
 <input type="hidden" name="request_id" value="${esc(sent?.get("request_id") ?? randomUUID())}">

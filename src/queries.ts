@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { citedKey, citekeyOf, zoteroToCsl } from "./csl.js";
+import { citedKey, citekeyOf, cslType, zoteroToCsl } from "./csl.js";
 import type { DB } from "./db.js";
 import { RELATION_LABEL, RELATION_TYPE, SEARCH_RELATIONS, ToolError, ftsQuery, relatedIds, type SearchRelation } from "./common.js";
 import type { ApiItem } from "./zotero.js";
@@ -308,6 +308,7 @@ export function citeQuote(db: DB, id: number) {
   let csl: Record<string, unknown> | null = null;
   let citekey: string | null = null;
   const z = row ? zoteroData(db, row.zotero_library as string, row.zotero_key as string) : null;
+  const itemType = (z?.data.itemType ?? (typeof row?.item_type === "string" ? row.item_type : null)) || null;
   if (row && z) {
     csl = zoteroToCsl(row.zotero_key as string, z.data);
     citekey = z.citekey;
@@ -326,7 +327,7 @@ export function citeQuote(db: DB, id: number) {
   if (row && !z) {
     const authors = json<string[]>(row.authors as string, []);
     csl = {
-      id: `work-${row.id}`, type: row.item_type === "Book" || row.item_type === "book" ? "book" : "document", title: row.title,
+      id: `work-${row.id}`, type: cslType(typeof row.item_type === "string" ? row.item_type : null), title: row.title,
       author: authors.map((a) => { const [family, given] = a.split(/,\s*/, 2); return given ? { family, given } : { literal: a }; }),
       ...(row.year ? { issued: { "date-parts": [[Number(row.year)]] } } : {}), ...(row.isbn ? { ISBN: row.isbn } : {}),
     };
@@ -348,7 +349,7 @@ export function citeQuote(db: DB, id: number) {
   const source = q.status === "verified" ? calibreSource(db, id) : null;
   return {
     kind: q.kind, quote: q.kind === "note" ? null : q.text,
-    ...(source ? { book: source.book, position: source.position } : {}), ...(q.kind === "note" ? { note: q.note } : {}), locator, locator_text: q.locator, chapter_author: q.chapter_author, csl, citekey, pandoc, ...(editions ? { editions } : {}),
+    ...(source ? { book: source.book, position: source.position } : {}), ...(q.kind === "note" ? { note: q.note } : {}), locator, locator_text: q.locator, chapter_author: q.chapter_author, item_type: itemType, csl, citekey, pandoc, ...(editions ? { editions } : {}),
     ...(q.chapter_author ? { note: `The passage is by ${q.chapter_author}, in an edited volume; cite the chapter if your style needs it.` } : {}),
     warnings,
   };

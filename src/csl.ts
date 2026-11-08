@@ -6,12 +6,41 @@ import type { ApiItem } from "./zotero.js";
  * BibTeX's, from the item's field or the "Citation Key:" line it writes to Extra.
  */
 
-const TYPES: Record<string, string> = {
-  book: "book", bookSection: "chapter", journalArticle: "article-journal", magazineArticle: "article-magazine",
-  newspaperArticle: "article-newspaper", webpage: "webpage", blogPost: "post-weblog", conferencePaper: "paper-conference",
-  report: "report", thesis: "thesis", document: "document", encyclopediaArticle: "entry-encyclopedia", dictionaryEntry: "entry-dictionary",
-  interview: "interview", film: "motion_picture", podcast: "song", presentation: "speech", case: "legal_case", statute: "legislation",
+/**
+ * Zotero's own CSL type for each item type (the global schema's `csl.types`). A journal article is an
+ * article, and a podcast is a broadcast. An item type the schema does not name is a document, so a citation
+ * still has a type, and it is not called a book.
+ */
+const CSL_TYPE: Record<string, string> = {
+  artwork: "graphic", attachment: "document", audioRecording: "song", bill: "bill", blogPost: "post-weblog", book: "book",
+  bookSection: "chapter", case: "legal_case", computerProgram: "software", conferencePaper: "paper-conference", dataset: "dataset",
+  dictionaryEntry: "entry-dictionary", document: "document", email: "personal_communication", encyclopediaArticle: "entry-encyclopedia",
+  film: "motion_picture", forumPost: "post", hearing: "hearing", instantMessage: "personal_communication", interview: "interview",
+  journalArticle: "article-journal", letter: "personal_communication", magazineArticle: "article-magazine", manuscript: "manuscript",
+  map: "map", newspaperArticle: "article-newspaper", note: "document", patent: "patent", podcast: "broadcast", preprint: "article",
+  presentation: "speech", radioBroadcast: "broadcast", report: "report", standard: "standard", statute: "legislation", thesis: "thesis",
+  tvBroadcast: "broadcast", videoRecording: "motion_picture", webpage: "webpage",
 };
+
+const WORK_LABEL: Record<string, string> = {
+  book: "book", Book: "book", bookSection: "chapter", journalArticle: "journal article", magazineArticle: "magazine article",
+  newspaperArticle: "newspaper article", webpage: "web page", blogPost: "blog post", conferencePaper: "conference paper",
+  report: "report", thesis: "thesis", document: "document", encyclopediaArticle: "encyclopedia article", dictionaryEntry: "dictionary entry",
+  interview: "interview", film: "film", podcast: "podcast", presentation: "presentation", case: "case", statute: "statute",
+};
+
+/** CSL's name for this stored type. The old catalogue's "Book" is a book. Anything Zotero does not map is a document. */
+export function cslType(itemType: string | null | undefined): string {
+  if (itemType === "Book") return "book";
+  if (itemType && CSL_TYPE[itemType]) return CSL_TYPE[itemType];
+  return "document";
+}
+
+/** The ordinary name of a stored item type. A type with no ordinary name is a work. */
+export function workLabel(itemType: string | null | undefined): string {
+  if (!itemType) return "work";
+  return WORK_LABEL[itemType] ?? "work";
+}
 
 type Data = ApiItem["data"] & Record<string, unknown>;
 
@@ -42,7 +71,7 @@ export function zoteroToCsl(key: string, data: Data): Record<string, unknown> {
   const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
   const csl: Record<string, unknown> = {
     id: citekeyOf(data) ?? key,
-    type: TYPES[data.itemType] ?? "document",
+    type: cslType(data.itemType),
     title: str(data.title),
     author: names(data, ["author"]),
     editor: names(data, ["editor", "seriesEditor"]),
