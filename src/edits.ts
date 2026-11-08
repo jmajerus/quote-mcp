@@ -283,22 +283,25 @@ export function reviewProposal(db: DB, id: number, decision: "accept" | "reject"
 }
 
 /**
- * Deletes a quote an agent saved or took over from corpus-mcp, first dropping its anchor there. A quote with any
- * other origin (a Zotero note, the old site) is refused: the next import would bring it back from its source.
+ * Deletes a quote an agent saved, one taken over from corpus-mcp, or one spoken on the capture page. An agent or
+ * corpus quote drops its anchor there first. A capture quote never had one, so corpus-mcp is not called: this
+ * quote's id must not remove an anchor that belongs to some other quote. A quote with any other origin (a Zotero
+ * note, the old site) is refused: the next import would bring it back from its source.
  * The quote as it was goes into history, which a deleted quote keeps.
  */
 export async function deleteQuote(db: DB, corpus: CorpusClient | null, id: number, reason: string, actor: string) {
   const why = reason?.trim();
   if (!why) throw new ToolError("Say why: give a reason.");
   const imported = (quoteId: number) =>
-    db.prepare("SELECT kind || ' ' || ref FROM quote_origins WHERE quote_id = ? AND kind NOT IN ('agent', 'corpus') ORDER BY kind, ref").pluck().all(quoteId) as string[];
+    db.prepare("SELECT kind || ' ' || ref FROM quote_origins WHERE quote_id = ? AND kind NOT IN ('agent', 'corpus', 'capture') ORDER BY kind, ref").pluck().all(quoteId) as string[];
   const refuse = (from: string[]) =>
     new ToolError(`Quote ${id} came from ${from.join(", ")}, which the import reads again; delete it there (or change its tags and comment here) instead.`);
   const q = getQuote(db, id);
   if (imported(id).length) throw refuse(imported(id));
-  if (corpus) await corpus.dropAnchor(id);
+  const anchored = Boolean(db.prepare("SELECT 1 FROM quote_origins WHERE quote_id = ? AND kind IN ('agent', 'corpus')").get(id));
+  if (corpus && anchored) await corpus.dropAnchor(id);
   // Checked again once corpus-mcp has answered: an import or an edit may have reached the quote meanwhile. Then it
-  // stays, flagged anchor_missing, so the next import posts the anchor kept with it again.
+  // stays, flagged anchor_missing when an anchor was dropped, so the next import posts that anchor again.
   const kept = db.transaction((): string[] | "gone" | "changed" | null => {
     const now_ = db.prepare("SELECT updated_at FROM quotes WHERE id = ?").pluck().get(id) as string | undefined;
     if (now_ === undefined) return "gone";
@@ -312,11 +315,11 @@ export async function deleteQuote(db: DB, corpus: CorpusClient | null, id: numbe
   })();
   if (kept === "gone") throw new ToolError(`Quote ${id} was deleted meanwhile.`);
   if (kept) {
-    if (corpus) {
+    if (corpus && anchored) {
       db.prepare(`UPDATE quotes SET flags = json_insert(flags, '$[#]', 'anchor_missing') WHERE id = ?
         AND NOT EXISTS (SELECT 1 FROM json_each(flags) WHERE value = 'anchor_missing')`).run(id);
     }
     throw kept === "changed" ? new ToolError(`Quote ${id} changed while it was being deleted, so it was kept; look at it again before deleting it.`) : refuse(kept);
   }
-  return { deleted: id, anchor_dropped: Boolean(corpus), ...(corpus ? {} : { warning: "corpus-mcp is off here (CORPUS_BASE), so any anchor it keeps for this quote wasn't dropped." }) };
+  return { deleted: id, anchor_dropped: Boolean(corpus && anchored), ...(corpus ? {} : { warning: "corpus-mcp is off here (CORPUS_BASE), so any anchor it keeps for this quote wasn't dropped." }) };
 }
