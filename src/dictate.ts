@@ -6,6 +6,7 @@ import path from "node:path";
 import { type AddQuoteOptions, addQuote } from "./capture.js";
 import { ToolError } from "./common.js";
 import type { DB } from "./db.js";
+import { citedKey } from "./csl.js";
 import { creators } from "./import.js";
 import { yearOf } from "./text.js";
 import type { ApiItem } from "./zotero.js";
@@ -35,7 +36,7 @@ const like = (q: string) => `%${q.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c
 
 /** Books matching a title, an author, an ISBN, a Zotero item key, or a citekey. */
 export function searchWorks(db: DB, query: string, limit = 15): WorkHit[] {
-  const q = query.trim();
+  const q = citedKey(query);
   if (!q) return [];
   const rows = db.prepare(`
     SELECT w.id, w.title, w.authors, w.year, w.isbn
@@ -62,7 +63,7 @@ export interface MirrorBook {
  * have a work are left out. The capture page makes the work when one of these is chosen.
  */
 export function searchMirror(db: DB, query: string, limit = 15): MirrorBook[] {
-  const q = query.trim();
+  const q = citedKey(query);
   if (!q) return [];
   const rows = db.prepare(`
     SELECT z.library, z.key, z.data FROM zotero_items z

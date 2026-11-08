@@ -62,6 +62,13 @@ describe("finding the book", () => {
     expect(searchWorks(db, "nobody filed").map((w) => w.title)).toEqual(["A Book Nobody Filed"]);
     expect(searchWorks(db, "Doe").map((w) => w.title)).toEqual(["A Book Nobody Filed"]);
     expect(searchWorks(db, "davenport1999mobbing").map((w) => w.title)).toEqual([expect.stringMatching(/mobbing/i)]);
+    expect(searchWorks(db, "@davenport1999mobbing").map((w) => w.title)).toEqual([expect.stringMatching(/mobbing/i)]);
+    expect(searchWorks(db, "[@davenport1999mobbing, p. 40]").map((w) => w.title)).toEqual([expect.stringMatching(/mobbing/i)]);
+    db.prepare("INSERT INTO zotero_items (library, key, version, item_type, parent_key, deleted, data) VALUES ('users/1', 'FROMM001', 1, 'book', NULL, 0, ?)").run(JSON.stringify({
+      itemType: "book", title: "Escape From Freedom", citationKey: "fromm1994escape", date: "1994",
+    }));
+    expect(searchMirror(db, "@fromm1994escape").map((b) => b.title)).toEqual(["Escape From Freedom"]);
+    expect(searchMirror(db, "[@fromm1994escape]").map((b) => b.title)).toEqual(["Escape From Freedom"]);
     expect(searchWorks(db, "  ")).toEqual([]);
   });
 });

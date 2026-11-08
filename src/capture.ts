@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import { ToolError } from "./common.js";
 import { type DB, NEXT_QUOTE_ID, getMeta, now, setMeta } from "./db.js";
 import { creators } from "./import.js";
-import { citekeyOf } from "./csl.js";
+import { citedKey, citekeyOf } from "./csl.js";
 import { calibreSource, getQuote } from "./queries.js";
 import { quoteKey, yearOf } from "./text.js";
 import { syncLibrary } from "./sync.js";
@@ -123,9 +123,10 @@ interface Item { library: string; key: string; data: ApiItem["data"] & Record<st
 
 /** A Zotero item in the mirror by citekey or bare item key, the primary library first. */
 function itemByKey(db: DB, key: string, primary: string | null): Item | undefined {
+  const name = citedKey(key);
   const row = db.prepare(`SELECT library, key, data FROM zotero_items WHERE deleted = 0 AND parent_key IS NULL
     AND (json_extract(data, '$.citationKey') = @key OR json_extract(data, '$.extra') LIKE @extra OR key = @key)
-    ORDER BY library = @primary DESC LIMIT 1`).get({ key, extra: `%Citation Key: ${key}%`, primary }) as { library: string; key: string; data: string } | undefined;
+    ORDER BY library = @primary DESC LIMIT 1`).get({ key: name, extra: `%Citation Key: ${name}%`, primary }) as { library: string; key: string; data: string } | undefined;
   return row && { library: row.library, key: row.key, data: JSON.parse(row.data) };
 }
 

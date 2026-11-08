@@ -20,6 +20,13 @@ export function citekeyOf(data: Data): string | null {
   return /^Citation Key:\s*(\S+)/m.exec(String(data.extra ?? ""))?.[1] ?? null;
 }
 
+/** `@fromm1994escape` and `[@fromm1994escape]` are that citekey. Anything else is unchanged. */
+export function citedKey(raw: string): string {
+  const q = raw.trim();
+  const match = /^(?:\[@|@)([A-Za-z][A-Za-z0-9_.:-]*)(?:\]|,.*)?$/.exec(q);
+  return match?.[1] ?? q;
+}
+
 function names(data: Data, types: string[]) {
   return (data.creators ?? []).filter((c) => types.includes(c.creatorType))
     .map((c) => (c.name ? { literal: c.name } : { family: c.lastName ?? "", given: c.firstName ?? "" }));

@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { citekeyOf, zoteroToCsl } from "./csl.js";
+import { citedKey, citekeyOf, zoteroToCsl } from "./csl.js";
 import type { DB } from "./db.js";
 import { RELATION_LABEL, ToolError, ftsQuery } from "./common.js";
 import type { ApiItem } from "./zotero.js";
@@ -207,9 +207,10 @@ export function searchQuotes(db: DB, args: SearchArgs) {
   } else if (args.work) {
     where.push(`EXISTS (SELECT 1 FROM works w WHERE w.id = q.work_id AND (lower(w.title) LIKE @work OR w.zotero_key = @workExact OR CAST(w.id AS TEXT) = @workExact
       OR EXISTS (SELECT 1 FROM zotero_items z WHERE z.library = w.zotero_library AND z.key = w.zotero_key AND (json_extract(z.data, '$.citationKey') = @workExact OR json_extract(z.data, '$.extra') LIKE @workExtra))))`);
-    params.work = `%${args.work.toLowerCase()}%`;
-    params.workExact = args.work;
-    params.workExtra = `%Citation Key: ${args.work}%`;
+    const asked = citedKey(args.work);
+    params.work = `%${asked.toLowerCase()}%`;
+    params.workExact = asked;
+    params.workExtra = `%Citation Key: ${asked}%`;
   }
   if (args.flag) {
     where.push("EXISTS (SELECT 1 FROM json_each(q.flags) WHERE value = @flag)");
