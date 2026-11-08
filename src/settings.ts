@@ -30,6 +30,7 @@ export const SETTINGS: Setting[] = [
   { name: "QUOTE_ZOTERO_SOURCES", group: "Import", about: "other Zotero libraries to import quote notes from, comma-separated" },
   { name: "QUOTE_DICTIONARY", group: "Import", about: "a word list for the OCR check", fallback: "/usr/share/dict/words" },
   { name: "QUOTE_ZOTERO_API", group: "Import", about: "the Zotero API, or holdings-mcp's copy of it (http://<host>:8000/zotero)", fallback: "https://api.zotero.org" },
+  { name: "QUOTE_ZOTERO_WRITE_KEY", group: "Import", about: "a Zotero API key that can create items, for filing a print book from its ISBN. Unset, QUOTE_ZOTERO_API_KEY is used", secret: true },
   { name: "QUOTE_DB", group: "Service", about: "the quote store", fallback: "data/quotes.db" },
   { name: "QUOTE_HOST", group: "Service", about: "the address to listen on", fallback: "0.0.0.0" },
   { name: "QUOTE_PORT", group: "Service", about: "the port for MCP, the admin pages, and the API", fallback: "8010" },

@@ -5,7 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { CorpusClient } from "../src/capture.js";
-import { chooseSttEngine, commandArgs, dictationStatus, MAX_AUDIO, pageFromOcr, pageNumber, readCapture, saveSpokenQuote, searchWorks, sttLanguage, transcribeAudio } from "../src/dictate.js";
+import { chooseSttEngine, commandArgs, dictationStatus, MAX_AUDIO, pageFromOcr, pageNumber, readCapture, saveSpokenQuote, searchMirror, searchWorks, sttLanguage, transcribeAudio } from "../src/dictate.js";
+import type { FiledItem, PrintBook } from "../src/isbn.js";
+import { renderCaptureIsbn } from "../src/web.js";
 import { ToolError } from "../src/common.js";
 import type { DB } from "../src/db.js";
 import { deleteQuote } from "../src/edits.js";
@@ -111,6 +113,8 @@ describe("the capture page", () => {
   it("asks for the book, then for the microphone, the page, and the concept", () => {
     const search = renderAdmin(db, "/admin/capture", new URLSearchParams({ q: '<script>' }))!;
     expect(search).toContain("Choose the book");
+    expect(search).toContain('name="isbn"');
+    expect(search).toContain("Look up");
     expect(search).not.toContain("<script>");
     expect(search).toContain("&lt;script&gt;");
     const found = renderAdmin(db, "/admin/capture", new URLSearchParams({ q: "Nobody" }))!;
@@ -126,6 +130,117 @@ describe("the capture page", () => {
     expect(chosen).toContain('value="mobbing"');
     expect(chosen).toContain("Choose another book");
     expect(() => renderAdmin(db, "/admin/capture", new URLSearchParams({ work: "99999" }))).toThrow(/No work 99999/);
+  });
+
+  it("brings in a Zotero book that has no quotes, then opens the editor on it", async () => {
+    db.prepare("INSERT INTO zotero_items (library, key, version, item_type, parent_key, deleted, data) VALUES ('users/1', 'PRINT001', 1, 'book', NULL, 0, ?)").run(JSON.stringify({
+      itemType: "book", title: "The Printed Workplace", date: "2014", creators: [{ creatorType: "author", lastName: "Binder", firstName: "Ada" }],
+    }));
+    expect(searchMirror(db, "Printed Workplace").map((b) => [b.title, b.authors[0], b.year])).toEqual([["The Printed Workplace", "Binder, Ada", "2014"]]);
+    expect(searchMirror(db, "mobbing")).toEqual([]);
+    const listed = renderAdmin(db, "/admin/capture", new URLSearchParams({ q: "Printed Workplace" }))!;
+    expect(listed).toContain("In Zotero, no quotes yet");
+    expect(listed).toContain('value="zotero:users/1/PRINT001"');
+    expect(listed).toContain("Check Zotero");
+    const server = await serveHttp(db, { host: "127.0.0.1", port: 0, capture: { writer: () => db, corpus: null, primary: "users/1", refreshZotero: async () => { throw new Error("not this path"); } } });
+    const { port } = server.address() as import("node:net").AddressInfo;
+    const base = `http://127.0.0.1:${port}`;
+    const post = (fields: Record<string, string>) => fetch(`${base}/admin/capture`, {
+      method: "POST", redirect: "manual", body: new URLSearchParams(fields),
+      headers: { "content-type": "application/x-www-form-urlencoded", origin: base },
+    });
+    try {
+      const brought = await post({ bring: "zotero:users/1/PRINT001", q: "Printed Workplace" });
+      expect(brought.status).toBe(303);
+      const location = brought.headers.get("location")!;
+      const page = await (await fetch(`${base}${location}`)).text();
+      expect(page).toContain("The Printed Workplace");
+      expect(page).toContain('id="record"');
+      expect(db.prepare("SELECT title FROM works WHERE zotero_key = 'PRINT001'").pluck().get()).toBe("The Printed Workplace");
+      const again = await post({ bring: "zotero:users/1/PRINT001" });
+      expect(again.headers.get("location")).toBe(location);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("shows a scanned ISBN for acceptance, and files it on Accept", async () => {
+    const lookedUp: PrintBook = { isbn: "9780306406157", title: "A Printed Book", authors: ["Ada Binder"], year: "1999", publisher: "North Press", cover: "https://covers.example/m.jpg" };
+    const shown = await renderCaptureIsbn(db, "978-0-306-40615-7", async () => lookedUp);
+    expect(shown).toMatchObject({ status: 200 });
+    if (!("html" in shown)) throw new Error("expected the review form");
+    expect(shown.html).toContain("File this book");
+    expect(shown.html).toContain("A Printed Book");
+    expect(shown.html).toContain("Ada Binder");
+    expect(shown.html).toContain("Reject");
+    expect(shown.html).toContain("https://covers.example/m.jpg");
+    db.prepare("INSERT INTO zotero_items (library, key, version, item_type, parent_key, deleted, data) VALUES ('users/1', 'HAVE0001', 1, 'book', NULL, 0, ?)").run(JSON.stringify({
+      itemType: "book", title: "A Printed Book", ISBN: "9780306406157",
+    }));
+    const already = await renderCaptureIsbn(db, "9780306406157", async () => { throw new Error("already in Zotero"); });
+    expect(already).toMatchObject({ status: 200 });
+    if (!("html" in already)) throw new Error("expected the Zotero book");
+    expect(already.html).toContain("Already in Zotero");
+    expect(already.html).toContain("zotero:users/1/HAVE0001");
+    db.prepare("DELETE FROM zotero_items WHERE key = 'HAVE0001'").run();
+    const missing = await renderCaptureIsbn(db, "9780306406157", async () => null);
+    expect(missing).toMatchObject({ status: 404 });
+    db.prepare("UPDATE works SET isbn = ? WHERE title LIKE 'Mobbing%'").run("9780306406157");
+    const known = await renderCaptureIsbn(db, "9780306406157", async () => { throw new Error("already filed"); });
+    expect(known).toEqual({ redirect: `/admin/capture?work=${workId()}` });
+    db.prepare("UPDATE works SET isbn = NULL WHERE title LIKE 'Mobbing%'").run();
+
+    const server = await serveHttp(db, { host: "127.0.0.1", port: 0, capture: {
+      writer: () => db, corpus: null, primary: "users/1",
+      lookupIsbn: async () => lookedUp,
+      filePrintBook: async (book): Promise<FiledItem> => ({
+        library: "users/1", key: "NEWB0001", version: 3,
+        data: { itemType: "book", title: book.title, creators: [{ creatorType: "author", firstName: "Ada", lastName: "Binder" }], date: book.year ?? undefined, ISBN: book.isbn, publisher: book.publisher ?? undefined },
+      }),
+    } });
+    const { port } = server.address() as import("node:net").AddressInfo;
+    const base = `http://127.0.0.1:${port}`;
+    try {
+      const review = await fetch(`${base}/admin/capture?isbn=9780306406157`);
+      expect(review.status).toBe(200);
+      expect(await review.text()).toContain('name="file"');
+      const accepted = await fetch(`${base}/admin/capture`, {
+        method: "POST", redirect: "manual",
+        body: new URLSearchParams({ file: "1", write_token: "a".repeat(32), isbn: "9780306406157", title: "A Printed Book", authors: "Binder, Ada", year: "1999", publisher: "North Press" }),
+        headers: { "content-type": "application/x-www-form-urlencoded", origin: base },
+      });
+      expect(accepted.status).toBe(303);
+      const page = await (await fetch(`${base}${accepted.headers.get("location")}`)).text();
+      expect(page).toContain("A Printed Book");
+      expect(page).toContain('id="record"');
+      expect(db.prepare("SELECT title FROM works WHERE zotero_key = 'NEWB0001'").pluck().get()).toBe("A Printed Book");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("checks Zotero for a book filed since the last import", async () => {
+    let checks = 0;
+    const server = await serveHttp(db, { host: "127.0.0.1", port: 0, capture: { writer: () => db, corpus: null, primary: "users/1", refreshZotero: async () => {
+      checks++;
+      db.prepare("INSERT INTO zotero_items (library, key, version, item_type, parent_key, deleted, data) VALUES ('users/1', 'LATER001', 1, 'book', NULL, 0, ?)").run(JSON.stringify({ itemType: "book", title: "The Later Book", date: "2020" }));
+    } } });
+    const { port } = server.address() as import("node:net").AddressInfo;
+    const base = `http://127.0.0.1:${port}`;
+    try {
+      const checked = await fetch(`${base}/admin/capture`, {
+        method: "POST", redirect: "manual", body: new URLSearchParams({ refresh: "1", q: "Later Book" }),
+        headers: { "content-type": "application/x-www-form-urlencoded", origin: base },
+      });
+      expect(checks).toBe(1);
+      expect(checked.status).toBe(303);
+      expect(checked.headers.get("location")).toContain("q=Later+Book");
+      const page = await (await fetch(`${base}${checked.headers.get("location")}`)).text();
+      expect(page).toContain("The Later Book");
+      expect(page).toContain("In Zotero, no quotes yet");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it("saves a quote from the form and stays on the book", async () => {

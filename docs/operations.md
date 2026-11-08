@@ -44,6 +44,7 @@ Only `QUOTE_ZOTERO_LIBRARY` and `QUOTE_ZOTERO_API_KEY` are needed, and the key o
 | Setting | Default | What it is |
 |---|---|---|
 | `QUOTE_ZOTERO_LIBRARY`, `QUOTE_ZOTERO_API_KEY` | required | The Zotero library (`users/<id>` or `groups/<id>`) and an API key; read-only is enough. The key isn't needed when `QUOTE_ZOTERO_API` is holdings-mcp's copy. |
+| `QUOTE_ZOTERO_WRITE_KEY` | the API key above | A key that can create items. The [capture page](admin-ui.md#capturing-a-quote) uses it to file a print book after its ISBN is accepted. |
 | `QUOTE_ZOTERO_SOURCES` | none | Other Zotero libraries to import quote notes from, comma-separated. |
 | `QUOTE_MAP_DIR` | none | quote-atlas's built maps, served at `/map/`. |
 | `QUOTE_TERMS_SYNC` | `off` | `on`: the server follows terminology-mcp's `human-work` scheme every minute. Set it in `/etc/quote-mcp/env` only; a second follower would fight the server's cursor. |

@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { DB } from "./db.js";
-import { type AddQuoteOptions } from "./capture.js";
-import { type WorkHit, getWork, saveSpokenQuote, searchWorks } from "./dictate.js";
+import { type AddQuoteOptions, workFromMirror } from "./capture.js";
+import { type MirrorBook, type WorkHit, getWork, saveSpokenQuote, searchMirror, searchWorks } from "./dictate.js";
+import { type FiledItem, type PrintBook, filePrintBook, filedIsbn, lookupIsbn, printBookFromForm, rememberFiledItem, canonicalIsbn } from "./isbn.js";
 import { editQuote } from "./edits.js";
 import { emphasisHtml } from "./public.js";
 import {
@@ -382,6 +383,12 @@ function workChoice(w: WorkHit): string {
   return `<a href="/admin/capture?work=${w.id}"><cite>${esc(w.title)}</cite></a>${w.year ? ` (${esc(w.year)})` : ""}${who ? `<div class="note">${esc(who)}</div>` : ""}`;
 }
 
+/** A Zotero book with no quotes yet. Choosing it makes the work, then the quote editor opens. */
+function mirrorChoice(book: MirrorBook, q: string): string {
+  const who = book.authors.slice(0, 2).join("; ") + (book.authors.length > 2 ? " et al." : "");
+  return `<form method="post" action="/admin/capture" class="bring"><input type="hidden" name="bring" value="zotero:${esc(book.library)}/${esc(book.key)}"><input type="hidden" name="q" value="${esc(q)}"><button><cite>${esc(book.title)}</cite></button></form>${book.year ? ` (${esc(book.year)})` : ""}${who ? `<div class="note">${esc(who)}</div>` : ""}<div class="note">In Zotero, no quotes yet</div>`;
+}
+
 /** A quote just saved on this book, linked, with a note when its tag isn't a concept. */
 function savedNote(db: DB, workId: number, params: URLSearchParams): string {
   const id = Number(params.get("saved"));
@@ -409,12 +416,16 @@ function capturePage(db: DB, params: URLSearchParams, error?: string, sent?: URL
   if (!asked) {
     const q = params.get("q") ?? "";
     const found = q.trim() ? searchWorks(db, q) : [];
-    const rows = found.map((w) => `<tr><td>${workChoice(w)}</td><td>${esc(w.year)}</td></tr>`).join("");
+    const fresh = q.trim() ? searchMirror(db, q) : [];
+    const rows = [...found.map((w) => `<tr><td>${workChoice(w)}</td><td>${esc(w.year)}</td></tr>`), ...fresh.map((b) => `<tr><td>${mirrorChoice(b, q)}</td><td>${esc(b.year)}</td></tr>`)].join("");
+    const mirror = params.get("mirror");
+    const check = q.trim() ? `<form class="filters" method="post" action="/admin/capture"><input type="hidden" name="q" value="${esc(q)}"><input type="hidden" name="refresh" value="1"><button>Check Zotero</button><span class="note">For a book filed since the last import.</span></form>` : "";
     return page("Capture", "capture", `<h1>Capture</h1>
-<p class="sub">Choose the book these quotes come from. Each one is then spoken, or marked on a scanned page, with its page and a concept tag.</p>
-${error ? `<p class="error">${esc(error)}</p>` : ""}
-<form class="filters" method="get" action="/admin/capture"><input name="q" placeholder="Title, author, citekey, or ISBN" value="${esc(q)}" aria-label="Find a book" autofocus><button>Find</button></form>
-${q.trim() ? (found.length ? `<div class="scroll"><table><tr><th>Book</th><th>Year</th></tr>${rows}</table></div>` : `<p class="note">No book matches.</p>`) : ""}`);
+<p class="sub">Choose the book these quotes come from. Scan a print book's ISBN, or find a book by title, author, citekey, or ISBN. A book in Zotero with no quotes yet can be brought in here. Each quote is then spoken, or marked on a scanned page, with its page and a concept tag.</p>
+${error ? `<p class="error">${esc(error)}</p>` : ""}${mirror ? `<p class="error">${esc(mirror)}</p>` : ""}
+<form class="filters" method="get" action="/admin/capture"><input name="isbn" placeholder="Scan or type an ISBN" aria-label="ISBN" inputmode="text" autocomplete="off" autofocus><button>Look up</button></form>
+<form class="filters" method="get" action="/admin/capture"><input name="q" placeholder="Title, author, citekey, or ISBN" value="${esc(q)}" aria-label="Find a book"><button>Find</button></form>
+${q.trim() ? (rows ? `<div class="scroll"><table><tr><th>Book</th><th>Year</th></tr>${rows}</table></div>${check}` : `<p class="note">No book matches.</p>${check}`) : ""}`);
   }
   const id = Number(asked);
   const work = Number.isInteger(id) && id > 0 ? getWork(db, id) : undefined;
@@ -443,8 +454,81 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}${sent ? "" : savedNote(db, 
 <script>${CAPTURE_SCRIPT}</script>`);
 }
 
+function isbnReview(book: PrintBook, error?: string, writeToken = randomUUID().replace(/-/g, "")): string {
+  const cover = book.cover ? `<img src="${esc(book.cover)}" alt="">` : `<p class="note">No cover came back with this ISBN.</p>`;
+  return page("File a print book", "capture", `<h1>File this book</h1>
+<p class="sub">Compare this with the book in hand. Accept files it in Zotero and opens the quote editor. Reject files nothing.</p>
+${error ? `<p class="error">${esc(error)}</p>` : ""}
+<div class="isbn-review">${cover}
+<form method="post" action="/admin/capture">
+<input type="hidden" name="file" value="1">
+<input type="hidden" name="write_token" value="${esc(writeToken)}">
+<input type="hidden" name="cover" value="${esc(book.cover ?? "")}">
+<label for="isbn-title">Title</label><input id="isbn-title" name="title" value="${esc(book.title)}" required>
+<label for="isbn-authors">Authors</label><textarea id="isbn-authors" name="authors" rows="4" required>${esc(book.authors.join("\n"))}</textarea>
+<p class="note">One author per line, as printed or as Last, First.</p>
+<label for="isbn-year">Year</label><input id="isbn-year" name="year" value="${esc(book.year ?? "")}" inputmode="numeric" placeholder="1999">
+<label for="isbn-publisher">Publisher</label><input id="isbn-publisher" name="publisher" value="${esc(book.publisher ?? "")}">
+<label for="isbn">ISBN</label><input id="isbn" name="isbn" value="${esc(book.isbn)}" required>
+<div class="actions"><button>Accept</button><a href="/admin/capture">Reject</a></div>
+</form></div>`);
+}
+
+/** An already-filed ISBN opens its book. A new one is looked up and shown for acceptance. */
+export async function renderCaptureIsbn(db: DB, raw: string, lookup?: (isbn: string) => Promise<PrintBook | null>): Promise<{ redirect: string } | { status: number; html: string }> {
+  const find = lookup ?? lookupIsbn;
+  const isbn = canonicalIsbn(raw);
+  if (!isbn) return { status: 400, html: capturePage(db, new URLSearchParams(), "That ISBN isn't valid. Scan it again, or find the book by title.") };
+  const filed = filedIsbn(db, isbn);
+  if (filed && "workId" in filed) return { redirect: `/admin/capture?work=${filed.workId}` };
+  if (filed) {
+    return { status: 200, html: page("File a print book", "capture", `<h1>Already in Zotero</h1>
+<p class="sub"><cite>${esc(filed.title)}</cite> is already filed for this ISBN.</p>
+<form method="post" action="/admin/capture" class="bring"><input type="hidden" name="bring" value="zotero:${esc(filed.library)}/${esc(filed.key)}"><button>Use this book</button></form>
+<p><a href="/admin/capture">Back</a></p>`) };
+  }
+  try {
+    const book = await find(isbn);
+    if (!book) return { status: 404, html: capturePage(db, new URLSearchParams(), "No record for that ISBN. Check the number, or find the book by title.") };
+    return { status: 200, html: isbnReview(book) };
+  } catch (error) {
+    if (!(error instanceof ToolError)) throw error;
+    return { status: 502, html: capturePage(db, new URLSearchParams(), error.message) };
+  }
+}
+
 /** Saves the capture form: a redirect back to the same book, or the form again with what was wrong. */
-export async function saveCaptureForm(writer: DB, form: URLSearchParams, editor: string, o: Omit<AddQuoteOptions, "origin" | "actor">): Promise<{ redirect: string } | { status: number; html: string }> {
+export async function saveCaptureForm(writer: DB, form: URLSearchParams, editor: string, o: Omit<AddQuoteOptions, "origin" | "actor"> & { filePrintBook?: (book: PrintBook, writeToken: string) => Promise<FiledItem> }): Promise<{ redirect: string } | { status: number; html: string }> {
+  if (form.get("file") === "1") {
+    let book: PrintBook | undefined;
+    try {
+      book = printBookFromForm(form);
+      const filed = await (o.filePrintBook ?? ((record, token) => filePrintBook(process.env, record, token)))(book, form.get("write_token") ?? randomUUID());
+      return { redirect: `/admin/capture?work=${rememberFiledItem(writer, filed)}` };
+    } catch (error) {
+      if (!(error instanceof ToolError)) throw error;
+      const draft: PrintBook = book ?? {
+        isbn: form.get("isbn") ?? "", title: form.get("title") ?? "", authors: (form.get("authors") ?? "").split("\n").map((author) => author.trim()).filter(Boolean),
+        year: form.get("year")?.trim() || null, publisher: form.get("publisher")?.trim() || null, cover: form.get("cover")?.trim() || null,
+      };
+      return { status: 400, html: isbnReview(draft, error.message, form.get("write_token") ?? undefined) };
+    }
+  }
+  const bring = form.get("bring")?.trim() ?? "";
+  if (form.get("refresh") === "1" || bring) {
+    try {
+      if (form.get("refresh") === "1") {
+        const note = o.refreshZotero ? await o.refreshZotero() : "Zotero isn't set up on this server. New items arrive with the import, about every 30 minutes.";
+        const next = new URLSearchParams({ q: form.get("q") ?? "" });
+        if (note) next.set("mirror", note);
+        return { redirect: `/admin/capture?${next}` };
+      }
+      return { redirect: `/admin/capture?work=${workFromMirror(writer, bring)}` };
+    } catch (error) {
+      if (!(error instanceof ToolError)) throw error;
+      return { status: 400, html: capturePage(writer, new URLSearchParams({ q: form.get("q") ?? "" }), error.message) };
+    }
+  }
   const work = form.get("work") ?? "";
   const id = /^quote:(\d+)$/.exec(work)?.[1];
   try {

@@ -21,7 +21,7 @@ import { isSitePath, renderSite } from "./site.js";
 import { VERSION, createServer } from "./mcp.js";
 import { ToolError, overview } from "./queries.js";
 import { MAX_AUDIO, MAX_IMAGE, TranscribeError, captureKind, readCapture, transcribeAudio } from "./dictate.js";
-import { renderAdmin, saveAdminEdit, saveCaptureForm } from "./web.js";
+import { renderAdmin, renderCaptureIsbn, saveAdminEdit, saveCaptureForm } from "./web.js";
 
 /**
  * Streamable HTTP at /mcp (stateless: a fresh server per request, JSON responses), the admin pages at
@@ -221,7 +221,7 @@ async function adminPost(req: http.IncomingMessage, res: http.ServerResponse, pa
   }
   const form = new URLSearchParams(body.toString("utf8"));
   if (path === "/admin/capture") {
-    sendHtml(res, await saveCaptureForm(capture.writer(), form, editor, { corpus: capture.corpus, primary: capture.primary, refreshZotero: capture.refreshZotero }));
+    sendHtml(res, await saveCaptureForm(capture.writer(), form, editor, { corpus: capture.corpus, primary: capture.primary, refreshZotero: capture.refreshZotero, filePrintBook: capture.filePrintBook }));
     return;
   }
   sendHtml(res, saveAdminEdit(capture.writer(), path, form, editor));
@@ -272,6 +272,12 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
         }
         if (req.method !== "GET") {
           res.writeHead(405, { allow: "GET" }).end();
+          return;
+        }
+        if (url.pathname === "/admin/capture" && url.searchParams.has("isbn")) {
+          const answer = await renderCaptureIsbn(db, url.searchParams.get("isbn") ?? "", options.capture?.lookupIsbn);
+          if ("redirect" in answer) res.writeHead(303, { location: answer.redirect }).end();
+          else res.writeHead(answer.status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }).end(answer.html);
           return;
         }
         let html: string | null;

@@ -145,6 +145,13 @@ function knownCalibreWork(db: DB, uuid: string): number | undefined {
   return db.prepare("SELECT work_id FROM work_origins WHERE kind = 'calibre' AND ref = ?").pluck().get(uuid) as number | undefined;
 }
 
+/** The work for a Zotero item the capture page chose, made from the mirror when the store has none yet. */
+export function workFromMirror(db: DB, ref: string): number {
+  const named = /^zotero:((?:users|groups)\/\d+)\/([A-Z0-9]{8})$/i.exec(ref.trim());
+  if (!named) throw new ToolError(`"${ref}" isn't a Zotero item.`);
+  return zoteroWork(db, named[1]!, named[2]!.toUpperCase());
+}
+
 /** The work for a Zotero item, made from the mirror when the store has none yet. */
 function zoteroWork(db: DB, library: string, key: string): number {
   const id = knownZoteroWork(db, library, key);
