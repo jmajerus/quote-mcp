@@ -13,7 +13,10 @@ worklists with how many each holds.
 ## Quotes
 
 `/admin/quotes`: search over quotes and notes, with the same filters as `search_quotes` (see
-[MCP tools](tools.md#search_quotes)): words, concept, author, work, status, and kind. A tag in the URL
+[MCP tools](tools.md#search_quotes)): words, concept, author, work, status, and kind. A concept search
+includes that concept. **Include** starts with **exact** on. Narrower, broader, related, and opposite
+stay off until checked, and **exact** can be turned off so the named concept drops out. Narrower and
+broader follow the whole chain. Related and opposite add the concepts one step away. A tag in the URL
 (`?tag=`) narrows to that tag. Each result shows its work (with a link that opens the item in Zotero), its
 place, its tags (concepts as chips; tags that aren't concepts are dashed), and its flags. When the list is
 one book, **Add a quote** opens the [capture page](#capturing-a-quote) on that book.

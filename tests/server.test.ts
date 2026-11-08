@@ -101,6 +101,22 @@ describe("queries", () => {
     expect(searchQuotes(db, { concept: "group bullying" }).quotes[0].text).toMatch(/^Mobbing is/);
   });
 
+  it("follows the relations a concept search asks to include", () => {
+    const id = (slug: string) => db.prepare("SELECT id FROM concepts WHERE slug = ?").pluck().get(slug) as number;
+    db.prepare("INSERT INTO concept_relations (from_id, to_id, type) VALUES (?, ?, 'related')").run(id("abuse"), id("dignity"));
+    try {
+      expect(searchQuotes(db, { concept: "abuse", include: [] }).total).toBe(1);
+      expect(searchQuotes(db, { concept: "mobbing", include: ["broader"] }).total).toBe(2);
+      expect(searchQuotes(db, { concept: "abuse", include: ["opposite"] }).total).toBe(2);
+      expect(searchQuotes(db, { concept: "abuse", include: ["opposite"], exact: false }).quotes.map((q) => q.text)).toEqual(["Everyone deserves dignity."]);
+      expect(searchQuotes(db, { concept: "abuse", include: [], exact: false }).total).toBe(0);
+      expect(searchQuotes(db, { concept: "abuse", include: ["related"] }).total).toBe(2);
+      expect(searchQuotes(db, { concept: "mobbing", include: ["opposite"] }).total).toBe(1);
+    } finally {
+      db.prepare("DELETE FROM concept_relations WHERE type = 'related'").run();
+    }
+  });
+
   it("names opposite concepts as opposites", () => {
     expect(getConcept(db, "abuse")).toMatchObject({ relations: { narrower: [{ slug: "mobbing" }], opposite: [{ slug: "dignity" }] }, quotes: 1, quotes_with_narrower: 2 });
   });
@@ -197,6 +213,30 @@ describe("MCP over HTTP", () => {
 });
 
 describe("admin pages", () => {
+  it("lets a concept search choose narrower, broader, related, and opposite", async () => {
+    const html = await (await fetch(`${base}/admin/quotes`)).text();
+    expect(html).toContain('value="exact" checked');
+    expect(html).not.toContain('value="narrower" checked');
+    expect(html).toContain('name="include" id="include-value" value="exact"');
+    expect(html.match(/name="include"/g)).toEqual(['name="include"']);
+    expect(html).toContain('value="broader"');
+    expect(html).toContain('value="related"');
+    expect(html).toContain('value="opposite"');
+    const named = await (await fetch(`${base}/admin/quotes?concept=abuse`)).text();
+    expect(named).toContain("Abuse at work rarely announces itself.");
+    expect(named).not.toContain("Mobbing is an emotional assault.");
+    const only = await (await fetch(`${base}/admin/quotes?concept=abuse&include=exact`)).text();
+    expect(only).toContain("Abuse at work rarely announces itself.");
+    expect(only).not.toContain("Mobbing is an emotional assault.");
+    expect(only).toContain('value="exact" checked');
+    expect(only).not.toContain('value="narrower" checked');
+    const opposite = await (await fetch(`${base}/admin/quotes?concept=abuse&include=opposite`)).text();
+    expect(opposite).toContain("Everyone deserves dignity.");
+    expect(opposite).not.toContain("Abuse at work rarely announces itself.");
+    expect(opposite).toContain('value="opposite" checked');
+    expect(opposite).not.toContain('value="exact" checked');
+  });
+
   it.each(["/admin", "/admin/quotes?q=dignity", "/admin/capture", "/admin/concepts", "/admin/concepts/abuse", "/admin/worklists", "/admin/worklists/unmatched_works", "/admin/worklists/kindle_locator"])("serves %s", async (path) => {
     const res = await fetch(base + path);
     expect(res.status).toBe(200);

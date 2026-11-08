@@ -35,6 +35,9 @@ h2 { font-size: 1.02rem; margin: 28px 0 10px; }
 form.filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 18px; }
 form.filters input, form.filters select { font: inherit; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); min-width: 0; }
 form.filters input[name="q"] { flex: 1 1 260px; }
+form.filters fieldset.include { flex: 1 0 100%; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; border: 1px solid var(--border); border-radius: 6px; margin: 0; padding: 4px 10px 6px; }
+form.filters fieldset.include legend { padding: 0 4px; color: var(--muted); font-size: 0.85rem; }
+form.filters fieldset.include label { display: flex; gap: 4px; align-items: center; }
 form.edit label { display: block; margin: 14px 0 4px; font-weight: 600; }
 form.edit input, form.edit textarea { font: inherit; width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
 form.edit textarea { min-height: 7em; resize: vertical; }

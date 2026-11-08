@@ -79,12 +79,37 @@ export function findConcept(db: DB, name: string): ConceptRow {
   return { id: hit.id, scheme: hit.scheme, slug: hit.slug, label: hit.label };
 }
 
+/** Relations a concept search can follow. Narrower and broader run the whole chain; related and opposite are one step. */
+export const SEARCH_RELATIONS = ["narrower", "broader", "related", "opposite"] as const;
+export type SearchRelation = (typeof SEARCH_RELATIONS)[number];
+
+const RELATION_TYPE: Record<SearchRelation, string> = { narrower: "narrower", broader: "broader", related: "related", opposite: "inverse" };
+
+/** The concept when `exact` is set, plus those reached by following each named relation from it. */
+export function withRelations(db: DB, id: number, include: readonly SearchRelation[], exact = true): number[] {
+  const seen = new Set<number>();
+  if (exact) seen.add(id);
+  const next = db.prepare("SELECT to_id FROM concept_relations WHERE from_id = ? AND type = ?");
+  for (const kind of include) {
+    const deep = kind === "narrower" || kind === "broader";
+    const walked = new Set<number>();
+    const queue = [id];
+    while (queue.length) {
+      const current = queue.pop()!;
+      if (walked.has(current)) continue;
+      walked.add(current);
+      for (const row of next.all(current, RELATION_TYPE[kind]) as { to_id: number }[]) {
+        if (exact || row.to_id !== id) seen.add(row.to_id);
+        if (deep) queue.push(row.to_id);
+      }
+    }
+  }
+  return [...seen];
+}
+
 /** A concept and everything narrower than it, at any depth. */
 export function withNarrower(db: DB, id: number): number[] {
-  const seen = new Set([id]);
-  const next = db.prepare("SELECT to_id FROM concept_relations WHERE from_id = ? AND type = 'narrower'");
-  for (const current of seen) for (const r of next.all(current) as { to_id: number }[]) seen.add(r.to_id);
-  return [...seen];
+  return withRelations(db, id, ["narrower"]);
 }
 
 export interface ConceptListing {
@@ -145,8 +170,12 @@ export function getConcept(db: DB, name: string) {
 export interface SearchArgs {
   query?: string;
   concept?: string;
-  /** Include quotes tagged with narrower concepts too (default true). */
+  /** Include quotes tagged with narrower concepts too (default true). Ignored when `include` is set. */
   narrower?: boolean;
+  /** Which relations to follow from the concept. Empty, with exact, means that concept alone. */
+  include?: readonly SearchRelation[];
+  /** Include quotes tagged with the named concept (default true). */
+  exact?: boolean;
   /** Only quotes tagged with one of these concepts: a concept set's, as src/sets.ts works it out. */
   within?: { scheme: string; slugs: string[] };
   tag?: string;
@@ -179,8 +208,9 @@ export function searchQuotes(db: DB, args: SearchArgs) {
   }
   if (args.concept) {
     const c = findConcept(db, args.concept);
-    const ids = args.narrower === false ? [c.id] : withNarrower(db, c.id);
-    where.push(`q.id IN (SELECT quote_id FROM quote_tags WHERE concept_id IN (${ids.join(",")}))`);
+    const include = args.include ?? (args.narrower === false ? [] : ["narrower" as const]);
+    const ids = withRelations(db, c.id, include, args.exact !== false);
+    where.push(ids.length ? `q.id IN (SELECT quote_id FROM quote_tags WHERE concept_id IN (${ids.join(",")}))` : "0");
   }
   if (args.within) {
     where.push(`q.id IN (SELECT t.quote_id FROM quote_tags t JOIN concepts c ON c.id = t.concept_id JOIN schemes s ON s.id = c.scheme_id

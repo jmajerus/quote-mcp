@@ -6,7 +6,7 @@ import { type FiledItem, type PrintBook, filePrintBook, filedIsbn, lookupIsbn, p
 import { editQuote } from "./edits.js";
 import { emphasisHtml } from "./public.js";
 import {
-  type Proposal, QUEUES, type Queue, ToolError, type WorkSummary, citeQuote, getConcept, getQuote, listConcepts, overview, searchQuotes, worklist,
+  type Proposal, QUEUES, type Queue, SEARCH_RELATIONS, type SearchRelation, ToolError, type WorkSummary, citeQuote, getConcept, getQuote, listConcepts, overview, searchQuotes, worklist,
 } from "./queries.js";
 import { type ConceptSet, captureSpaces } from "./sets.js";
 import { CSS, esc } from "./style.js";
@@ -92,16 +92,24 @@ function worklistTable(queues: Record<string, number>): string {
 ${QUEUES.map((q) => `<tr><td><a href="/admin/worklists/${q}">${QUEUE_LABEL[q]}</a></td><td>${queues[q] ?? 0}</td></tr>`).join("")}</table></div>`;
 }
 
+/** What a concept search keeps. Absent means the concept named; `none` means nothing checked. */
+function includeChoice(p: URLSearchParams): { exact: boolean; include: SearchRelation[] } {
+  if (!p.has("include")) return { exact: true, include: [] };
+  const asked = new Set(p.getAll("include").flatMap((v) => v.split(",")).map((v) => v.trim()).filter((v) => v && v !== "none"));
+  return { exact: asked.has("exact"), include: SEARCH_RELATIONS.filter((kind) => asked.has(kind)) };
+}
+
 function quotesPage(db: DB, p: URLSearchParams): string {
+  const { exact, include } = includeChoice(p);
   const params = {
     q: p.get("q") ?? "", concept: p.get("concept") ?? "", tag: p.get("tag") ?? "", author: p.get("author") ?? "", work: p.get("work") ?? "",
-    status: p.get("status") ?? "", kind: p.get("kind") ?? "", offset: Number(p.get("offset") ?? 0),
+    status: p.get("status") ?? "", kind: p.get("kind") ?? "", include: [...(exact ? ["exact"] : []), ...include].join(",") || "none", offset: Number(p.get("offset") ?? 0),
   };
   let body: string;
   let add = "";
   try {
     const r = searchQuotes(db, {
-      query: params.q || undefined, concept: params.concept || undefined, tag: params.tag || undefined, author: params.author || undefined,
+      query: params.q || undefined, concept: params.concept || undefined, include, exact, tag: params.tag || undefined, author: params.author || undefined,
       work: params.work || undefined, status: (params.status || undefined) as never, kind: (params.kind || undefined) as never, offset: params.offset, limit: 25,
     });
     if (r.works?.length === 1) add = `<p class="sub"><a href="/admin/capture?work=${r.works[0]}">Add a quote</a> to this book.</p>`;
@@ -110,12 +118,23 @@ function quotesPage(db: DB, p: URLSearchParams): string {
     if (!(error instanceof ToolError)) throw error;
     body = `<p class="flag">${esc(error.message)}</p>`;
   }
-  const input = (name: keyof typeof params, label: string) => `<input name="${name}" placeholder="${label}" value="${esc(params[name])}" aria-label="${label}">`;
+  const input = (name: "q" | "concept" | "author" | "work", label: string) => `<input name="${name}" placeholder="${label}" value="${esc(params[name])}" aria-label="${label}">`;
+  const box = (kind: string, on: boolean) => `<label><input type="checkbox" data-include value="${kind}"${on ? " checked" : ""}> ${kind}</label>`;
+  const boxes = box("exact", exact) + SEARCH_RELATIONS.map((kind) => box(kind, include.includes(kind))).join("");
   return page("Quotes", "quotes", `<h1>Quotes</h1>
 <form class="filters" method="get">${input("q", "Words or \"a phrase\"")}${input("concept", "Concept")}${input("author", "Author")}${input("work", "Work")}
 <select name="status" aria-label="Status"><option value="">Ready to use</option>${["transcribed", "unparsed", "any"].map((s) => `<option${params.status === s ? " selected" : ""}>${s}</option>`).join("")}</select>
 <select name="kind" aria-label="Kind"><option value="">Quotes and notes</option>${[["quote", "Quotes"], ["note", "Notes"]].map(([v, label]) => `<option value="${v}"${params.kind === v ? " selected" : ""}>${label}</option>`).join("")}</select>
+<fieldset class="include"><legend>Include</legend><input type="hidden" name="include" id="include-value" value="${esc(params.include)}">${boxes}</fieldset>
 ${params.tag ? `<input type="hidden" name="tag" value="${esc(params.tag)}">` : ""}<button>Search</button></form>
+<script>
+const includeForm = document.querySelector("form.filters");
+includeForm.addEventListener("submit", () => {
+  const chosen = [...includeForm.querySelectorAll("[data-include]:checked")].map((box) => box.value);
+  includeForm.querySelector("#include-value").value = chosen.join(",") || "none";
+});
+</script>
+<p class="note">Exact is the concept named. Narrower and broader follow the whole chain. Related and opposite add the concepts one step away.</p>
 ${params.tag ? `<p class="note">Tag: ${esc(params.tag)} · <a href="/admin/quotes">clear</a></p>` : ""}${add}${body}`);
 }
 
