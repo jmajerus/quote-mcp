@@ -42,9 +42,9 @@ Each result has its kind, text (a note's words are in `note`), work, locator, ta
 
 Returns the quote, a CSL JSON item for its work (from Zotero, or the old site's record when the work isn't in
 Zotero yet), the locator, the Better BibTeX citekey, and a Pandoc citation such as
-`[@roberts1993victory, p. 44]`. `item_type` is the stored Zotero type. CSL `type` is set only when CSL's
-name is that same kind of work; otherwise it is left out and `warnings` names the stored type. `warnings`
-also says what to check first: no page, possible OCR errors, a work
+`[@roberts1993victory, p. 44]`. `item_type` is the stored Zotero type. CSL `type` is Zotero's type for that
+item, so a journal article is an article and a podcast is a broadcast. An item type Zotero does not map is
+a document. `warnings` says what to check first: no page, possible OCR errors, a work
 not yet filed in Zotero. When a work has several editions in Zotero, `editions` lists each one's citekey;
 cite the edition the page number belongs to. On a note, it gives the work and the place, and says there's
 no quotation to cite.

@@ -326,9 +326,8 @@ export function citeQuote(db: DB, id: number) {
     : null;
   if (row && !z) {
     const authors = json<string[]>(row.authors as string, []);
-    const type = cslType(typeof row.item_type === "string" ? row.item_type : null);
     csl = {
-      id: `work-${row.id}`, ...(type ? { type } : {}), title: row.title,
+      id: `work-${row.id}`, type: cslType(typeof row.item_type === "string" ? row.item_type : null), title: row.title,
       author: authors.map((a) => { const [family, given] = a.split(/,\s*/, 2); return given ? { family, given } : { literal: a }; }),
       ...(row.year ? { issued: { "date-parts": [[Number(row.year)]] } } : {}), ...(row.isbn ? { ISBN: row.isbn } : {}),
     };
@@ -338,7 +337,6 @@ export function citeQuote(db: DB, id: number) {
   } else if (!row) {
     warnings.push(q.attribution ? `No work to cite; the quote is attributed to ${q.attribution}.` : "No work to cite.");
   }
-  if (itemType && csl && csl.type === undefined) warnings.push(`The citation style has no type for ${itemType}.`);
   if (q.kind === "note") warnings.push("This is a note (your own words), not a quote: there's no quoted text to cite, only the work and the place.");
   else if (!q.locator) warnings.push("The quote has no page or location.");
   if (q.status === "unparsed") warnings.push("This quote hasn't been split from its note yet; check its text before using it.");

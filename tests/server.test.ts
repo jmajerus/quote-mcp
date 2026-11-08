@@ -200,7 +200,6 @@ describe("queries", () => {
       const cited = citeQuote(db, article.quote);
       expect(cited.item_type).toBe("journalArticle");
       expect(cited.csl).toMatchObject({ type: "article-journal", "container-title": "Journal of Work" });
-      expect(cited.warnings.join(" ")).not.toMatch(/no type/);
       const articleBib = bibtex(cited.csl!, "doe2010dignity", cited.item_type);
       expect(articleBib).toMatch(/^@article\{doe2010dignity,/);
       expect(articleBib).toContain("journal = {Journal of Work}");
@@ -208,15 +207,18 @@ describe("queries", () => {
 
       const podcast = citeQuote(db, filed("POD00001", "podcast", { title: "A recorded talk" }).quote);
       expect(podcast.item_type).toBe("podcast");
-      expect(podcast.csl).not.toHaveProperty("type");
-      expect(podcast.warnings).toContain("The citation style has no type for podcast.");
+      expect(podcast.csl).toMatchObject({ type: "broadcast" });
+      expect(podcast.csl).not.toMatchObject({ type: "song" });
       expect(bibtex(podcast.csl!, "POD00001", podcast.item_type)).toBe("@misc{POD00001,\n  title = {A recorded talk},\n  year = {2010},\n  note = {Zotero item type: podcast}\n}");
 
       const email = citeQuote(db, filed("MAIL0001", "email", { title: "A letter about work" }).quote);
       expect(email.item_type).toBe("email");
-      expect(email.csl).not.toHaveProperty("type");
-      expect(JSON.stringify(email.csl)).not.toContain("document");
-      expect(email.warnings).toContain("The citation style has no type for email.");
+      expect(email.csl).toMatchObject({ type: "personal_communication" });
+
+      const unknown = citeQuote(db, filed("ODD00001", "oddity", { title: "Something untitled in the schema" }).quote);
+      expect(unknown.item_type).toBe("oddity");
+      expect(unknown.csl).toMatchObject({ type: "document" });
+      expect(unknown.csl).not.toMatchObject({ type: "book" });
 
       const bare = addBare.get("An unfiled article", "journalArticle", stamp, stamp) as { id: number };
       workIds.push(bare.id);
