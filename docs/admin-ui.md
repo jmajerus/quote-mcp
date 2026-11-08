@@ -68,7 +68,7 @@ into the quote box. Chrome only offers a microphone on a secure page, so on the 
 `http://` page names that address instead of listing microphones. **Scan a page** takes a photo or a one-page PDF; the printed page number, when the
 header or footer is only that number, fills the page field, and the page's text sits beside the picture.
 Mark the passage in that text and it becomes the quote. Either way, correct the wording, set the page
-(`40` or `211-212`) and a concept tag (suggested from the concepts as you type), and **Approve**. Approving
+(`40` or `211-212`) and one or more concepts, and **Approve**. The scheme lists its whole vocabulary. A concept set lists a smaller part of it, and a concept in a set stays in the scheme too. Switch spaces to add from another. A name that isn't a concept yet can be typed, and is kept. Approving
 keeps the book and clears the quote, ready for the next one. The quote is `transcribed`: a draft, not
 checked against a Calibre text. A tag that isn't a concept yet is kept, and shows on the unresolved-tags
 worklist. The recording and the page image are not stored.

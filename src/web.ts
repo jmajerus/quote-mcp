@@ -8,6 +8,7 @@ import { emphasisHtml } from "./public.js";
 import {
   type Proposal, QUEUES, type Queue, ToolError, type WorkSummary, citeQuote, getConcept, getQuote, listConcepts, overview, searchQuotes, worklist,
 } from "./queries.js";
+import { type ConceptSet, captureSpaces } from "./sets.js";
 import { CSS, esc } from "./style.js";
 
 /**
@@ -322,7 +323,7 @@ async function deliver(blob, waiting, failed) {
 function showSpeech(words) {
   text.value = words;
   say(view.hidden ? "Check the wording, then set the page and the concept and approve." : "Check the wording against the page, then set the concept and approve.");
-  (page.value.trim() ? document.querySelector("#tag") : page).focus();
+  (page.value.trim() ? document.querySelector("#pick") : page).focus();
 }
 function showPage(body) {
   view.hidden = false;
@@ -391,6 +392,80 @@ record.addEventListener("click", async () => {
   say("Listening. Speak the quote, then stop.");
   timer = setTimeout(() => { if (recorder && recorder.state === "recording") recorder.stop(); }, 180000);
 });
+const spaces = JSON.parse(document.querySelector("#concept-spaces").textContent || "[]");
+const space = document.querySelector("#space");
+const pick = document.querySelector("#pick");
+const chosen = document.querySelector("#chosen");
+const typed = document.querySelector("#tag-type");
+const tag = document.querySelector("#tag");
+const spaceNote = document.querySelector("#space-note");
+let chosenTags = tag.value.split(",").map((part) => part.trim()).filter(Boolean);
+function sameTag(a, b) { return a.toLowerCase() === b.toLowerCase(); }
+function paintConcepts() {
+  tag.value = chosenTags.join(", ");
+  chosen.replaceChildren();
+  for (const name of chosenTags) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "chip";
+    button.textContent = name;
+    button.setAttribute("aria-label", "Remove " + name);
+    button.addEventListener("click", () => {
+      chosenTags = chosenTags.filter((t) => !sameTag(t, name));
+      paintConcepts();
+      fillConcepts();
+    });
+    chosen.append(button);
+  }
+}
+function fillConcepts() {
+  const here = spaces.find((s) => s.id === space.value) || spaces[0];
+  spaceNote.textContent = here && here.note ? here.note : "";
+  pick.replaceChildren();
+  const blank = document.createElement("option");
+  blank.value = "";
+  blank.textContent = "Add a concept from this set";
+  pick.append(blank);
+  for (const concept of (here && here.concepts) || []) {
+    if (chosenTags.some((t) => sameTag(t, concept.label))) continue;
+    const option = document.createElement("option");
+    option.value = concept.label;
+    option.textContent = concept.hint ? concept.label + " (" + concept.hint + ")" : concept.label;
+    pick.append(option);
+  }
+}
+function addTyped() {
+  for (const part of typed.value.split(",")) {
+    const name = part.trim();
+    if (name && !chosenTags.some((t) => sameTag(t, name))) chosenTags.push(name);
+  }
+  typed.value = "";
+  paintConcepts();
+  fillConcepts();
+}
+space.addEventListener("change", fillConcepts);
+pick.addEventListener("change", () => {
+  if (!pick.value || chosenTags.some((t) => sameTag(t, pick.value))) { pick.value = ""; return; }
+  chosenTags.push(pick.value);
+  pick.value = "";
+  pick.setCustomValidity("");
+  paintConcepts();
+  fillConcepts();
+});
+typed.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  addTyped();
+});
+document.querySelector("form.capture").addEventListener("submit", (e) => {
+  addTyped();
+  if (chosenTags.length) return;
+  e.preventDefault();
+  pick.setCustomValidity("Add a concept.");
+  pick.reportValidity();
+});
+paintConcepts();
+fillConcepts();
 fillMics();
 `;
 
@@ -433,7 +508,7 @@ function savedNote(db: DB, workId: number, params: URLSearchParams): string {
  * Choose the book, then speak a quote or mark one on a scanned page. Without a book, a search; with one,
  * the microphone, the scan, the page, and the concept. `sent` is a form that didn't save, shown again with what was wrong.
  */
-function capturePage(db: DB, params: URLSearchParams, error?: string, sent?: URLSearchParams): string {
+function capturePage(db: DB, params: URLSearchParams, error?: string, sent?: URLSearchParams, sets: ConceptSet[] = []): string {
   const asked = params.get("work");
   if (!asked) {
     const q = params.get("q") ?? "";
@@ -453,13 +528,13 @@ ${q.trim() ? (rows ? `<div class="scroll"><table><tr><th>Book</th><th>Year</th><
   const work = Number.isInteger(id) && id > 0 ? getWork(db, id) : undefined;
   if (!work) throw new ToolError(`No work ${asked}.`);
   const value = (name: string) => esc(sent?.get(name) ?? "");
-  const concepts = listConcepts(db);
-  const options = concepts.flatMap((c) => [c.label, ...c.alt_labels]).map((label) => `<option value="${esc(label)}">`).join("");
+  const spaces = captureSpaces(db, sets);
+  const spaceOptions = spaces.map((s) => `<option value="${esc(s.id)}">${esc(s.label)}</option>`).join("");
   const who = work.authors.slice(0, 2).join("; ") + (work.authors.length > 2 ? " et al." : "");
   return page(`Capture · ${work.title}`, "capture", `<h1>Capture</h1>
 <p class="sub">${who ? `${esc(who)}, ` : ""}<cite>${esc(work.title)}</cite>${work.year ? ` (${esc(work.year)})` : ""} · <a href="/admin/quotes?work=${work.id}">This book's quotes</a> · <a href="/admin/capture">Choose another book</a></p>
 ${error ? `<p class="error">${esc(error)}</p>` : ""}${sent ? "" : savedNote(db, work.id, params)}
-<p>Speak one quote, or scan one page and mark the passage. Set the page and the concept, correct the wording, and approve it. The next quote stays on this book.</p>
+<p>Speak one quote, or scan one page and mark the passage. Set the page and the concepts, correct the wording, and approve it. The next quote stays on this book.</p>
 <form class="edit capture" method="post" action="/admin/capture">
 <input type="hidden" name="work" value="quote:${work.id}">
 <input type="hidden" name="request_id" value="${esc(sent?.get("request_id") ?? randomUUID())}">
@@ -469,10 +544,16 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}${sent ? "" : savedNote(db, 
 <label for="text">Quote</label><textarea id="text" name="text" required>${value("text")}</textarea>
 <p class="note">Correct the wording, or mark the quote in the page text. Approving saves that passage.</p>
 <label for="page">Page</label><input id="page" name="page" required inputmode="numeric" value="${value("page")}" placeholder="40 or 211-212">
-<label for="tag">Concept</label><input id="tag" name="tag" required list="concepts" value="${value("tag")}" placeholder="mobbing">
-<datalist id="concepts">${options}</datalist>
+<label for="space">Concept set</label><select id="space" aria-label="Concept set">${spaceOptions}</select>
+<p id="space-note" class="note"></p>
+<label for="pick">Concepts</label><select id="pick" aria-label="Concepts in this set"><option value="">Add a concept from this set</option></select>
+<div id="chosen" class="chosen"></div>
+<label for="tag-type">Or type one</label><input id="tag-type" autocomplete="off" placeholder="A concept this set doesn't list">
+<p class="note">Add every concept that applies. Switch sets to add from another. A name that isn't a concept yet is kept.</p>
+<input type="hidden" name="tag" id="tag" value="${value("tag")}">
 <div class="actions"><button>Approve</button></div>
 </form>
+<script type="application/json" id="concept-spaces">${JSON.stringify(spaces).replaceAll("<", "\\u003c")}</script>
 <script>${CAPTURE_SCRIPT}</script>`);
 }
 
@@ -520,7 +601,7 @@ export async function renderCaptureIsbn(db: DB, raw: string, lookup?: (isbn: str
 }
 
 /** Saves the capture form: a redirect back to the same book, or the form again with what was wrong. */
-export async function saveCaptureForm(writer: DB, form: URLSearchParams, editor: string, o: Omit<AddQuoteOptions, "origin" | "actor"> & { filePrintBook?: (book: PrintBook, writeToken: string) => Promise<FiledItem> }): Promise<{ redirect: string } | { status: number; html: string }> {
+export async function saveCaptureForm(writer: DB, form: URLSearchParams, editor: string, o: Omit<AddQuoteOptions, "origin" | "actor"> & { filePrintBook?: (book: PrintBook, writeToken: string) => Promise<FiledItem>; sets?: ConceptSet[] }): Promise<{ redirect: string } | { status: number; html: string }> {
   if (form.get("file") === "1") {
     let book: PrintBook | undefined;
     try {
@@ -563,15 +644,15 @@ export async function saveCaptureForm(writer: DB, form: URLSearchParams, editor:
     return { redirect: `/admin/capture?${next}` };
   } catch (error) {
     if (!(error instanceof ToolError)) throw error;
-    return { status: 400, html: capturePage(writer, new URLSearchParams(id ? { work: id } : {}), error.message, form) };
+    return { status: 400, html: capturePage(writer, new URLSearchParams(id ? { work: id } : {}), error.message, form, o.sets) };
   }
 }
 
 /** The HTML for an /admin path, or null when there is no such page. */
-export function renderAdmin(db: DB, path: string, params: URLSearchParams): string | null {
+export function renderAdmin(db: DB, path: string, params: URLSearchParams, sets: ConceptSet[] = []): string | null {
   if (path === "/admin" || path === "/admin/") return overviewPage(db);
   if (path === "/admin/quotes") return quotesPage(db, params);
-  if (path === "/admin/capture") return capturePage(db, params);
+  if (path === "/admin/capture") return capturePage(db, params, undefined, undefined, sets);
   let m = /^\/admin\/quotes\/(\d+)$/.exec(path);
   if (m) return quotePage(db, Number(m[1]));
   m = /^\/admin\/quotes\/(\d+)\/edit$/.exec(path);

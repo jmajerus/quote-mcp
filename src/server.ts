@@ -200,7 +200,7 @@ async function transcribePost(req: http.IncomingMessage, res: http.ServerRespons
  * the person's Access session. Writes go through the writable connection; the redirect's GET then reads them
  * through the read-only one.
  */
-async function adminPost(req: http.IncomingMessage, res: http.ServerResponse, path: string, capture: Capture | undefined, editor: string): Promise<void> {
+async function adminPost(req: http.IncomingMessage, res: http.ServerResponse, path: string, capture: Capture | undefined, editor: string, sets: ConceptSet[] = []): Promise<void> {
   if (!postedFromHere(req)) {
     res.writeHead(403, { "content-type": "text/plain; charset=utf-8" }).end("Forms are taken only from this server's own pages.");
     return;
@@ -224,7 +224,7 @@ async function adminPost(req: http.IncomingMessage, res: http.ServerResponse, pa
   }
   const form = new URLSearchParams(body.toString("utf8"));
   if (path === "/admin/capture") {
-    sendHtml(res, await saveCaptureForm(capture.writer(), form, editor, { corpus: capture.corpus, primary: capture.primary, refreshZotero: capture.refreshZotero, filePrintBook: capture.filePrintBook }));
+    sendHtml(res, await saveCaptureForm(capture.writer(), form, editor, { corpus: capture.corpus, primary: capture.primary, refreshZotero: capture.refreshZotero, filePrintBook: capture.filePrintBook, sets }));
     return;
   }
   sendHtml(res, saveAdminEdit(capture.writer(), path, form, editor));
@@ -270,7 +270,7 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
       }
       if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
         if (req.method === "POST" && (url.pathname === "/admin/capture" || url.pathname === "/admin/capture/transcribe" || url.pathname === "/admin/capture/read" || /^\/admin\/quotes\/\d+\/edit$/.test(url.pathname))) {
-          await adminPost(req, res, url.pathname, options.capture, auth.via === "access" ? (auth.email ?? auth.subject ?? "access") : "lan");
+          await adminPost(req, res, url.pathname, options.capture, auth.via === "access" ? (auth.email ?? auth.subject ?? "access") : "lan", options.sets);
           return;
         }
         if (req.method !== "GET") {
@@ -285,7 +285,7 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
         }
         let html: string | null;
         try {
-          html = renderAdmin(db, url.pathname, url.searchParams);
+          html = renderAdmin(db, url.pathname, url.searchParams, options.sets);
         } catch (error) {
           if (!(error instanceof ToolError)) throw error;
           res.writeHead(404, { "content-type": "text/plain; charset=utf-8" }).end(error.message);

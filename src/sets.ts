@@ -216,6 +216,43 @@ export function setGraph(db: DB, file: ConceptSet[], name: string) {
   return { ...about(set), definition: definitionOf(set), missing, concepts, relations };
 }
 
+/** A space the capture page offers: a scheme's whole vocabulary, or one concept set within it. */
+export interface CaptureSpace {
+  id: string;
+  label: string;
+  note: string;
+  concepts: { label: string; hint: string }[];
+}
+
+/**
+ * The spaces a person picks concepts from. A scheme is the space of every concept in it. A concept set is a
+ * smaller space that names some of those concepts. A concept in a set stays in the scheme as well.
+ */
+export function captureSpaces(db: DB, file: ConceptSet[] = []): CaptureSpace[] {
+  const graph = conceptGraph(db);
+  const schemeLabel = new Map((db.prepare("SELECT slug, label FROM schemes").all() as { slug: string; label: string }[]).map((s) => [s.slug, s.label]));
+  const concept = new Map(graph.concepts.map((c) => [`${c.scheme}:${c.slug}`, c]));
+  const entry = (c: { label: string; alt_labels: string[] }) => ({ label: c.label, hint: c.alt_labels.join(", ") });
+  const byScheme = new Map<string, { label: string; hint: string }[]>();
+  for (const c of graph.concepts) {
+    const list = byScheme.get(c.scheme) ?? [];
+    list.push(entry(c));
+    byScheme.set(c.scheme, list);
+  }
+  const schemes = [...byScheme].sort((a, b) => (schemeLabel.get(a[0]) ?? a[0]).localeCompare(schemeLabel.get(b[0]) ?? b[0])).map(([scheme, concepts]) => {
+    concepts.sort((a, b) => a.label.localeCompare(b.label));
+    return { id: `scheme:${scheme}`, label: schemeLabel.get(scheme) ?? scheme, note: "", concepts };
+  });
+  const sets = [...currentSets(db, file)].sort((a, b) => a.label.localeCompare(b.label)).map((set) => {
+    const concepts = resolveSet(set, graph).members.flatMap((slug) => {
+      const found = concept.get(`${set.scheme}:${slug}`);
+      return found ? [entry(found)] : [];
+    }).sort((a, b) => a.label.localeCompare(b.label));
+    return { id: `set:${set.slug}`, label: set.label, note: set.description?.trim() || "", concepts };
+  });
+  return [...schemes, ...sets];
+}
+
 /** A set's concepts, for search's `within`. */
 export function setConcepts(db: DB, file: ConceptSet[], name: string): { scheme: string; slugs: string[] } {
   const set = findSet(currentSets(db, file), name);

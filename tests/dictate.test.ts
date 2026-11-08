@@ -136,9 +136,29 @@ describe("the capture page", () => {
     expect(chosen).toContain(">Approve<");
     expect(chosen).toContain('name="page"');
     expect(chosen).toContain('name="tag"');
-    expect(chosen).toContain('value="mobbing"');
+    expect(chosen).toContain('id="space"');
+    expect(chosen).toContain('id="pick"');
+    expect(chosen).toContain("The human side of work");
+    expect(chosen).toContain('"label":"mobbing"');
+    const spaces = JSON.parse(chosen.match(/<script type="application\/json" id="concept-spaces">([\s\S]*?)<\/script>/)![1]) as { label: string; concepts: { label: string }[] }[];
+    expect(spaces.map((s) => s.label)).toEqual(["The human side of work"]);
+    expect(spaces[0].concepts.map((c) => c.label)).toEqual(["abuse", "dignity", "mobbing"]);
     expect(chosen).toContain("Choose another book");
     expect(() => renderAdmin(db, "/admin/capture", new URLSearchParams({ work: "99999" }))).toThrow(/No work 99999/);
+  });
+
+  it("offers the scheme's whole vocabulary, and a concept set as a smaller space within it", () => {
+    db.prepare("INSERT INTO concept_sets (id, scheme, slug, label, description, members, former_slugs, updated_at) VALUES ('set-harm', 'human-work', 'harm', 'Harm', 'Harm at work', ?, '[]', '2026-01-01')")
+      .run(JSON.stringify(["mobbing", "abuse"]));
+    const html = renderAdmin(db, "/admin/capture", new URLSearchParams({ work: String(workId()) }))!;
+    const spaces = JSON.parse(html.match(/<script type="application\/json" id="concept-spaces">([\s\S]*?)<\/script>/)![1]) as { label: string; note: string; concepts: { label: string; hint: string }[] }[];
+    expect(spaces.map((s) => [s.label, s.concepts.map((c) => c.label)])).toEqual([
+      ["The human side of work", ["abuse", "dignity", "mobbing"]],
+      ["Harm", ["abuse", "mobbing"]],
+    ]);
+    expect(spaces[0].note).toBe("");
+    expect(spaces[1].note).toBe("Harm at work");
+    expect(spaces[1].concepts.find((c) => c.label === "mobbing")?.hint).toBe("group bullying");
   });
 
   it("brings in a Zotero book that has no quotes, then opens the editor on it", async () => {

@@ -67,6 +67,9 @@ mark { background: var(--warn-bg); color: inherit; }
 form.bring { display: inline; }
 form.bring button { background: none; border: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-align: left; }
 form.capture select { font: inherit; width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
+.chosen { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.chosen:empty { display: none; }
+.chosen button { background: var(--chip); color: var(--chip-text); border: none; border-radius: 999px; padding: 2px 10px; font-size: 0.82rem; cursor: pointer; }
 form.capture label.file { display: inline-block; margin: 0; font-weight: 600; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--accent); color: var(--accent); background: var(--surface); cursor: pointer; }
 form.capture input#scan { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); border: 0; }
 button.recording { background: var(--warn); border-color: var(--warn); color: #1d1d1b; }
