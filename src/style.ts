@@ -58,6 +58,14 @@ th { color: var(--muted); font-weight: 600; font-size: 0.82rem; }
 pre { background: var(--quote); padding: 10px; border-radius: 8px; overflow-x: auto; font-size: 0.82rem; }
 mark { background: var(--warn-bg); color: inherit; }
 .pager { display: flex; gap: 12px; margin-top: 14px; }
+.isbn-review { display: grid; grid-template-columns: 9rem minmax(0, 1fr); gap: 16px; align-items: start; margin-top: 12px; }
+.isbn-review img { width: 9rem; background: var(--quote); border-radius: 8px; }
+.isbn-review form { display: grid; gap: 6px; }
+.isbn-review input, .isbn-review textarea { font: inherit; width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
+.isbn-review .actions a { align-self: center; }
+@media (max-width: 720px) { .isbn-review { grid-template-columns: 1fr; } .isbn-review img { width: 7rem; } }
+form.bring { display: inline; }
+form.bring button { background: none; border: none; padding: 0; color: var(--accent); font: inherit; cursor: pointer; text-align: left; }
 form.capture select { font: inherit; width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
 form.capture label.file { display: inline-block; margin: 0; font-weight: 600; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--accent); color: var(--accent); background: var(--surface); cursor: pointer; }
 form.capture input#scan { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); border: 0; }

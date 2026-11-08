@@ -18,7 +18,7 @@ export interface ApiItem {
   version: number;
   data: {
     itemType: string; title?: string; date?: string; note?: string; parentItem?: string; extra?: string; citationKey?: string;
-    ISBN?: string; url?: string; deleted?: number | boolean;
+    ISBN?: string; publisher?: string; url?: string; deleted?: number | boolean;
     tags?: { tag: string; type?: number }[];
     creators?: { creatorType: string; lastName?: string; firstName?: string; name?: string }[];
   };

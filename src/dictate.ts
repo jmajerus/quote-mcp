@@ -6,6 +6,9 @@ import path from "node:path";
 import { type AddQuoteOptions, addQuote } from "./capture.js";
 import { ToolError } from "./common.js";
 import type { DB } from "./db.js";
+import { creators } from "./import.js";
+import { yearOf } from "./text.js";
+import type { ApiItem } from "./zotero.js";
 
 /**
  * The capture page (/admin/capture): a book is chosen first, then each quote is spoken into a microphone
@@ -47,6 +50,31 @@ export function searchWorks(db: DB, query: string, limit = 15): WorkHit[] {
     like: like(q), raw: q, exact: q.toLowerCase(), cite: like(`citation key: ${q}`), limit,
   }) as { id: number; title: string; authors: string; year: string | null; isbn: string | null }[];
   return rows.map((w) => ({ ...w, authors: JSON.parse(w.authors) as string[] }));
+}
+
+/** A Zotero item in the mirror that has no work yet: a printed book can be quoted before any note imports it. */
+export interface MirrorBook {
+  library: string; key: string; title: string; authors: string[]; year: string | null;
+}
+
+/**
+ * Books in the Zotero mirror that the store has no work for. Notes, attachments, and items that already
+ * have a work are left out. The capture page makes the work when one of these is chosen.
+ */
+export function searchMirror(db: DB, query: string, limit = 15): MirrorBook[] {
+  const q = query.trim();
+  if (!q) return [];
+  const rows = db.prepare(`
+    SELECT z.library, z.key, z.data FROM zotero_items z
+    WHERE z.deleted = 0 AND z.parent_key IS NULL AND z.item_type NOT IN ('note', 'attachment', 'annotation')
+      AND NOT EXISTS (SELECT 1 FROM works w WHERE w.zotero_library = z.library AND w.zotero_key = z.key)
+      AND NOT EXISTS (SELECT 1 FROM work_origins o WHERE o.kind = 'zotero' AND o.ref = z.library || ':' || z.key)
+      AND (lower(z.data) LIKE @like ESCAPE '\\' OR z.key = @raw)
+    ORDER BY lower(json_extract(z.data, '$.title')) LIMIT @limit`).all({ like: like(q), raw: q, limit }) as { library: string; key: string; data: string }[];
+  return rows.map((row) => {
+    const data = JSON.parse(row.data) as ApiItem["data"];
+    return { library: row.library, key: row.key, title: data.title ?? "(untitled)", authors: creators(data), year: yearOf(data.date) };
+  });
 }
 
 export function getWork(db: DB, id: number): WorkHit | undefined {

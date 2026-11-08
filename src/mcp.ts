@@ -41,7 +41,13 @@ async function runAsync(body: () => Promise<unknown>): Promise<CallToolResult> {
 }
 
 /** What add_quote needs: a writable connection to the store (the server's own is read-only), and corpus-mcp. */
-export interface Capture extends Omit<AddQuoteOptions, "actor"> { writer: () => DB }
+export interface Capture extends Omit<AddQuoteOptions, "actor"> {
+  writer: () => DB;
+  /** Replaces the ISBN lookup, in tests. */
+  lookupIsbn?: (isbn: string) => Promise<import("./isbn.js").PrintBook | null>;
+  /** Replaces filing the accepted book in Zotero, in tests. */
+  filePrintBook?: (book: import("./isbn.js").PrintBook, writeToken: string) => Promise<import("./isbn.js").FiledItem>;
+}
 
 const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
 const quoteId = z.number().int().min(1).describe("Quote id from search_quotes");

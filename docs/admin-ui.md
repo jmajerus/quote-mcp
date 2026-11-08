@@ -52,7 +52,13 @@ is now. A form posted from anywhere but these pages is refused.
 ## Capturing a quote
 
 `/admin/capture`: new quotes, spoken or marked on a scanned page. Choose the book first, by title, author,
-citekey, or ISBN. It stays chosen, and every quote saved on the page is attached to it.
+citekey, or ISBN. A barcode reader can type a print book's ISBN into **Look up**. The record that comes
+back (title, authors, year, publisher, and a cover when there is one) is shown for comparison with the
+book in hand. **Accept** files it in Zotero and opens the quote editor. **Reject** files nothing. An ISBN
+already in Zotero opens that book instead of filing a second copy. A book already quoted is a link. A book
+in Zotero that has no quotes yet is listed too; choosing it brings that book in, and the quote editor opens
+on it. **Check Zotero** looks again for a book filed since the last import. The book stays chosen, and every
+quote saved on the page is attached to it.
 
 With the book chosen, two ways fill the same editor. **Record** speaks one quote into a microphone (a USB
 microphone appears under its own name; the browser asks once for permission) and **Stop** transcribes it
