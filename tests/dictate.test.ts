@@ -165,6 +165,35 @@ describe("transcription", () => {
     await expect(transcribeAudio(Buffer.alloc(1), "audio/wav", { convert: async () => Buffer.from("wav"), recognize: async () => "  " })).rejects.toThrow(/No words/);
   });
 
+  it("sends the recording to the faster-whisper server", async () => {
+    let posted = "";
+    const whisper = http.createServer((req, res) => {
+      if (req.method !== "POST" || req.url !== "/v1/audio/transcriptions") {
+        res.writeHead(404).end();
+        return;
+      }
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        posted = Buffer.concat(chunks).toString("utf8");
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ text: "Mobbing is an emotional assault." }));
+      });
+    });
+    await new Promise<void>((resolve) => whisper.listen(0, "127.0.0.1", () => resolve()));
+    const { port } = whisper.address() as import("node:net").AddressInfo;
+    try {
+      const text = await transcribeAudio(Buffer.from("audio"), "audio/webm", {
+        convert: async () => Buffer.from("RIFFwav"),
+        env: { QUOTE_WHISPER_URL: `http://127.0.0.1:${port}/`, QUOTE_HA_URL: "http://127.0.0.1:1", QUOTE_HA_TOKEN: "unused" },
+      });
+      expect(text).toBe("Mobbing is an emotional assault.");
+      expect(posted).toBe("RIFFwav");
+      expect(dictationStatus({ QUOTE_WHISPER_URL: "http://whisper.localdomain:8000" }).note).toContain("whisper.localdomain:8000");
+    } finally {
+      await new Promise<void>((resolve) => whisper.close(() => resolve()));
+    }
+  });
+
   it("picks Home Assistant Cloud, then the only engine, and matches its language", () => {
     expect(chooseSttEngine(["stt.faster_whisper", "stt.home_assistant_cloud"])).toBe("stt.home_assistant_cloud");
     expect(chooseSttEngine(["stt.faster_whisper"])).toBe("stt.faster_whisper");

@@ -11,8 +11,8 @@ import type { DB } from "./db.js";
  * The capture page (/admin/capture): a book is chosen first, then each quote is spoken into a microphone
  * or read from a scanned page, corrected in the same editor, and saved with its page and a concept tag.
  * A recording is turned into 16 kHz mono wav by ffmpeg. QUOTE_TRANSCRIBE, when set, prints the transcript
- * of that wav. Otherwise Home Assistant's speech engine does, when QUOTE_HA_URL is set (Cloud, or another
- * engine named by QUOTE_HA_STT), and otherwise PocketSphinx's US English model does. A page image is read
+ * of that wav. Otherwise the faster-whisper server at QUOTE_WHISPER_URL does, then Home Assistant when
+ * QUOTE_HA_URL is set, and otherwise PocketSphinx's US English model does. A page image is read
  * by QUOTE_OCR, or by Tesseract, and the printed page number is taken from the header or footer.
  */
 
@@ -107,13 +107,15 @@ export function dictationStatus(env: NodeJS.ProcessEnv): { on: boolean; note: st
   const ffmpeg = spawnSync("ffmpeg", ["-hide_banner", "-version"], { stdio: "ignore" });
   if (ffmpeg.error || ffmpeg.status !== 0) return { on: false, note: "off without ffmpeg, which converts the recording" };
   if (env.QUOTE_TRANSCRIBE?.trim()) return { on: true, note: "QUOTE_TRANSCRIBE transcribes the recording" };
+  const whisper = whisperUrl(env);
+  if (whisper) return { on: true, note: `faster-whisper at ${whisper} transcribes the recording` };
   const ha = haSettings(env);
   if (ha && "missing" in ha) return { on: false, note: ha.missing };
   if (ha) return { on: true, note: ha.engine ? `Home Assistant (${ha.engine}) transcribes the recording` : "Home Assistant transcribes the recording" };
   const dir = modelDir(env);
   return modelReady(dir)
     ? { on: true, note: "PocketSphinx transcribes the recording" }
-    : { on: false, note: `off until PocketSphinx's US English model is at ${dir}, or Home Assistant or QUOTE_TRANSCRIBE is set` };
+    : { on: false, note: `off until PocketSphinx's US English model is at ${dir}, or QUOTE_WHISPER_URL, Home Assistant, or QUOTE_TRANSCRIBE is set` };
 }
 
 interface RunResult { code: number; stdout: string; stderr: string }
@@ -232,6 +234,37 @@ interface HaSpeech {
   token: string;
   engine: string;
   language: string;
+}
+
+function whisperUrl(env: NodeJS.ProcessEnv): string | null {
+  const url = env.QUOTE_WHISPER_URL?.trim().replace(/\/$/, "") ?? "";
+  return url || null;
+}
+
+/** Words from the faster-whisper server. The wav is the 16 kHz mono file the capture page already made. */
+async function transcribeWithWhisper(wav: Buffer, url: string): Promise<string> {
+  let response: Response;
+  try {
+    response = await fetch(`${url}/v1/audio/transcriptions`, {
+      method: "POST",
+      signal: AbortSignal.timeout(120_000),
+      headers: { "content-type": "audio/wav" },
+      body: new Uint8Array(wav),
+    });
+  } catch (error) {
+    const timedOut = (error as Error).name === "TimeoutError" || (error as Error).name === "AbortError";
+    throw new TranscribeError(timedOut
+      ? "The whisper server took too long. Try a shorter quote, or type it."
+      : "The whisper server couldn't be reached. Check QUOTE_WHISPER_URL, or type the quote.");
+  }
+  let result: { text?: string | null; error?: string };
+  try {
+    result = await response.json() as { text?: string | null; error?: string };
+  } catch {
+    throw new TranscribeError("The whisper server's answer wasn't a transcript.");
+  }
+  if (!response.ok) throw new TranscribeError(result.error || "The whisper server couldn't transcribe the recording.");
+  return result.text ?? "";
 }
 
 /** Home Assistant speech, when both the address and the token are set. A half-set pair says what is missing. */
@@ -357,11 +390,13 @@ async function recognizeWav(wav: Buffer, env: NodeJS.ProcessEnv): Promise<string
       if (result.code !== 0) throw new TranscribeError(result.stderr.trim().split("\n").pop() || "The recording couldn't be transcribed.");
       return result.stdout;
     }
+    const whisper = whisperUrl(env);
+    if (whisper) return await transcribeWithWhisper(wav, whisper);
     const model = modelDir(env);
     const ha = haSettings(env);
     if (ha && "missing" in ha) throw new TranscribeError(ha.missing);
     if (ha) return await transcribeWithHomeAssistant(wav, ha);
-    if (!modelReady(model)) throw new TranscribeError(`PocketSphinx's US English model isn't at ${model}. Set Home Assistant (QUOTE_HA_URL and QUOTE_HA_TOKEN) or QUOTE_TRANSCRIBE, or type the quote.`);
+    if (!modelReady(model)) throw new TranscribeError(`PocketSphinx's US English model isn't at ${model}. Set QUOTE_WHISPER_URL, Home Assistant, or QUOTE_TRANSCRIBE, or type the quote.`);
     const script = path.join(dir, "decode.py");
     await writeFile(script, POCKETSPHINX);
     let result: RunResult;
