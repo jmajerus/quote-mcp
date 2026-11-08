@@ -6,12 +6,33 @@ import type { ApiItem } from "./zotero.js";
  * BibTeX's, from the item's field or the "Citation Key:" line it writes to Extra.
  */
 
-const TYPES: Record<string, string> = {
+/** CSL's name for a Zotero item type, only when that name is the same kind of work. A podcast is not a song, and an unmapped type is not a document. */
+const CSL_TYPE: Record<string, string> = {
   book: "book", bookSection: "chapter", journalArticle: "article-journal", magazineArticle: "article-magazine",
   newspaperArticle: "article-newspaper", webpage: "webpage", blogPost: "post-weblog", conferencePaper: "paper-conference",
   report: "report", thesis: "thesis", document: "document", encyclopediaArticle: "entry-encyclopedia", dictionaryEntry: "entry-dictionary",
-  interview: "interview", film: "motion_picture", podcast: "song", presentation: "speech", case: "legal_case", statute: "legislation",
+  interview: "interview", film: "motion_picture", presentation: "speech", case: "legal_case", statute: "legislation",
 };
+
+const WORK_LABEL: Record<string, string> = {
+  book: "book", Book: "book", bookSection: "chapter", journalArticle: "journal article", magazineArticle: "magazine article",
+  newspaperArticle: "newspaper article", webpage: "web page", blogPost: "blog post", conferencePaper: "conference paper",
+  report: "report", thesis: "thesis", document: "document", encyclopediaArticle: "encyclopedia article", dictionaryEntry: "dictionary entry",
+  interview: "interview", film: "film", podcast: "podcast", presentation: "presentation", case: "case", statute: "statute",
+};
+
+/** CSL's name for this stored type, when CSL has one for the same kind of work. The old catalogue's "Book" is a book. */
+export function cslType(itemType: string | null | undefined): string | undefined {
+  if (!itemType) return undefined;
+  if (itemType === "Book") return "book";
+  return CSL_TYPE[itemType];
+}
+
+/** The ordinary name of a stored item type. A type with no ordinary name is a work. */
+export function workLabel(itemType: string | null | undefined): string {
+  if (!itemType) return "work";
+  return WORK_LABEL[itemType] ?? "work";
+}
 
 type Data = ApiItem["data"] & Record<string, unknown>;
 
@@ -40,9 +61,10 @@ function issued(date: unknown) {
 
 export function zoteroToCsl(key: string, data: Data): Record<string, unknown> {
   const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+  const type = cslType(data.itemType);
   const csl: Record<string, unknown> = {
     id: citekeyOf(data) ?? key,
-    type: TYPES[data.itemType] ?? "document",
+    ...(type ? { type } : {}),
     title: str(data.title),
     author: names(data, ["author"]),
     editor: names(data, ["editor", "seriesEditor"]),

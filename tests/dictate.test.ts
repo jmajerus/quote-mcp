@@ -119,7 +119,7 @@ describe("a spoken quote", () => {
 describe("the capture page", () => {
   it("asks for the book, then for the microphone, the page, and the concept", () => {
     const search = renderAdmin(db, "/admin/capture", new URLSearchParams({ q: '<script>' }))!;
-    expect(search).toContain("Choose the book");
+    expect(search).toContain("Choose the work");
     expect(search).toContain('name="isbn"');
     expect(search).toContain("Look up");
     expect(search).not.toContain("<script>");

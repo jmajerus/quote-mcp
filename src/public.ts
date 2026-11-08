@@ -68,16 +68,20 @@ const BIBTEX_TYPE: Record<string, string> = {
   "paper-conference": "inproceedings", report: "techreport", thesis: "phdthesis", webpage: "online",
 };
 
-/** A CSL JSON item as a BibTeX entry, for people who cite from BibTeX rather than Pandoc's CSL. */
-export function bibtex(csl: Csl, key: string): string {
+/**
+ * A CSL JSON item as a BibTeX entry, for people who cite from BibTeX rather than Pandoc's CSL.
+ * BibTeX requires a type. When it has no name for this work, the entry is `@misc` and `itemType` is kept in the note.
+ */
+export function bibtex(csl: Csl, key: string, itemType?: string | null): string {
   const names = (v: unknown) => (Array.isArray(v) && v.length ? (v as Name[]).map((n) => n.literal ?? [n.family, n.given].filter(Boolean).join(", ")).join(" and ") : undefined);
   const year = ((csl.issued as { "date-parts"?: number[][] } | undefined)?.["date-parts"]?.[0]?.[0])?.toString();
-  const type = BIBTEX_TYPE[csl.type as string] ?? "misc";
+  const type = BIBTEX_TYPE[typeof csl.type === "string" ? csl.type : ""] ?? "misc";
   const container = type === "incollection" ? "booktitle" : type === "article" ? "journal" : type === "inproceedings" ? "booktitle" : null;
   const fields: [string, unknown][] = [
     ["author", names(csl.author)], ["editor", names(csl.editor)], ["title", csl.title], [container ?? "", container ? csl["container-title"] : undefined],
     ["year", year], ["publisher", csl.publisher], ["address", csl["publisher-place"]], ["edition", csl.edition], ["volume", csl.volume],
     ["number", csl.issue], ["pages", csl.page], ["isbn", csl.ISBN], ["doi", csl.DOI], ["url", csl.URL],
+    ["note", type === "misc" && itemType ? `Zotero item type: ${itemType}` : undefined],
   ];
   const value = (v: unknown) => String(v).replace(/[{}]/g, "").replace(/\s+/g, " ").trim();
   const lines = fields.filter(([k, v]) => k && v !== undefined && v !== null && value(v)).map(([k, v]) => `  ${k} = {${value(v)}}`);

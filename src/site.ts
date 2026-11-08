@@ -239,7 +239,7 @@ function stats(p: Published, n: { quotes: number; works: number; concepts: numbe
 async function frontPage(p: Published): Promise<string> {
   const [n, all, site, ways, newest] = await Promise.all([p.totals(), p.collections(), p.site(), waysIn(p, null), p.quoting ? p.quotes({ newest: true, limit: 5 }) : null]);
   const head = `<h1>${esc(site.title)}</h1>\n<div class="intro">${site.html}</div>\n${stats(p, n)}${p.quoting ? searchForm("", null) : ""}`;
-  const recent = newest ? `<h2>Recently added</h2><ol class="quotes">${newest.quotes.map(quoteItem).join("")}</ol>` : "";
+  const recent = newest ? `<h2>Recently added</h2><ol class="quotes">${newest.quotes.map((r) => quoteItem(r)).join("")}</ol>` : "";
   if (all.length <= 1) {
     // One collection: shown inline, under its own heading when it has an introduction of its own.
     const c = all[0];

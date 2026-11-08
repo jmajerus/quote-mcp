@@ -19,13 +19,13 @@ stay off until checked, and **exact** can be turned off so the named concept dro
 broader follow the whole chain. Related and opposite add the concepts one step away. A tag in the URL
 (`?tag=`) narrows to that tag. Each result shows its work (with a link that opens the item in Zotero), its
 place, its tags (concepts as chips; tags that aren't concepts are dashed), and its flags. When the list is
-one book, **Add a quote** opens the [capture page](#capturing-a-quote) on that book.
+one work, **Add a quote** opens the [capture page](#capturing-a-quote) on that work. The wording follows the work's type: a journal article, a book, or a work when the type has no ordinary name.
 
 ## A quote or note
 
 `/admin/quotes/<id>`: the whole record.
 
-- The text, or a note's words. **Add a quote** opens the capture page on this quote's book.
+- The text, or a note's words. **Add a quote** opens the capture page on this quote's work.
 - Its work and place, its tags, and its flags.
 - Details: the chapter author, the comment, a source URL, key words marked in the text, words the OCR
   check suspects, and where it came from (the old site, a Zotero note).
@@ -55,16 +55,17 @@ is now. A form posted from anywhere but these pages is refused.
 
 ## Capturing a quote
 
-`/admin/capture`: new quotes, spoken or marked on a scanned page. Choose the book first, by title, author,
+`/admin/capture`: new quotes, spoken or marked on a scanned page. Choose the work first, by title, author,
 citekey, or ISBN. A barcode reader can type a print book's ISBN into **Look up**. The record that comes
 back (title, authors, year, publisher, and a cover when there is one) is shown for comparison with the
 book in hand. **Accept** files it in Zotero and opens the quote editor. **Reject** files nothing. An ISBN
-already in Zotero opens that book instead of filing a second copy. A book already quoted is a link. A book
-in Zotero that has no quotes yet is listed too; choosing it brings that book in, and the quote editor opens
-on it. **Check Zotero** looks again for a book filed since the last import. The book stays chosen, and every
+already in Zotero opens that book instead of filing a second copy. A work already quoted is a link. A work
+in Zotero that has no quotes yet is listed too; choosing it brings that work in, and the quote editor opens
+on it. The page names the work by its type: a journal article, a book, or a work when that type has no
+ordinary name. **Check Zotero** looks again for a work filed since the last import. The work stays chosen, and every
 quote saved on the page is attached to it.
 
-With the book chosen, two ways fill the same editor. **Record** speaks one quote into a microphone (a USB
+With the work chosen, two ways fill the same editor. **Record** speaks one quote into a microphone (a USB
 microphone appears under its own name; the browser asks once for permission) and **Stop** transcribes it
 into the quote box. Chrome only offers a microphone on a secure page, so on the LAN open
 `https://quote-mcp.localdomain:8443` (the certificate is the server's own; the browser asks once). The
@@ -72,7 +73,7 @@ into the quote box. Chrome only offers a microphone on a secure page, so on the 
 header or footer is only that number, fills the page field, and the page's text sits beside the picture.
 Mark the passage in that text and it becomes the quote. Either way, correct the wording, set the page
 (`40` or `211-212`) and one or more concepts, and **Approve**. The scheme lists its whole vocabulary. A concept set lists a smaller part of it, and a concept in a set stays in the scheme too. Switch spaces to add from another. A name that isn't a concept yet can be typed, and is kept. Approving
-keeps the book and clears the quote, ready for the next one. The quote is `transcribed`: a draft, not
+keeps the work and clears the quote, ready for the next one. The quote is `transcribed`: a draft, not
 checked against a Calibre text. A tag that isn't a concept yet is kept, and shows on the unresolved-tags
 worklist. The recording and the page image are not stored.
 

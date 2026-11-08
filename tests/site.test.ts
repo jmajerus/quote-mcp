@@ -231,6 +231,8 @@ describe("old-site markup in quote text", () => {
   it("writes BibTeX from CSL", async () => {
     expect(bibtex({ type: "book", title: "Mobbing", author: [{ family: "Davenport", given: "Noa" }, { literal: "Civil {Society}" }], issued: { "date-parts": [[1999]] }, publisher: "Civil Society Pub.", ISBN: "9780966480397" }, "davenport1999mobbing"))
       .toBe("@book{davenport1999mobbing,\n  author = {Davenport, Noa and Civil Society},\n  title = {Mobbing},\n  year = {1999},\n  publisher = {Civil Society Pub.},\n  isbn = {9780966480397}\n}");
+    expect(bibtex({ title: "A recorded talk", issued: { "date-parts": [[2010]] } }, "POD00001", "podcast"))
+      .toBe("@misc{POD00001,\n  title = {A recorded talk},\n  year = {2010},\n  note = {Zotero item type: podcast}\n}");
   });
 });
 

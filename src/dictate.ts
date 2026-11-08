@@ -12,7 +12,7 @@ import { yearOf } from "./text.js";
 import type { ApiItem } from "./zotero.js";
 
 /**
- * The capture page (/admin/capture): a book is chosen first, then each quote is spoken into a microphone
+ * The capture page (/admin/capture): a work is chosen first, then each quote is spoken into a microphone
  * or read from a scanned page, corrected in the same editor, and saved with its page and a concept tag.
  * A recording is turned into 16 kHz mono wav by ffmpeg. QUOTE_TRANSCRIBE, when set, prints the transcript
  * of that wav. Otherwise the faster-whisper server at QUOTE_WHISPER_URL does, then Home Assistant when
@@ -29,17 +29,17 @@ const MAX_WAV = 16_000 * 2 * 180;
 export class TranscribeError extends Error {}
 
 export interface WorkHit {
-  id: number; title: string; authors: string[]; year: string | null; isbn: string | null;
+  id: number; title: string; authors: string[]; year: string | null; isbn: string | null; item_type: string | null;
 }
 
 const like = (q: string) => `%${q.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
-/** Books matching a title, an author, an ISBN, a Zotero item key, or a citekey. */
+/** Works matching a title, an author, an ISBN, a Zotero item key, or a citekey. */
 export function searchWorks(db: DB, query: string, limit = 15): WorkHit[] {
   const q = citedKey(query);
   if (!q) return [];
   const rows = db.prepare(`
-    SELECT w.id, w.title, w.authors, w.year, w.isbn
+    SELECT w.id, w.title, w.authors, w.year, w.isbn, w.item_type
     FROM works w
     LEFT JOIN zotero_items z ON z.library = w.zotero_library AND z.key = w.zotero_key AND z.deleted = 0
     WHERE lower(w.title) LIKE @like ESCAPE '\\' OR lower(w.authors) LIKE @like ESCAPE '\\'
@@ -49,17 +49,17 @@ export function searchWorks(db: DB, query: string, limit = 15): WorkHit[] {
       OR lower(COALESCE(json_extract(z.data, '$.extra'), '')) LIKE @cite ESCAPE '\\'
     ORDER BY w.title LIMIT @limit`).all({
     like: like(q), raw: q, exact: q.toLowerCase(), cite: like(`citation key: ${q}`), limit,
-  }) as { id: number; title: string; authors: string; year: string | null; isbn: string | null }[];
+  }) as { id: number; title: string; authors: string; year: string | null; isbn: string | null; item_type: string | null }[];
   return rows.map((w) => ({ ...w, authors: JSON.parse(w.authors) as string[] }));
 }
 
-/** A Zotero item in the mirror that has no work yet: a printed book can be quoted before any note imports it. */
+/** A Zotero item in the mirror that has no work yet: it can be quoted before any note imports it. */
 export interface MirrorBook {
   library: string; key: string; title: string; authors: string[]; year: string | null;
 }
 
 /**
- * Books in the Zotero mirror that the store has no work for. Notes, attachments, and items that already
+ * Items in the Zotero mirror that the store has no work for. Notes, attachments, and items that already
  * have a work are left out. The capture page makes the work when one of these is chosen.
  */
 export function searchMirror(db: DB, query: string, limit = 15): MirrorBook[] {
@@ -79,8 +79,8 @@ export function searchMirror(db: DB, query: string, limit = 15): MirrorBook[] {
 }
 
 export function getWork(db: DB, id: number): WorkHit | undefined {
-  const w = db.prepare("SELECT id, title, authors, year, isbn FROM works WHERE id = ?").get(id) as
-    { id: number; title: string; authors: string; year: string | null; isbn: string | null } | undefined;
+  const w = db.prepare("SELECT id, title, authors, year, isbn, item_type FROM works WHERE id = ?").get(id) as
+    { id: number; title: string; authors: string; year: string | null; isbn: string | null; item_type: string | null } | undefined;
   return w && { ...w, authors: JSON.parse(w.authors) as string[] };
 }
 

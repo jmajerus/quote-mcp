@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type DB, openDb } from "../src/db.js";
 import { type DrupalSite, importWithSite } from "./seed.js";
 import { runImport } from "../src/import.js";
+import { bibtex } from "../src/public.js";
 import { citeQuote, ftsQuery, getConcept, searchQuotes } from "../src/queries.js";
 import { holdingsCounts } from "../src/holdings.js";
 import { serveHttp } from "../src/server.js";
@@ -165,9 +166,77 @@ describe("queries", () => {
 
   it("cites a work not in Zotero from the old site's record, and says so", () => {
     const c = citeQuote(db, quoteId("deserves dignity"));
-    expect(c.csl).toMatchObject({ title: "A Book Nobody Filed", author: [{ family: "Doe", given: "Jane" }], ISBN: "9780000000000" });
+    expect(c.csl).toMatchObject({ type: "book", title: "A Book Nobody Filed", author: [{ family: "Doe", given: "Jane" }], ISBN: "9780000000000" });
     expect(c.warnings.join(" ")).toMatch(/isn't in Zotero yet/);
     expect(c.warnings.join(" ")).toMatch(/no page/);
+  });
+
+  it("keeps a Zotero item's own type when citing it", async () => {
+    const stamp = "2026-01-01";
+    const addItem = db.prepare("INSERT INTO zotero_items (library, key, version, item_type, parent_key, deleted, data) VALUES (?, ?, 1, ?, NULL, 0, ?)");
+    const addWork = db.prepare(`INSERT INTO works (title, authors, year, item_type, zotero_library, zotero_key, match, created_at, updated_at)
+      VALUES (?, '[]', '2010', ?, ?, ?, 'zotero', ?, ?) RETURNING id`);
+    const addBare = db.prepare(`INSERT INTO works (title, authors, year, item_type, match, created_at, updated_at)
+      VALUES (?, '[]', '2010', ?, 'unmatched', ?, ?) RETURNING id`);
+    const addQuote = db.prepare(`INSERT INTO quotes (kind, work_id, text, text_key, locator_kind, locator, status, created_at, updated_at)
+      VALUES ('quote', ?, ?, ?, 'page', '11', 'transcribed', ?, ?) RETURNING id`);
+    const workIds: number[] = [];
+    const quoteIds: number[] = [];
+    const keys: string[] = [];
+    const filed = (key: string, itemType: string, data: Record<string, unknown>) => {
+      addItem.run(PRIMARY, key, itemType, JSON.stringify({ itemType, date: "2010", creators: [], ...data }));
+      keys.push(key);
+      const work = addWork.get(String(data.title), itemType, PRIMARY, key, stamp, stamp) as { id: number };
+      workIds.push(work.id);
+      const quote = addQuote.get(work.id, String(data.title), key, stamp, stamp) as { id: number };
+      quoteIds.push(quote.id);
+      return { work: work.id, quote: quote.id };
+    };
+    try {
+      const article = filed("ART00001", "journalArticle", {
+        title: "Workplace dignity", publicationTitle: "Journal of Work", volume: "4", issue: "2", pages: "10-12",
+        extra: "Citation Key: doe2010dignity", creators: [{ creatorType: "author", lastName: "Doe", firstName: "Jane" }],
+      });
+      const cited = citeQuote(db, article.quote);
+      expect(cited.item_type).toBe("journalArticle");
+      expect(cited.csl).toMatchObject({ type: "article-journal", "container-title": "Journal of Work" });
+      expect(cited.warnings.join(" ")).not.toMatch(/no type/);
+      const articleBib = bibtex(cited.csl!, "doe2010dignity", cited.item_type);
+      expect(articleBib).toMatch(/^@article\{doe2010dignity,/);
+      expect(articleBib).toContain("journal = {Journal of Work}");
+      expect(articleBib).not.toContain("note =");
+
+      const podcast = citeQuote(db, filed("POD00001", "podcast", { title: "A recorded talk" }).quote);
+      expect(podcast.item_type).toBe("podcast");
+      expect(podcast.csl).not.toHaveProperty("type");
+      expect(podcast.warnings).toContain("The citation style has no type for podcast.");
+      expect(bibtex(podcast.csl!, "POD00001", podcast.item_type)).toBe("@misc{POD00001,\n  title = {A recorded talk},\n  year = {2010},\n  note = {Zotero item type: podcast}\n}");
+
+      const email = citeQuote(db, filed("MAIL0001", "email", { title: "A letter about work" }).quote);
+      expect(email.item_type).toBe("email");
+      expect(email.csl).not.toHaveProperty("type");
+      expect(JSON.stringify(email.csl)).not.toContain("document");
+      expect(email.warnings).toContain("The citation style has no type for email.");
+
+      const bare = addBare.get("An unfiled article", "journalArticle", stamp, stamp) as { id: number };
+      workIds.push(bare.id);
+      const bareQuote = addQuote.get(bare.id, "Quoted from the article.", "bare-article", stamp, stamp) as { id: number };
+      quoteIds.push(bareQuote.id);
+      const unfiled = citeQuote(db, bareQuote.id);
+      expect(unfiled.item_type).toBe("journalArticle");
+      expect(unfiled.csl).toMatchObject({ type: "article-journal", title: "An unfiled article" });
+      expect(unfiled.csl).not.toMatchObject({ type: "document" });
+
+      const editor = await (await fetch(`${base}/admin/capture?work=${article.work}`)).text();
+      expect(editor).toContain("This journal article's quotes");
+      expect(editor).toContain("Choose another journal article");
+      const list = await (await fetch(`${base}/admin/quotes?work=${article.work}`)).text();
+      expect(list).toContain("to this journal article.");
+    } finally {
+      if (quoteIds.length) db.prepare(`DELETE FROM quotes WHERE id IN (${quoteIds.join(",")})`).run();
+      if (workIds.length) db.prepare(`DELETE FROM works WHERE id IN (${workIds.join(",")})`).run();
+      if (keys.length) db.prepare(`DELETE FROM zotero_items WHERE key IN (${keys.map(() => "?").join(",")})`).run(...keys);
+    }
   });
 });
 
