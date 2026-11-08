@@ -97,11 +97,13 @@ function quotesPage(db: DB, p: URLSearchParams): string {
     status: p.get("status") ?? "", kind: p.get("kind") ?? "", offset: Number(p.get("offset") ?? 0),
   };
   let body: string;
+  let add = "";
   try {
     const r = searchQuotes(db, {
       query: params.q || undefined, concept: params.concept || undefined, tag: params.tag || undefined, author: params.author || undefined,
       work: params.work || undefined, status: (params.status || undefined) as never, kind: (params.kind || undefined) as never, offset: params.offset, limit: 25,
     });
+    if (r.works?.length === 1) add = `<p class="sub"><a href="/admin/capture?work=${r.works[0]}">Add a quote</a> to this book.</p>`;
     body = r.quotes.map(quoteCard).join("") + pager("/admin/quotes", { ...params, offset: undefined }, r.total, r.offset, r.limit);
   } catch (error) {
     if (!(error instanceof ToolError)) throw error;
@@ -113,7 +115,7 @@ function quotesPage(db: DB, p: URLSearchParams): string {
 <select name="status" aria-label="Status"><option value="">Ready to use</option>${["transcribed", "unparsed", "any"].map((s) => `<option${params.status === s ? " selected" : ""}>${s}</option>`).join("")}</select>
 <select name="kind" aria-label="Kind"><option value="">Quotes and notes</option>${[["quote", "Quotes"], ["note", "Notes"]].map(([v, label]) => `<option value="${v}"${params.kind === v ? " selected" : ""}>${label}</option>`).join("")}</select>
 ${params.tag ? `<input type="hidden" name="tag" value="${esc(params.tag)}">` : ""}<button>Search</button></form>
-${params.tag ? `<p class="note">Tag: ${esc(params.tag)} · <a href="/admin/quotes">clear</a></p>` : ""}${body}`);
+${params.tag ? `<p class="note">Tag: ${esc(params.tag)} · <a href="/admin/quotes">clear</a></p>` : ""}${add}${body}`);
 }
 
 /** One proposal as a before-and-after table, with its reason and the command that accepts it. */
@@ -134,7 +136,8 @@ function quotePage(db: DB, id: number): string {
   const rows = (pairs: [string, string][]) => pairs.filter(([, v]) => v).map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join("");
   const note = q.kind === "note";
   const name = `${note ? "Note" : "Quote"} ${id}`;
-  return page(name, "quotes", `<h1>${name}</h1><p class="sub">${note ? "your own words, no quoted text" : `${esc(q.status)} · grade ${esc(q.grade)}`}${q.edited ? " · edited" : ""} · <a href="/admin/quotes/${id}/edit">Edit</a></p>
+  const another = q.work ? ` · <a href="/admin/capture?work=${q.work.id}">Add a quote</a>` : "";
+  return page(name, "quotes", `<h1>${name}</h1><p class="sub">${note ? "your own words, no quoted text" : `${esc(q.status)} · grade ${esc(q.grade)}`}${q.edited ? " · edited" : ""} · <a href="/admin/quotes/${id}/edit">Edit</a>${another}</p>
 ${note ? (q.note ? `<div class="words">${esc(q.note)}</div>` : '<p class="note">Tags only.</p>') : `<blockquote>${emphasisHtml(q.text)}</blockquote>`}
 <div class="meta">${workLine(q.work, q.attribution)}${q.locator ? ` · ${esc(q.locator)}` : ""}</div>
 <p>${tagChips(q.tags)}${q.flags.map((f) => `<span class="flag">${esc(f)}</span>`).join("")}</p>
@@ -454,7 +457,7 @@ ${q.trim() ? (rows ? `<div class="scroll"><table><tr><th>Book</th><th>Year</th><
   const options = concepts.flatMap((c) => [c.label, ...c.alt_labels]).map((label) => `<option value="${esc(label)}">`).join("");
   const who = work.authors.slice(0, 2).join("; ") + (work.authors.length > 2 ? " et al." : "");
   return page(`Capture · ${work.title}`, "capture", `<h1>Capture</h1>
-<p class="sub">${who ? `${esc(who)}, ` : ""}<cite>${esc(work.title)}</cite>${work.year ? ` (${esc(work.year)})` : ""} · <a href="/admin/capture">Choose another book</a></p>
+<p class="sub">${who ? `${esc(who)}, ` : ""}<cite>${esc(work.title)}</cite>${work.year ? ` (${esc(work.year)})` : ""} · <a href="/admin/quotes?work=${work.id}">This book's quotes</a> · <a href="/admin/capture">Choose another book</a></p>
 ${error ? `<p class="error">${esc(error)}</p>` : ""}${sent ? "" : savedNote(db, work.id, params)}
 <p>Speak one quote, or scan one page and mark the passage. Set the page and the concept, correct the wording, and approve it. The next quote stays on this book.</p>
 <form class="edit capture" method="post" action="/admin/capture">

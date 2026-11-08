@@ -230,7 +230,11 @@ export function searchQuotes(db: DB, args: SearchArgs) {
   const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const total = db.prepare(`SELECT COUNT(*) FROM ${from} ${clause}`).pluck().get(params) as number;
   const rows = db.prepare(`SELECT q.*, ${snippet} AS snippet FROM ${from} ${clause} ORDER BY ${order} LIMIT ${limit} OFFSET ${offset}`).all(params) as Record<string, unknown>[];
-  return { total, offset, limit, quotes: rows.map((r) => present(db, r, r.snippet as string | null)) };
+  // Which books this search is about, so a list of one book's quotes can offer another quote on it.
+  const works = args.work
+    ? db.prepare(`SELECT DISTINCT q.work_id FROM ${from} ${clause ? `${clause} AND` : "WHERE"} q.work_id IS NOT NULL`).pluck().all(params) as number[]
+    : undefined;
+  return { total, offset, limit, quotes: rows.map((r) => present(db, r, r.snippet as string | null)), ...(works ? { works } : {}) };
 }
 
 function tagsOf(db: DB, quoteId: number) {

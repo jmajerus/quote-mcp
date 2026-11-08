@@ -207,6 +207,15 @@ describe("admin pages", () => {
     const html = await (await fetch(`${base}/admin/quotes/${quoteId("emotional assault")}`)).text();
     expect(html).toContain("[@davenport1999mobbing, p. 40]");
     expect(html).toContain("zotero://select/library/items/MOBB0001");
+    const work = /\/admin\/capture\?work=(\d+)/.exec(html)?.[1];
+    expect(html).toContain(`Add a quote</a>`);
+    expect(work).toBeTruthy();
+    const list = await (await fetch(`${base}/admin/quotes?work=davenport1999mobbing`)).text();
+    expect(list).toContain(`href="/admin/capture?work=${work}"`);
+    expect(list).toContain("Add a quote");
+    const editor = await (await fetch(`${base}/admin/capture?work=${work}`)).text();
+    expect(editor).toContain("This book's quotes");
+    expect(editor).toContain(`href="/admin/quotes?work=${work}"`);
   });
 
   it("shows a note as your own words", async () => {
