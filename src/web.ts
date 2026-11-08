@@ -6,9 +6,10 @@ import { type FiledItem, type PrintBook, filePrintBook, filedIsbn, lookupIsbn, p
 import { editQuote } from "./edits.js";
 import { emphasisHtml } from "./public.js";
 import {
-  type Proposal, QUEUES, type Queue, SEARCH_RELATIONS, type SearchRelation, ToolError, type WorkSummary, citeQuote, getConcept, getQuote, listConcepts, overview, searchQuotes, worklist,
+  type Proposal, QUEUES, type Queue, SEARCH_RELATIONS, ToolError, type WorkSummary, citeQuote, getConcept, getQuote, listConcepts, overview, searchQuotes, worklist,
 } from "./queries.js";
 import { type ConceptSet, captureSpaces } from "./sets.js";
+import { includeChoice, includeValue } from "./common.js";
 import { CSS, esc } from "./style.js";
 
 /**
@@ -92,18 +93,11 @@ function worklistTable(queues: Record<string, number>): string {
 ${QUEUES.map((q) => `<tr><td><a href="/admin/worklists/${q}">${QUEUE_LABEL[q]}</a></td><td>${queues[q] ?? 0}</td></tr>`).join("")}</table></div>`;
 }
 
-/** What a concept search keeps. Absent means the concept named; `none` means nothing checked. */
-function includeChoice(p: URLSearchParams): { exact: boolean; include: SearchRelation[] } {
-  if (!p.has("include")) return { exact: true, include: [] };
-  const asked = new Set(p.getAll("include").flatMap((v) => v.split(",")).map((v) => v.trim()).filter((v) => v && v !== "none"));
-  return { exact: asked.has("exact"), include: SEARCH_RELATIONS.filter((kind) => asked.has(kind)) };
-}
-
 function quotesPage(db: DB, p: URLSearchParams): string {
-  const { exact, include } = includeChoice(p);
+  const { exact, include } = includeChoice(p.has("include") ? p.getAll("include") : null);
   const params = {
     q: p.get("q") ?? "", concept: p.get("concept") ?? "", tag: p.get("tag") ?? "", author: p.get("author") ?? "", work: p.get("work") ?? "",
-    status: p.get("status") ?? "", kind: p.get("kind") ?? "", include: [...(exact ? ["exact"] : []), ...include].join(",") || "none", offset: Number(p.get("offset") ?? 0),
+    status: p.get("status") ?? "", kind: p.get("kind") ?? "", include: includeValue(exact, include), offset: Number(p.get("offset") ?? 0),
   };
   let body: string;
   let add = "";

@@ -1,6 +1,6 @@
 import type { Collection, PublicRecord, Published } from "./published.js";
 import { quoteHtml } from "./public.js";
-import { ToolError } from "./common.js";
+import { SEARCH_RELATIONS, ToolError, includeChoice, includeValue } from "./common.js";
 import { CSS, esc } from "./style.js";
 
 /**
@@ -38,8 +38,12 @@ a.card:hover { border-color: var(--accent); }
 .quote-page blockquote { font-size: 1.08rem; }
 .source { color: var(--muted); font-size: 0.9rem; margin: 0 0 4px; }
 .permalink { color: var(--muted); font-size: 0.82rem; text-decoration: none; float: right; margin-left: 8px; }
-form.search { display: flex; gap: 8px; margin: 14px 0; max-width: 40rem; }
-form.search input { flex: 1; font: inherit; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); min-width: 0; }
+form.search { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; max-width: 46rem; }
+form.search input, form.search select { flex: 1 1 12rem; font: inherit; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); min-width: 0; }
+form.search button { flex: 0 0 auto; }
+form.search fieldset.include { flex: 1 0 100%; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; border: 1px solid var(--border); border-radius: 6px; margin: 0; padding: 4px 10px 6px; }
+form.search fieldset.include legend { padding: 0 4px; color: var(--muted); font-size: 0.85rem; }
+form.search fieldset.include label { display: flex; gap: 4px; align-items: center; }
 .cite pre { white-space: pre-wrap; }
 `;
 
@@ -104,18 +108,18 @@ function words(r: PublicRecord): string {
   return `<blockquote>${quoteHtml(r.text)}</blockquote>`;
 }
 
-function quoteItem(r: PublicRecord): string {
-  const text = r.snippet ? `<p>${esc(r.snippet).replace(/«/g, "<mark>").replace(/»/g, "</mark>")}</p>` : words(r);
+function quoteItem(r: PublicRecord, full = false): string {
+  const text = !full && r.snippet ? `<p>${esc(r.snippet).replace(/«/g, "<mark>").replace(/»/g, "</mark>")}</p>` : words(r);
   return `<li><a class="permalink" href="/quotes/${r.id}" title="This ${r.kind}'s page, with how to cite it">#${r.id}</a>${text}${source(r)}${conceptChips(r)}</li>`;
 }
 
-/** A page of records, with links to the pages before and after it. */
-function quoteList(p: Published, result: Awaited<ReturnType<Published["quotes"]>>, base: string, params: Record<string, unknown>): string {
+/** A page of records, with links to the pages before and after it. `full` prints each quote whole, rather than the search snippet. */
+function quoteList(p: Published, result: Awaited<ReturnType<Published["quotes"]>>, base: string, params: Record<string, unknown>, full = false): string {
   if (!result.total) return '<p class="note">None yet.</p>';
   const { total, offset, limit } = result;
   const prev = offset > 0 ? `<a href="${base}${qs({ ...params, offset: Math.max(0, offset - limit) })}">← Previous</a>` : "";
   const next = offset + limit < total ? `<a href="${base}${qs({ ...params, offset: offset + limit })}">Next →</a>` : "";
-  return `<ol class="quotes">${result.quotes.map(quoteItem).join("")}</ol>
+  return `<ol class="quotes">${result.quotes.map((r) => quoteItem(r, full)).join("")}</ol>
 <div class="pager">${prev}${next}<span class="note">${offset + 1}–${Math.min(total, offset + limit)} of ${records(p, total)}</span></div>`;
 }
 
@@ -124,22 +128,77 @@ function searchForm(query: string, collection: string | null): string {
 ${collection ? `<input type="hidden" name="collection" value="${esc(collection)}">` : ""}<button>Search</button></form>`;
 }
 
+function filtersForm(p: Published, fields: { query: string; concept: string; author: string; work: string; kind: string; exact: boolean; include: readonly (typeof SEARCH_RELATIONS)[number][]; collection: string | null }): string {
+  const box = (kind: string, on: boolean) => `<label><input type="checkbox" data-include value="${kind}"${on ? " checked" : ""}> ${kind}</label>`;
+  const boxes = box("exact", fields.exact) + SEARCH_RELATIONS.map((kind) => box(kind, fields.include.includes(kind))).join("");
+  const kind = p.notes ? `<select name="kind" aria-label="Kind"><option value="">Quotes and notes</option>${[["quote", "Quotes"], ["note", "Notes"]].map(([v, label]) => `<option value="${v}"${fields.kind === v ? " selected" : ""}>${label}</option>`).join("")}</select>` : "";
+  return `<form class="search" method="get" action="/search" role="search"><input type="search" name="q" value="${esc(fields.query)}" placeholder="Words or &quot;a phrase&quot;" aria-label="Search the quotes">
+<input name="concept" value="${esc(fields.concept)}" placeholder="Concept" aria-label="Concept"><input name="author" value="${esc(fields.author)}" placeholder="Author" aria-label="Author"><input name="work" value="${esc(fields.work)}" placeholder="Work" aria-label="Work">
+${kind}<fieldset class="include"><legend>Include</legend><input type="hidden" name="include" id="include-value" value="${esc(includeValue(fields.exact, fields.include))}">${boxes}</fieldset>
+${fields.collection ? `<input type="hidden" name="collection" value="${esc(fields.collection)}">` : ""}<button>Search</button></form>
+<script>
+const includeForm = document.querySelector("form.search");
+includeForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const params = new URLSearchParams();
+  for (const name of ["q", "concept", "author", "work", "kind"]) {
+    const value = includeForm.elements[name]?.value.trim();
+    if (value) params.set(name, value);
+  }
+  const chosen = [...includeForm.querySelectorAll("[data-include]:checked")].map((box) => box.value);
+  const include = chosen.join(",") || "none";
+  if (include !== "exact") params.set("include", include);
+  const collection = includeForm.elements.collection?.value;
+  if (collection) params.set("collection", collection);
+  location.search = params.toString();
+});
+</script>`;
+}
+
 async function searchPage(p: Published, params: URLSearchParams): Promise<string> {
   const query = (params.get("q") ?? "").trim();
+  const concept = (params.get("concept") ?? "").trim();
+  const author = (params.get("author") ?? "").trim();
+  const work = (params.get("work") ?? "").trim();
+  const askedKind = params.get("kind");
+  const kind: "" | "quote" | "note" = askedKind === "quote" || askedKind === "note" ? askedKind : "";
+  const { exact, include } = includeChoice(params.has("include") ? params.getAll("include") : null);
   const c = await chosen(p, params);
+  const read = params.has("read");
+  const includeParam = concept ? includeValue(exact, include) : "";
+  const listParams = {
+    q: query, concept, author, work, kind: kind || undefined, include: includeParam && includeParam !== "exact" ? includeParam : undefined, collection: c?.scheme,
+  };
   let body = "";
-  if (query) {
+  let found = false;
+  if (query || concept || author || work || kind) {
     try {
-      const result = await p.quotes({ query, conceptIds: c?.conceptIds, limit: PAGE, offset: offsetOf(params) });
-      body = quoteList(p, result, "/search", { q: query, collection: c?.scheme });
+      let conceptIds = c?.conceptIds;
+      if (concept) {
+        const foundIds = await p.relatedConcepts(concept, include, exact);
+        conceptIds = c ? foundIds.filter((id) => c.conceptIds.includes(id)) : foundIds;
+      }
+      const result = await p.quotes({
+        query: query || undefined, conceptIds, author: author || undefined, workText: work || undefined,
+        kind: p.notes && kind ? kind : undefined, limit: PAGE, offset: offsetOf(params),
+      });
+      found = true;
+      body = quoteList(p, result, "/search", read ? { ...listParams, read: 1 } : listParams, read);
     } catch (error) {
       if (!(error instanceof ToolError)) throw error;
       body = `<p class="note">${esc(error.message)}</p>`;
     }
   }
+  if (read) {
+    const title = [query && `“${query}”`, concept, author, work, kind === "note" ? "notes" : kind === "quote" ? "quotes" : ""].filter(Boolean).join(" · ") || "Quotes";
+    return page(p, title, "search", `<h1>${esc(title)}</h1>
+<p class="sub"><a href="/search${qs(listParams)}">Change this search</a></p>
+${body}`);
+  }
+  const share = found ? `<p class="note"><a href="/search${qs({ ...listParams, read: 1 })}">Readable list</a></p>` : "";
   return page(p, query ? `“${query}”` : "Search", "search", `<h1>Search</h1>
-<p class="sub">Words are looked for in what the quotes say; "a phrase" is kept together, and a trailing * matches the start of a word${await within(p, c)}.</p>
-${searchForm(query, c?.scheme ?? null)}${body}`);
+<p class="sub">Words are looked for in what the quotes say; "a phrase" is kept together, and a trailing * matches the start of a word. A concept search starts with that concept. Narrower and broader follow the whole chain. Related and opposite add the concepts one step away${await within(p, c)}.</p>
+${filtersForm(p, { query, concept, author, work, kind, exact, include, collection: c?.scheme ?? null })}${share}${body}`);
 }
 
 async function quotePage(p: Published, id: number): Promise<string> {

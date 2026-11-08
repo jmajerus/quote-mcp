@@ -88,7 +88,7 @@ Without Cloudflare, `QUOTE_PUBLIC_PORT` gives a second port that serves only the
 | `/sets/<slug>` | A concept set: its concepts, and at `quotes` its quotes. |
 | `/works`, `/works/<id>` | Works by first author; a work's concepts and, at `quotes`, its quotes in page order. `?collection=` narrows the list. |
 | `/quotes/<id>` | At `quotes`: a quote, its source and concepts, and how to cite it. |
-| `/search?q=` | At `quotes`: search over what quotes say; `collection` narrows it. |
+| `/search` | At `quotes`: search by words, concept, author, or work. A concept search starts with that concept. `include` adds `narrower`, `broader`, `related`, or `opposite`, and `exact` can be left out. `kind` is `quote` or `note` when notes are shared. `collection` narrows it. `read` shares that search as the quotes in full, with one link back to the form. |
 | `/robots.txt` | Keeps crawlers off `/search` and `/api/`. |
 | `/favicon.png` | The tab icon (see [assets/favicon.svg](../assets/favicon.svg)). |
 

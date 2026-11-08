@@ -264,10 +264,34 @@ describe("the quotes level", () => {
   it("searches what quotes say, a page at a time", async () => {
     const html = (await renderSite(await quotes(), "/search", new URLSearchParams("q=assault")))!;
     expect(html).toContain("<mark>assault</mark>");
+    expect(html).toContain("Readable list");
+    expect(html).toContain("/search?q=assault&read=1");
     expect(html).toContain("1–1 of 1 quote");
+    const reading = (await renderSite(await quotes(), "/search", new URLSearchParams("q=assault&read")))!;
+    expect(reading).toContain("<blockquote>Mobbing is an emotional assault.");
+    expect(reading).not.toContain("<mark>");
+    expect(reading).not.toContain('class="search"');
+    expect(reading).toContain('href="/search?q=assault">Change this search</a>');
     expect((await renderSite(await quotes(), "/search", new URLSearchParams("q=forty-five")))).toContain("None yet.");
     expect((await renderSite(await quotes(), "/search", new URLSearchParams('q="')))).toContain("no words to look for");
     expect((await renderSite(await quotes(), "/search"))).not.toContain('class="quotes"');
+    const named = (await renderSite(await quotes(), "/search", new URLSearchParams("concept=abuse")))!;
+    expect(named).toContain("Abuse at work rarely announces itself.");
+    expect(named).not.toContain("Mobbing is an emotional assault.");
+    expect(named).toContain('value="exact" checked');
+    expect(named).not.toContain('value="narrower" checked');
+    expect(named.match(/name="include"/g)).toEqual(['name="include"']);
+    const wider = (await renderSite(await quotes(), "/search", new URLSearchParams("concept=abuse&include=exact,narrower")))!;
+    expect(wider).toContain("Mobbing is an emotional assault.");
+    const opposite = (await renderSite(await quotes(), "/search", new URLSearchParams("concept=abuse&include=opposite")))!;
+    expect(opposite).toContain("Everyone deserves dignity.");
+    expect(opposite).not.toContain("Abuse at work rarely announces itself.");
+    const byAuthor = (await renderSite(await quotes(), "/search", new URLSearchParams("author=Doe")))!;
+    expect(byAuthor).toContain("Everyone deserves dignity.");
+    expect(byAuthor).not.toContain("Mobbing is an emotional assault.");
+    const byWork = (await renderSite(await quotes(), "/search", new URLSearchParams("work=Nobody")))!;
+    expect(byWork).toContain("Everyone deserves dignity.");
+    expect(byWork).not.toContain("Abuse at work rarely announces itself.");
   });
 
   it("keeps notes private unless they're shared, and private-tagged notes always", async () => {
@@ -276,6 +300,10 @@ describe("the quotes level", () => {
     expect((await renderSite(await quotes({ notes: true }), `/quotes/${shared}`))).toContain(SHARED_NOTE);
     await expect(renderSite(await quotes({ notes: true }), `/quotes/${hidden}`)).rejects.toThrow();
     expect((await renderSite(await quotes({ notes: true }), "/search", new URLSearchParams("q=forty-five")))).toContain("1–1 of 1 quote or note");
+    const notes = (await renderSite(await quotes({ notes: true }), "/search", new URLSearchParams("kind=note")))!;
+    expect(notes).toContain(SHARED_NOTE);
+    expect(notes).not.toContain("Mobbing is an emotional assault.");
+    expect(notes).toContain('name="kind"');
     expect((await renderSite(await quotes({ notes: true }), "/search", new URLSearchParams("q=harsh")))).toContain("None yet.");
     for (const p of [...pages(), "/search?q=her"]) {
       const [path, query] = p.split("?");

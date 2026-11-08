@@ -1,10 +1,10 @@
 import Database from "better-sqlite3";
 import { citedKey, citekeyOf, zoteroToCsl } from "./csl.js";
 import type { DB } from "./db.js";
-import { RELATION_LABEL, ToolError, ftsQuery } from "./common.js";
+import { RELATION_LABEL, RELATION_TYPE, SEARCH_RELATIONS, ToolError, ftsQuery, relatedIds, type SearchRelation } from "./common.js";
 import type { ApiItem } from "./zotero.js";
 
-export { RELATION_LABEL, ToolError, ftsQuery };
+export { RELATION_LABEL, SEARCH_RELATIONS, ToolError, ftsQuery, type SearchRelation };
 
 /**
  * Read-only queries over the quote store, shared by the MCP tools and the admin pages. Unparsed quotes
@@ -79,32 +79,12 @@ export function findConcept(db: DB, name: string): ConceptRow {
   return { id: hit.id, scheme: hit.scheme, slug: hit.slug, label: hit.label };
 }
 
-/** Relations a concept search can follow. Narrower and broader run the whole chain; related and opposite are one step. */
-export const SEARCH_RELATIONS = ["narrower", "broader", "related", "opposite"] as const;
-export type SearchRelation = (typeof SEARCH_RELATIONS)[number];
-
-const RELATION_TYPE: Record<SearchRelation, string> = { narrower: "narrower", broader: "broader", related: "related", opposite: "inverse" };
-
 /** The concept when `exact` is set, plus those reached by following each named relation from it. */
 export function withRelations(db: DB, id: number, include: readonly SearchRelation[], exact = true): number[] {
-  const seen = new Set<number>();
-  if (exact) seen.add(id);
-  const next = db.prepare("SELECT to_id FROM concept_relations WHERE from_id = ? AND type = ?");
-  for (const kind of include) {
-    const deep = kind === "narrower" || kind === "broader";
-    const walked = new Set<number>();
-    const queue = [id];
-    while (queue.length) {
-      const current = queue.pop()!;
-      if (walked.has(current)) continue;
-      walked.add(current);
-      for (const row of next.all(current, RELATION_TYPE[kind]) as { to_id: number }[]) {
-        if (exact || row.to_id !== id) seen.add(row.to_id);
-        if (deep) queue.push(row.to_id);
-      }
-    }
-  }
-  return [...seen];
+  if (!include.length) return exact ? [id] : [];
+  const types = [...new Set(include.map((kind) => RELATION_TYPE[kind]))];
+  const edges = db.prepare(`SELECT from_id AS "from", to_id AS "to", type FROM concept_relations WHERE type IN (${types.map(() => "?").join(",")})`).all(...types) as { from: number; to: number; type: string }[];
+  return relatedIds(id, edges, include, exact);
 }
 
 /** A concept and everything narrower than it, at any depth. */

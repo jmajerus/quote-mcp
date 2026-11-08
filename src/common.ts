@@ -14,6 +14,54 @@ export class ToolError extends Error {
 /** Old-site relation names, as people read them; "inverse" pairs are opposites (acceptance, rejection). */
 export const RELATION_LABEL: Record<string, string> = { broader: "broader", narrower: "narrower", related: "related", inverse: "opposite" };
 
+/** Relations a concept search can follow. Narrower and broader run the whole chain; related and opposite are one step. */
+export const SEARCH_RELATIONS = ["narrower", "broader", "related", "opposite"] as const;
+export type SearchRelation = (typeof SEARCH_RELATIONS)[number];
+
+export const RELATION_TYPE: Record<SearchRelation, string> = { narrower: "narrower", broader: "broader", related: "related", opposite: "inverse" };
+
+/** What a concept search keeps. No value means the concept named; `none` means nothing checked. */
+export function includeChoice(values: string[] | null): { exact: boolean; include: SearchRelation[] } {
+  if (!values) return { exact: true, include: [] };
+  const asked = new Set(values.flatMap((v) => v.split(",")).map((v) => v.trim()).filter((v) => v && v !== "none"));
+  return { exact: asked.has("exact"), include: SEARCH_RELATIONS.filter((kind) => asked.has(kind)) };
+}
+
+/** One `include` query value for the choices. */
+export function includeValue(exact: boolean, include: readonly SearchRelation[]): string {
+  return [...(exact ? ["exact" as const] : []), ...include].join(",") || "none";
+}
+
+/** The concept when `exact` is set, plus those reached by following each named relation from it. */
+export function relatedIds(id: number, edges: { from: number; to: number; type: string }[], include: readonly SearchRelation[], exact = true): number[] {
+  const next = new Map<string, Map<number, number[]>>();
+  for (const edge of edges) {
+    const byFrom = next.get(edge.type) ?? new Map<number, number[]>();
+    const list = byFrom.get(edge.from) ?? [];
+    list.push(edge.to);
+    byFrom.set(edge.from, list);
+    next.set(edge.type, byFrom);
+  }
+  const seen = new Set<number>();
+  if (exact) seen.add(id);
+  for (const kind of include) {
+    const deep = kind === "narrower" || kind === "broader";
+    const walked = new Set<number>();
+    const queue = [id];
+    const step = next.get(RELATION_TYPE[kind]);
+    while (queue.length) {
+      const current = queue.pop()!;
+      if (walked.has(current)) continue;
+      walked.add(current);
+      for (const to of step?.get(current) ?? []) {
+        if (exact || to !== id) seen.add(to);
+        if (deep) queue.push(to);
+      }
+    }
+  }
+  return [...seen];
+}
+
 /** Words and "quoted phrases" as an FTS5 query: every term required, a trailing * kept as a prefix match. */
 export function ftsQuery(text: string): string {
   const terms = text.match(/"[^"]+"|\S+/g) ?? [];

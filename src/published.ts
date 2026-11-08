@@ -1,4 +1,4 @@
-import { RELATION_LABEL, ToolError, ftsQuery } from "./common.js";
+import { RELATION_LABEL, RELATION_TYPE, ToolError, ftsQuery, relatedIds, type SearchRelation } from "./common.js";
 import type { Intro } from "./intro.js";
 
 /**
@@ -48,6 +48,11 @@ export interface Search {
   query?: string;
   /** Only records tagged with one of these concepts. */
   conceptIds?: number[];
+  /** Part of an author's name, a chapter author, or an attribution. */
+  author?: string;
+  /** Part of a work's title, or its citekey. */
+  workText?: string;
+  kind?: "quote" | "note";
   work?: number;
   /** Newest first, rather than by id (or by page within a work). */
   newest?: boolean;
@@ -143,6 +148,16 @@ export class Published {
       ?? rows.find((c) => json<string[]>(c.former_slugs, []).includes(n));
     if (!hit) throw new ToolError(`No concept "${name}".`);
     return { id: hit.id, scheme: hit.scheme, slug: hit.slug, label: hit.label };
+  }
+
+  /** The concept when `exact` is set, plus those reached by following each named relation from it. */
+  async relatedConcepts(name: string, include: readonly SearchRelation[], exact = true): Promise<number[]> {
+    const c = await this.findConcept(name);
+    if (!include.length) return exact ? [c.id] : [];
+    const types = [...new Set(include.map((kind) => RELATION_TYPE[kind]))];
+    const edges = await this.store.all<{ from: number; to: number; type: string }>(
+      `SELECT from_id AS "from", to_id AS "to", type FROM relations WHERE type IN (${types.map(() => "?").join(",")})`, types);
+    return relatedIds(c.id, edges, include, exact);
   }
 
   /** A concept and everything narrower than it, at any depth. */
@@ -278,6 +293,19 @@ export class Published {
       snippet = "CASE r.kind WHEN 'note' THEN snippet(records_fts, 1, '«', '»', '…', 24) ELSE snippet(records_fts, 0, '«', '»', '…', 24) END";
     }
     if (args.conceptIds) where.push(`r.id IN (SELECT record_id FROM record_concepts WHERE concept_id IN (${ids(args.conceptIds)}))`);
+    if (args.author?.trim()) {
+      where.push("(EXISTS (SELECT 1 FROM works w WHERE w.id = r.work_id AND lower(w.authors) LIKE ?) OR lower(COALESCE(r.attribution, '')) LIKE ? OR lower(COALESCE(r.chapter_author, '')) LIKE ?)");
+      const like = `%${args.author.toLowerCase()}%`;
+      params.push(like, like, like);
+    }
+    if (args.workText?.trim()) {
+      where.push("EXISTS (SELECT 1 FROM works w WHERE w.id = r.work_id AND (lower(w.title) LIKE ? OR lower(COALESCE(w.citekey, '')) = ?))");
+      params.push(`%${args.workText.toLowerCase()}%`, args.workText.toLowerCase());
+    }
+    if (args.kind === "quote" || args.kind === "note") {
+      where.push("r.kind = ?");
+      params.push(args.kind);
+    }
     if (args.work !== undefined) {
       where.push("r.work_id = ?");
       params.push(args.work);
