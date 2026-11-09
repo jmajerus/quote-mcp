@@ -3,7 +3,7 @@ import { type BiblioRecord } from "./bibkeys.js";
 import { fullTitle, normalizedTitle, yearOf } from "./text.js";
 
 /**
- * A one-time fill of Zotero authors from the old Drupal catalogue. Better BibTeX builds a citekey from the
+ * A one-time fill of Zotero authors from the retired Drupal site's catalogue. Better BibTeX builds a citekey from the
  * author, and an item with no author gets a key that starts from the title. This adds the catalogue's authors
  * where the item has none. It does not change a citekey: Better BibTeX refreshes that after the author is there.
  */

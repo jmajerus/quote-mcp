@@ -39,7 +39,7 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *       but Zotero. The dry run lists what would move, and saves nothing.
  *   quote-mcp audit [--kind <kind>] [--id <n>] [--json]
  *       Compares typed quotes with their stored raw, and changes nothing. --id shows one side by side.
- *   quote-mcp authors [--apply]   Adds authors from the old catalogue to Zotero items in the Business and
+ *   quote-mcp authors [--apply]   One time: adds authors from the retired site's catalogue to Zotero items in the Business and
  *                                 Literature collections that have none. Prints the plan; --apply writes it.
  *   quote-mcp repair [--dry-run] [--id <n>] [--json]
  *       Repairs typed quotes from their stored raw where the reading is clean, and lists the rest for a person.
@@ -473,7 +473,7 @@ async function authorsCommand() {
   }
 }
 
-/** Rewrites Drupal [bib] markers as the work's Better BibTeX citekey. */
+/** One time: rewrites [bib] markers the retired Drupal site left behind as the work's Better BibTeX citekey. */
 async function citekeysCommand() {
   onlyFlags("citekeys", ["--dry-run"]);
   const dryRun = flag("--dry-run");
@@ -482,7 +482,7 @@ async function citekeysCommand() {
     const url = process.env.QUOTE_DRUPAL_URL;
     const catalogue = url ? await loadBiblioCatalogue(url) : [];
     if (!url) console.log("QUOTE_DRUPAL_URL is unset, so only citekeys already in the Zotero mirror are used.");
-    else console.log(`The old catalogue has ${catalogue.length} citekeys.`);
+    else console.log(`The retired site's catalogue has ${catalogue.length} citekeys.`);
     const report = canonicalizeCitekeys(db, { dryRun, catalogue });
     const followed = report.refreshed ? `, ${report.refreshed} stored citekey${report.refreshed === 1 ? "" : "s"} followed a newer Better BibTeX key` : "";
     console.log(`${report.quotes} quote${report.quotes === 1 ? "" : "s"}, ${report.markers} marker${report.markers === 1 ? "" : "s"}. ${report.resolved} resolved to a Better BibTeX citekey, ${report.kept} left as the old key${followed}.`);

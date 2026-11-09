@@ -173,7 +173,7 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
         chapter_author = @chapter_author, comment = @comment, attribution = @attribution, source_url = @source_url, status = @status,
         grade = @grade, flags = @flags, updated_at = @stamp, updated_by = @actor WHERE id = @id`);
 
-    // A [bib] marker is stored as the work's Pandoc citekey, so a later import of the same note doesn't put the marker back.
+    // Drupal is retired. A note copied from it can still carry a [bib] marker, and that is stored as the work's Pandoc citekey so a later import doesn't put the marker back.
     const cite = citekeyResolver(db);
     const fieldsOf = (q: Incoming) => {
       const p = q.parsed;

@@ -25,11 +25,11 @@ export function visible(v: Visibility): string {
 
 // --- Quote text ----------------------------------------------------------------------------------
 
-/** A Drupal `[bib]Key[/bib]` marker. The key is the old catalogue's, such as Ryan1991. */
+/** A `[bib]Key[/bib]` marker left by the retired Drupal site. The key is that catalogue's, such as Ryan1991. */
 const BIB_MARKER = /\[bib\]([^[\]]*?)\[\/bib\]/gi;
 
 /**
- * `[bib]Key[/bib]` as a Pandoc citekey. `resolve` turns the old catalogue key into the work's Better BibTeX
+ * `[bib]Key[/bib]` as a Pandoc citekey. `resolve` turns the retired site's key into the work's Better BibTeX
  * citekey; without one, the old key is kept, so a citation is never dropped.
  */
 export function citekeysIn(text: string, resolve: (key: string) => string = (key) => key): string {

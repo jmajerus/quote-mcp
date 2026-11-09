@@ -515,7 +515,8 @@ server has public pages, off unless they're turned on.
     it's shown and searched only with `QUOTE_PUBLIC_NOTES=all`.
   - The old site's markup is tidied for display: `[bib]Key[/bib]` markers
     (in-text citations of its Biblio records) are Pandoc citekeys, and
-    paired `*asterisks*` are emphasis. `quote-mcp citekeys` writes each
+    paired `*asterisks*` are emphasis. Drupal is retired, so
+    `quote-mcp citekeys` is the one-time migration that writes each
     one's Better BibTeX citekey into the stored text and comments.
   - Public pages are cacheable, unlike `/admin`.
 - **Public API.** The map's `/api` routes, cut to public fields: the graph,

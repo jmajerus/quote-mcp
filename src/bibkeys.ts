@@ -8,10 +8,11 @@ import { citekeysIn } from "./public.js";
 import { fullTitle, normalizedTitle, quoteKey, shareAuthor, yearOf } from "./text.js";
 
 /**
- * Drupal `[bib]Ryan1991[/bib]` markers as Better BibTeX Pandoc citekeys (`[@ryan1991driving]`).
- * A current citekey that is the old key, or the old key plus its title word, wins. When that misses or
- * matches several, the old catalogue's title and year pick the work. A key that is still ambiguous, or
- * names no work, stays `[@Ryan1991]`: nothing is invented.
+ * One-time migration of `[bib]Ryan1991[/bib]` markers the retired Drupal site left in stored quotes,
+ * as Better BibTeX Pandoc citekeys (`[@ryan1991driving]`). A current citekey that is the old key, or the
+ * old key plus its title word, wins. When that misses or matches several, the retired site's catalogue
+ * picks the work by title and year. A key that is still ambiguous, or names no work, stays `[@Ryan1991]`:
+ * nothing is invented. Run again only when Better BibTeX has given a remembered item a new citekey.
  */
 
 export interface BiblioRecord { citekey: string; title: string; year: string | null; authors: string[] }
@@ -173,9 +174,10 @@ function ensureAliases(db: DB): void {
 }
 
 /**
- * Rewrites `[bib]` markers in quote text and comments. A resolved key is remembered with its Zotero item,
- * so a later import writes the same citekey without the catalogue, and a Better BibTeX refresh of that
- * item is followed: a stored `[@old]` is rewritten. `--dry-run` reports the rewrite and saves nothing.
+ * Rewrites leftover `[bib]` markers in quote text and comments. A resolved key is remembered with its
+ * Zotero item, so a later import of a note that still carries the marker writes the same citekey, and a
+ * Better BibTeX refresh of that item is followed: a stored `[@old]` is rewritten. `--dry-run` reports
+ * the rewrite and saves nothing.
  */
 export function canonicalizeCitekeys(db: DB, { dryRun = false, catalogue = [], actor = "citekeys" }: { dryRun?: boolean; catalogue?: BiblioRecord[]; actor?: string } = {}): CitekeyReport {
   const works = citedWorks(db);
@@ -235,7 +237,7 @@ export function canonicalizeCitekeys(db: DB, { dryRun = false, catalogue = [], a
         if (written.text === row.text && commentText === row.comment) continue;
         report.quotes++;
         const reason = row.text.includes("[bib]") || (row.comment ?? "").includes("[bib]")
-          ? "Drupal [bib] citekey rewritten as a Pandoc citekey"
+          ? "Leftover [bib] citekey rewritten as a Pandoc citekey"
           : "Stored citekey followed the item's Better BibTeX citekey";
         if (written.text !== row.text) history.run(row.id, stamp, row.text, written.text, actor, reason);
         if (comment && comment.text !== row.comment) history.run(row.id, stamp, row.comment, comment.text, actor, reason);
@@ -265,7 +267,7 @@ export function canonicalizeCitekeys(db: DB, { dryRun = false, catalogue = [], a
   return report;
 }
 
-/** The old site's catalogue, from QUOTE_DRUPAL_URL: `biblio.biblio_citekey` with its title, year, and authors. */
+/** The retired site's catalogue, from QUOTE_DRUPAL_URL: `biblio.biblio_citekey` with its title, year, and authors. */
 export function loadBiblioCatalogue(url: string): Promise<BiblioRecord[]> {
   let parsed: URL;
   try {
@@ -300,13 +302,13 @@ export function loadBiblioCatalogue(url: string): Promise<BiblioRecord[]> {
     child.stderr.on("data", (chunk: Buffer) => { err += chunk.toString(); });
     child.on("error", (error: NodeJS.ErrnoException) => {
       rmSync(dir, { recursive: true, force: true });
-      reject(error.code === "ENOENT" ? new Error("The mysql client is not installed, so the old catalogue could not be read.") : error);
+      reject(error.code === "ENOENT" ? new Error("The mysql client is not installed, so the retired site's catalogue could not be read.") : error);
     });
     child.on("close", (code) => {
       rmSync(dir, { recursive: true, force: true });
       if (code !== 0) {
         const line = err.split("\n").map((s) => s.trim()).find((s) => s.startsWith("ERROR")) ?? "mysql failed";
-        reject(new Error(`The old catalogue could not be read (${line}).`));
+        reject(new Error(`The retired site's catalogue could not be read (${line}).`));
         return;
       }
       // The SET statement prints nothing; each selected row is one JSON object.

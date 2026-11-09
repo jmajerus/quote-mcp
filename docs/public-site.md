@@ -38,8 +38,9 @@ paragraphs make the front page's introduction. Each collection's introduction is
   `/mcp`.
 
 The old site's markup is tidied for display: a leftover `[bib]Key[/bib]` marker is shown as a Pandoc citekey
-(`[@Key]`), and `*emphasis*` is shown as emphasis. `quote-mcp citekeys` writes the work's Better BibTeX citekey
-into the stored text and comments, which is what a later snapshot publishes.
+(`[@Key]`), and `*emphasis*` is shown as emphasis. Drupal is retired. `quote-mcp citekeys` is the one-time
+migration that writes each marker's Better BibTeX citekey into the stored text and comments, which is what a
+later snapshot publishes.
 
 ## The snapshot
 
