@@ -26,6 +26,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
     "better-sqlite3": "^13.0.3",
+    "citeproc": "^2.4.63",
     "entities": "^8.1.0",
     "jose": "^6.2.14",
     "node-html-parser": "^9.0.5",

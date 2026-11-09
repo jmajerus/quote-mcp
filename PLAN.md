@@ -517,7 +517,8 @@ server has public pages, off unless they're turned on.
     (in-text citations of its Biblio records) are Pandoc citekeys, and
     paired `*asterisks*` are emphasis. Drupal is retired, so
     `quote-mcp citekeys` is the one-time migration that writes each
-    one's Better BibTeX citekey into the stored text and comments.
+    one's Better BibTeX citekey into the stored text and comments. A
+    snapshot expands them as Pandoc does, in Chicago author-date.
   - Public pages are cacheable, unlike `/admin`.
 - **Public API.** The map's `/api` routes, cut to public fields: the graph,
   concepts, and sets at `catalogue`, and quotes at `quotes`. On the public

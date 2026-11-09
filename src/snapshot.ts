@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import type { DB } from "./db.js";
+import { type CslItem, citationRenderer } from "./citations.js";
+import { citekeyOf, zoteroToCsl } from "./csl.js";
 import { type Visibility, bibtex, plainText, visible } from "./public.js";
 import { citeQuote, locatorText, workSummary } from "./queries.js";
 import { type ConceptSet, currentSets, definitionOf, resolveSet } from "./sets.js";
@@ -78,10 +80,25 @@ function pageOf(kind: string, locator: string | null): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+/** CSL for every mirrored citekey, so a published `[@key]` can be expanded. The first item with a key wins. */
+function cslLibrary(store: DB): Map<string, CslItem> {
+  const library = new Map<string, CslItem>();
+  const rows = store.prepare("SELECT key, data FROM zotero_items WHERE deleted = 0 AND item_type NOT IN ('note', 'attachment', 'annotation')").all() as { key: string; data: string }[];
+  for (const row of rows) {
+    const data = JSON.parse(row.data) as Parameters<typeof zoteroToCsl>[1];
+    const citekey = citekeyOf(data);
+    if (!citekey || library.has(citekey)) continue;
+    library.set(citekey, zoteroToCsl(row.key, data));
+  }
+  return library;
+}
+
 /** Copies what's public into an empty snapshot database. */
 function fill(store: DB, snap: Database.Database, o: SnapshotOptions): void {
   const words = o.level === "quotes";
   const shareNotes = words && o.notes;
+  const render = words ? citationRenderer(cslLibrary(store)) : (text: string) => text;
+  const show = (text: string) => render(plainText(text));
   const insert = (table: string, row: Row) => {
     const keys = Object.keys(row);
     snap.prepare(`INSERT INTO ${table} (${keys.join(", ")}) VALUES (${keys.map((k) => `@${k}`).join(", ")})`).run(row);
@@ -107,9 +124,9 @@ function fill(store: DB, snap: Database.Database, o: SnapshotOptions): void {
     const comment = typeof q.comment === "string" && q.comment.trim() ? q.comment.trim() : null;
     const work = (q.work_id as number) ?? null;
     if (work !== null) works.add(work);
-    const text = words && !note ? plainText(q.text as string) : "";
-    const noteWords = words && note ? comment : null;
-    const shownComment = shareNotes && !note ? comment : null;
+    const text = words && !note ? show(q.text as string) : "";
+    const noteWords = words && note && comment ? show(comment) : null;
+    const shownComment = shareNotes && !note && comment ? show(comment) : null;
     insert("records", {
       id: q.id, kind: note ? "note" : "quote", work_id: work, text, note: noteWords, comment: shownComment,
       locator: words ? locatorText(q.locator_kind as string, (q.locator as string) ?? null) : null,

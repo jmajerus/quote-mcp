@@ -28,6 +28,7 @@ export const SETTINGS: Setting[] = [
   { name: "QUOTE_ZOTERO_LIBRARY", group: "Zotero (required)", about: "the Zotero library to read: users/<id> or groups/<id>" },
   { name: "QUOTE_ZOTERO_API_KEY", group: "Zotero (required)", about: "a Zotero API key; read-only is enough. Not needed when QUOTE_ZOTERO_API is a LAN mirror (holdings-mcp)", secret: true },
   { name: "QUOTE_ZOTERO_SOURCES", group: "Import", about: "other Zotero libraries to import quote notes from, comma-separated" },
+  { name: "QUOTE_DRUPAL_URL", group: "Import", about: "the retired site's catalogue (mysql://user:pass@host/database), for the one-time citekeys and authors commands", secret: true },
   { name: "QUOTE_DICTIONARY", group: "Import", about: "a word list for the OCR check", fallback: "/usr/share/dict/words" },
   { name: "QUOTE_ZOTERO_API", group: "Import", about: "the Zotero API, or holdings-mcp's copy of it (http://<host>:8000/zotero)", fallback: "https://api.zotero.org" },
   { name: "QUOTE_ZOTERO_WRITE_KEY", group: "Import", about: "a Zotero API key that can create items, for filing a print book from its ISBN. Unset, QUOTE_ZOTERO_API_KEY is used", secret: true },

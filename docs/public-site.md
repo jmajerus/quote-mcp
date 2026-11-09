@@ -39,8 +39,10 @@ paragraphs make the front page's introduction. Each collection's introduction is
 
 The old site's markup is tidied for display: a leftover `[bib]Key[/bib]` marker is shown as a Pandoc citekey
 (`[@Key]`), and `*emphasis*` is shown as emphasis. Drupal is retired. `quote-mcp citekeys` is the one-time
-migration that writes each marker's Better BibTeX citekey into the stored text and comments, which is what a
-later snapshot publishes.
+migration that writes each marker's Better BibTeX citekey into the stored text and comments. A snapshot
+then expands those citekeys the way Pandoc does, in Chicago author-date: `[@ryan1991driving, p. 12]` is
+shown as `(Ryan and Oestreich 1991, 12)`. A key with no CSL record stays `[@Key]`. The stored text keeps
+the citekey, and Cite this still shows the Pandoc citation to paste into a manuscript.
 
 ## The snapshot
 
