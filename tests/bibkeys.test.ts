@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { auditOf } from "../src/audit.js";
-import { canonicalizeCitekeys, citekeyResolver, resolveBiblioKey, type CitedWork } from "../src/bibkeys.js";
+import { canonicalizeCitekeys, citekeyResolver, citedWorks, resolveBiblioKey, type CitedWork } from "../src/bibkeys.js";
 import { type DB, openDb } from "../src/db.js";
 import { runImport } from "../src/import.js";
 
@@ -24,8 +24,8 @@ let db: DB;
 beforeEach(() => { db = openDb(":memory:"); });
 
 describe("Better BibTeX citekeys", () => {
-  const driving: CitedWork = { title: "Driving Fear Out of the Workplace", year: "1991", authors: ["Ryan, Kathleen"], citekey: "ryan1991driving" };
-  const other: CitedWork = { title: "Some Other Ryan Book", year: "1991", authors: ["Ryan, Kathleen"], citekey: "ryan1991other" };
+  const driving: CitedWork = { library: "users/1", key: "RYAN0001", title: "Driving Fear Out of the Workplace", year: "1991", authors: ["Ryan, Kathleen"], citekey: "ryan1991driving" };
+  const other: CitedWork = { library: "users/1", key: "RYAN0002", title: "Some Other Ryan Book", year: "1991", authors: ["Ryan, Kathleen"], citekey: "ryan1991other" };
 
   it("uses the one current citekey that adds the title word", () => {
     expect(resolveBiblioKey("Ryan1991", [driving], [])).toBe("ryan1991driving");
@@ -75,5 +75,41 @@ describe("Better BibTeX citekeys", () => {
     addItem(db, "NOTE0001", { itemType: "note", parentItem: "RYAN0001", note: `<span class="quote">"People stay silent."</span>\nSee also [bib]Ryan1991[/bib]` });
     runImport(db, { primary: "users/1", sources: ["users/1"] });
     expect(db.prepare("SELECT comment FROM quotes WHERE text LIKE '%stay silent%'").pluck().get()).toBe("See also [@ryan1991driving]");
+  });
+
+  it("matches a catalogue author to an author, and uses an editor only when the item has no author", () => {
+    const row = { citekey: "Ryan1991", title: "Driving Fear Out of the Workplace", year: "1991", authors: ["Ryan, Kathleen"] };
+    addItem(db, "SMITH001", {
+      ...book("Driving Fear Out of the Workplace", "1991", "Smith", "smith1991driving"),
+      creators: [{ creatorType: "author", lastName: "Smith", firstName: "A." }, { creatorType: "editor", lastName: "Ryan", firstName: "Kathleen" }],
+    });
+    addItem(db, "RYAN0001", book("Driving Fear Out of the Workplace", "1991", "Ryan", "ryan1991driving"));
+    expect(resolveBiblioKey("Ryan1991", citedWorks(db), [row])).toBe("ryan1991driving");
+
+    db.prepare("DELETE FROM zotero_items").run();
+    addItem(db, "EDIT0001", { itemType: "book", title: "Driving Fear Out of the Workplace", date: "1991", citationKey: "ryan1991driving", creators: [{ creatorType: "editor", lastName: "Ryan", firstName: "Kathleen" }] });
+    expect(resolveBiblioKey("Ryan1991", citedWorks(db), [row])).toBe("ryan1991driving");
+  });
+
+  it("follows a Better BibTeX refresh of the remembered item, and ignores a saved citekey that no item has", () => {
+    addItem(db, "RYAN0001", book("Driving Fear Out of the Workplace", "1991", "Ryan", "ryan1991driving"));
+    const id = addQuote(db, "People stay silent[bib]Ryan1991[/bib].", "See [@ryan1991driving, p. 12].",
+      `<span class="quote">"People stay silent[bib]Ryan1991[/bib]."</span>\nSee [@ryan1991driving, p. 12].`);
+    canonicalizeCitekeys(db, {});
+    expect(db.prepare("SELECT zotero_library, zotero_key FROM citekey_aliases WHERE biblio_key = 'Ryan1991'").get()).toEqual({ zotero_library: "users/1", zotero_key: "RYAN0001" });
+
+    db.prepare("UPDATE zotero_items SET data = ? WHERE key = 'RYAN0001'").run(JSON.stringify(book("Driving Fear Out of the Workplace", "1991", "Ryan", "ryanDrivingFearOut1991")));
+    expect(citekeyResolver(db)("Ryan1991")).toBe("ryanDrivingFearOut1991");
+    const again = canonicalizeCitekeys(db, {});
+    expect(again.refreshed).toBe(2);
+    expect(db.prepare("SELECT text, comment FROM quotes WHERE id = ?").get(id)).toEqual({
+      text: "People stay silent[@ryanDrivingFearOut1991].", comment: "See [@ryanDrivingFearOut1991, p. 12].",
+    });
+    expect(db.prepare("SELECT citekey FROM citekey_aliases WHERE biblio_key = 'Ryan1991'").pluck().get()).toBe("ryanDrivingFearOut1991");
+
+    db.prepare("UPDATE citekey_aliases SET zotero_library = NULL, zotero_key = NULL").run();
+    db.prepare("UPDATE zotero_items SET data = ? WHERE key = 'RYAN0001'").run(JSON.stringify(book("Driving Fear Out of the Workplace", "1991", "Ryan", "ryanShort1991")));
+    expect(citekeyResolver(db)("Ryan1991")).toBe("Ryan1991");
+    expect(citekeyResolver(db, [{ citekey: "Ryan1991", title: "Driving Fear Out of the Workplace", year: "1991", authors: ["Ryan, Kathleen"] }])("Ryan1991")).toBe("ryanShort1991");
   });
 });

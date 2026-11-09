@@ -459,7 +459,7 @@ async function authorsCommand() {
       for (const gap of plan.gaps) console.log(`${gap.library} ${gap.key} ${gap.citekey ?? ""} (${gap.why}) ${gap.title}`);
     }
     if (!apply) {
-      console.log("\nNothing was written to Zotero. Run with --apply to add these authors. Better BibTeX refreshes the citekeys after that.");
+      console.log("\nNothing was written to Zotero. Run with --apply to add these authors. Better BibTeX refreshes the citekeys after that; run citekeys again so a stored citation follows.");
       return;
     }
     const apiKey = process.env.QUOTE_ZOTERO_WRITE_KEY?.trim() || process.env.QUOTE_ZOTERO_API_KEY?.trim() || "";
@@ -484,7 +484,8 @@ async function citekeysCommand() {
     if (!url) console.log("QUOTE_DRUPAL_URL is unset, so only citekeys already in the Zotero mirror are used.");
     else console.log(`The old catalogue has ${catalogue.length} citekeys.`);
     const report = canonicalizeCitekeys(db, { dryRun, catalogue });
-    console.log(`${report.quotes} quote${report.quotes === 1 ? "" : "s"}, ${report.markers} marker${report.markers === 1 ? "" : "s"}. ${report.resolved} resolved to a Better BibTeX citekey, ${report.kept} left as the old key.`);
+    const followed = report.refreshed ? `, ${report.refreshed} stored citekey${report.refreshed === 1 ? "" : "s"} followed a newer Better BibTeX key` : "";
+    console.log(`${report.quotes} quote${report.quotes === 1 ? "" : "s"}, ${report.markers} marker${report.markers === 1 ? "" : "s"}. ${report.resolved} resolved to a Better BibTeX citekey, ${report.kept} left as the old key${followed}.`);
     for (const key of report.keys) console.log(`  ${key.from} → ${key.to} (${key.count})`);
     if (dryRun && report.quotes) console.log("\nNothing was saved. Run without --dry-run to write these citekeys.");
     else if (report.quotes) console.log("\nSaved. A quote's history has the text from before.");
