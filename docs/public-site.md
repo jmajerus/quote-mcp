@@ -37,8 +37,9 @@ paragraphs make the front page's introduction. Each collection's introduction is
 - **Never:** unparsed quotes, flags, suspect words, plain tags, origins, history, the worklists, `/admin`, and
   `/mcp`.
 
-The old site's markup is tidied for display: `[bib]…[/bib]` markers are dropped and `*emphasis*` is shown as
-emphasis. The store keeps the text as imported.
+The old site's markup is tidied for display: a leftover `[bib]Key[/bib]` marker is shown as a Pandoc citekey
+(`[@Key]`), and `*emphasis*` is shown as emphasis. `quote-mcp citekeys` writes the work's Better BibTeX citekey
+into the stored text and comments, which is what a later snapshot publishes.
 
 ## The snapshot
 

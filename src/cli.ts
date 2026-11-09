@@ -3,6 +3,8 @@ import Database from "better-sqlite3";
 import { userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { BUSINESS_AND_LITERATURE, addAuthors, authorFills, mirrorItems } from "./authors.js";
+import { canonicalizeCitekeys, loadBiblioCatalogue } from "./bibkeys.js";
 import { corpusClient, corpusConfig, followAnchors, importCorpusQuotes, retryAnchors, storeWriter, zoteroRefresher } from "./capture.js";
 import { SCHEMA_VERSION, openDb, openExisting } from "./db.js";
 import { reviewProposal } from "./edits.js";
@@ -37,6 +39,8 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *       but Zotero. The dry run lists what would move, and saves nothing.
  *   quote-mcp audit [--kind <kind>] [--id <n>] [--json]
  *       Compares typed quotes with their stored raw, and changes nothing. --id shows one side by side.
+ *   quote-mcp authors [--apply]   Adds authors from the old catalogue to Zotero items in the Business and
+ *                                 Literature collections that have none. Prints the plan; --apply writes it.
  *   quote-mcp repair [--dry-run] [--id <n>] [--json]
  *       Repairs typed quotes from their stored raw where the reading is clean, and lists the rest for a person.
  *       --id applies the reading to one record, even a flagged one, unless it's edited or verified.
@@ -432,6 +436,63 @@ function auditCommand() {
   console.log("\nA record can be in several kinds. quote-mcp audit --id <n> shows one side by side. This changed nothing.");
 }
 
+/** Adds catalogue authors to Zotero items in Business and Literature that have none. */
+async function authorsCommand() {
+  onlyFlags("authors", ["--apply"]);
+  const apply = flag("--apply");
+  const url = process.env.QUOTE_DRUPAL_URL;
+  if (!url) throw new Error("Set QUOTE_DRUPAL_URL. Nothing was done.");
+  const db = openExisting();
+  try {
+    const catalogue = await loadBiblioCatalogue(url);
+    const plan = authorFills(mirrorItems(db), catalogue, BUSINESS_AND_LITERATURE);
+    const byLibrary = new Map<string, number>();
+    for (const fill of plan.fills) byLibrary.set(fill.library, (byLibrary.get(fill.library) ?? 0) + 1);
+    console.log(`${plan.fills.length} items would gain an author. ${plan.gaps.length} have no single catalogue record.`);
+    for (const [library, n] of byLibrary) console.log(`  ${library}: ${n}`);
+    for (const fill of plan.fills) {
+      const names = fill.creators.filter((c) => c.creatorType === "author").map((c) => c.lastName ? `${c.lastName}, ${c.firstName ?? ""}`.replace(/, $/, "") : c.name).join("; ");
+      console.log(`${fill.library} ${fill.key} ${fill.citekey ?? ""} ← ${names}`);
+    }
+    if (plan.gaps.length) {
+      console.log("\nLeft as they are:");
+      for (const gap of plan.gaps) console.log(`${gap.library} ${gap.key} ${gap.citekey ?? ""} (${gap.why}) ${gap.title}`);
+    }
+    if (!apply) {
+      console.log("\nNothing was written to Zotero. Run with --apply to add these authors. Better BibTeX refreshes the citekeys after that.");
+      return;
+    }
+    const apiKey = process.env.QUOTE_ZOTERO_WRITE_KEY?.trim() || process.env.QUOTE_ZOTERO_API_KEY?.trim() || "";
+    if (!apiKey) throw new Error("Set QUOTE_ZOTERO_WRITE_KEY. Nothing was written.");
+    const result = await addAuthors(plan.fills, apiKey);
+    console.log(`\nWrote authors on ${result.written}. Left ${result.skipped} that already had an author.`);
+    for (const failure of result.failed) console.log(`${failure.key}: ${failure.error}`);
+    if (result.failed.length) throw new Error(`${result.failed.length} item${result.failed.length === 1 ? "" : "s"} were not updated.`);
+  } finally {
+    db.close();
+  }
+}
+
+/** Rewrites Drupal [bib] markers as the work's Better BibTeX citekey. */
+async function citekeysCommand() {
+  onlyFlags("citekeys", ["--dry-run"]);
+  const dryRun = flag("--dry-run");
+  const db = dryRun ? openExisting() : openDb();
+  try {
+    const url = process.env.QUOTE_DRUPAL_URL;
+    const catalogue = url ? await loadBiblioCatalogue(url) : [];
+    if (!url) console.log("QUOTE_DRUPAL_URL is unset, so only citekeys already in the Zotero mirror are used.");
+    else console.log(`The old catalogue has ${catalogue.length} citekeys.`);
+    const report = canonicalizeCitekeys(db, { dryRun, catalogue });
+    console.log(`${report.quotes} quote${report.quotes === 1 ? "" : "s"}, ${report.markers} marker${report.markers === 1 ? "" : "s"}. ${report.resolved} resolved to a Better BibTeX citekey, ${report.kept} left as the old key.`);
+    for (const key of report.keys) console.log(`  ${key.from} → ${key.to} (${key.count})`);
+    if (dryRun && report.quotes) console.log("\nNothing was saved. Run without --dry-run to write these citekeys.");
+    else if (report.quotes) console.log("\nSaved. A quote's history has the text from before.");
+  } finally {
+    db.close();
+  }
+}
+
 /** Repairs typed quotes from their stored raw, by the pattern they were typed to. */
 function repairCommand() {
   onlyFlags("repair", ["--dry-run", "--id", "--json"]);
@@ -525,7 +586,7 @@ function proposalsCommand() {
 
 const commands: Record<string, () => unknown> = {
   import: importCommand, migrate: migrateCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, sets: setsCommand, publish: publishCommand, config: configCommand, serve: serveCommand,
-  terms: termsCommand, propose: proposeCommand, "take-corpus-quotes": takeCorpusQuotesCommand, rematch: rematchCommand, audit: auditCommand, repair: repairCommand, proposals: proposalsCommand,
+  terms: termsCommand, propose: proposeCommand, "take-corpus-quotes": takeCorpusQuotesCommand, rematch: rematchCommand, audit: auditCommand, repair: repairCommand, citekeys: citekeysCommand, authors: authorsCommand, proposals: proposalsCommand,
   stdio: () => serveStdio(openReadOnly(), sets(), capture()),
 };
 const command = commands[process.argv[2] ?? ""];

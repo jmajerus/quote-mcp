@@ -106,6 +106,11 @@ CREATE TABLE IF NOT EXISTS concept_sets (
 
 -- Rebuilt from quotes after every import; rowid is the quote id.
 CREATE VIRTUAL TABLE IF NOT EXISTS quotes_fts USING fts5(text, comment, tags, tokenize = 'porter unicode61');
+
+-- An old Biblio citekey (Ryan1991) and the Better BibTeX citekey it names (ryan1991driving).
+CREATE TABLE IF NOT EXISTS citekey_aliases (
+  biblio_key TEXT PRIMARY KEY COLLATE NOCASE, citekey TEXT NOT NULL
+);
 `;
 
 export function openDb(path = process.env.QUOTE_DB ?? "data/quotes.db"): DB {

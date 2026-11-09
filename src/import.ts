@@ -1,4 +1,6 @@
+import { citekeyResolver } from "./bibkeys.js";
 import { type DB, NEXT_QUOTE_ID, now } from "./db.js";
+import { citekeysIn } from "./public.js";
 import { type Suspect, dropCommonUnknowns, suspectTokens } from "./ocr.js";
 import { readMargin } from "./margin.js";
 import { type ParsedNote, noteText, parseNote, readLocator } from "./parse.js";
@@ -171,11 +173,14 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
         chapter_author = @chapter_author, comment = @comment, attribution = @attribution, source_url = @source_url, status = @status,
         grade = @grade, flags = @flags, updated_at = @stamp, updated_by = @actor WHERE id = @id`);
 
+    // A [bib] marker is stored as the work's Pandoc citekey, so a later import of the same note doesn't put the marker back.
+    const cite = citekeyResolver(db);
     const fieldsOf = (q: Incoming) => {
       const p = q.parsed;
+      const text = citekeysIn(p.text ?? "", cite);
       return {
-        kind: q.record ?? "quote", work_id: q.workId, text: p.text ?? "", text_key: quoteKey(p.text), locator_kind: p.locator?.kind ?? "none", locator: p.locator?.value ?? null,
-        chapter_author: p.chapterAuthor ?? null, comment: p.commentary ?? null, attribution: q.attribution ?? null, source_url: p.sourceUrl ?? null,
+        kind: q.record ?? "quote", work_id: q.workId, text, text_key: quoteKey(text), locator_kind: p.locator?.kind ?? "none", locator: p.locator?.value ?? null,
+        chapter_author: p.chapterAuthor ?? null, comment: p.commentary == null ? null : citekeysIn(p.commentary, cite), attribution: q.attribution ?? null, source_url: p.sourceUrl ?? null,
         status: p.grade === "C" ? "unparsed" : "transcribed", grade: p.grade ?? null, flags: JSON.stringify(p.flags), stamp, actor,
       };
     };

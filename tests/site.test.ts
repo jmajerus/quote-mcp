@@ -219,9 +219,9 @@ describe("serving the public site", () => {
 });
 
 describe("old-site markup in quote text", () => {
-  it("drops [bib] markers and renders paired asterisks as emphasis", async () => {
-    expect(plainText("Ryan and Oestreich [bib]Ryan1991[/bib], in their study")).toBe("Ryan and Oestreich, in their study");
-    expect(plainText("The Player Piano[bib]Vonnegut1952[/bib].")).toBe("The Player Piano.");
+  it("shows a [bib] marker as a Pandoc citekey and renders paired asterisks as emphasis", async () => {
+    expect(plainText("Ryan and Oestreich [bib]Ryan1991[/bib], in their study")).toBe("Ryan and Oestreich [@Ryan1991], in their study");
+    expect(plainText("The Player Piano[bib]Vonnegut1952[/bib].")).toBe("The Player Piano[@Vonnegut1952].");
     expect(quoteHtml('Choice is the basis *if* relationships are <equal> and "*loyal*" too')).toBe('Choice is the basis <em>if</em> relationships are &lt;equal&gt; and &quot;<em>loyal</em>&quot; too');
     expect(quoteHtml("in *Organizational America* (1979)")).toBe("in <em>Organizational America</em> (1979)");
     expect(quoteHtml("*Performance appraisals are\nannual")).toBe("*Performance appraisals are\nannual");
