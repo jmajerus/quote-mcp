@@ -216,7 +216,7 @@ function snapshotOptions(): SnapshotOptions | null {
   const notes = siteSetting("QUOTE_PUBLIC_NOTES", process.env, loadSiteSettings(intro));
   if (notes !== "none" && notes !== "all") throw new Error(`The notes setting is "${notes}"; it should be none or all (QUOTE_PUBLIC_NOTES, or notes: in vocab/site.md).`);
   return { level: public_, notes: notes === "all", intro: loadIntro(intro), collections: loadCollections(join(dirname(intro), "collections")),
-    sets: sets(), maps: readMapsFile(process.env.QUOTE_MAP_DIR || undefined) };
+    sets: sets(), maps: readMapsFile(process.env.QUOTE_MAP_DIR || undefined), library: process.env.QUOTE_ZOTERO_LIBRARY || null };
 }
 
 const snapshotLine = (s: ReturnType<typeof buildSnapshot>) =>

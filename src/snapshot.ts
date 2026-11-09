@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import type { DB } from "./db.js";
+import { type CslItem, citationRenderer } from "./citations.js";
+import { citekeyOf, zoteroToCsl } from "./csl.js";
 import { type Visibility, bibtex, plainText, visible } from "./public.js";
 import { citeQuote, locatorText, workSummary } from "./queries.js";
 import { type ConceptSet, currentSets, definitionOf, resolveSet } from "./sets.js";
@@ -53,6 +55,8 @@ export interface SnapshotOptions extends Visibility {
   sets: ConceptSet[];
   /** The maps, as quote-atlas's maps.json lists them. */
   maps: MapEntry[];
+  /** The library whose item wins when two mirrors share a citekey. */
+  library?: string | null;
 }
 
 export interface MapEntry { name: string; title?: string; description?: string; scheme?: string; set?: string; svg?: string }
@@ -78,10 +82,38 @@ function pageOf(kind: string, locator: string | null): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+/**
+ * CSL for every mirrored citekey, so a published `[@key]` can be expanded. The primary library's single
+ * item wins. A key shared by other libraries, or twice in the primary one, stays unexpanded.
+ */
+function cslLibrary(store: DB, primary: string | null): Map<string, CslItem> {
+  const rows = store.prepare(`SELECT library, key, data FROM zotero_items
+    WHERE deleted = 0 AND item_type NOT IN ('note', 'attachment', 'annotation')
+    ORDER BY library = ? DESC, library, key`).all(primary ?? "") as { library: string; key: string; data: string }[];
+  const byCitekey = new Map<string, { library: string; item: CslItem }[]>();
+  for (const row of rows) {
+    const data = JSON.parse(row.data) as Parameters<typeof zoteroToCsl>[1];
+    const citekey = citekeyOf(data);
+    if (!citekey) continue;
+    const list = byCitekey.get(citekey) ?? [];
+    list.push({ library: row.library, item: zoteroToCsl(row.key, data) });
+    byCitekey.set(citekey, list);
+  }
+  const library = new Map<string, CslItem>();
+  for (const [citekey, items] of byCitekey) {
+    const inPrimary = primary ? items.filter((item) => item.library === primary) : [];
+    if (inPrimary.length === 1) library.set(citekey, inPrimary[0].item);
+    else if (inPrimary.length === 0 && items.length === 1) library.set(citekey, items[0].item);
+  }
+  return library;
+}
+
 /** Copies what's public into an empty snapshot database. */
 function fill(store: DB, snap: Database.Database, o: SnapshotOptions): void {
   const words = o.level === "quotes";
   const shareNotes = words && o.notes;
+  const render = words ? citationRenderer(cslLibrary(store, o.library ?? null)) : (text: string) => text;
+  const show = (text: string) => render(plainText(text));
   const insert = (table: string, row: Row) => {
     const keys = Object.keys(row);
     snap.prepare(`INSERT INTO ${table} (${keys.join(", ")}) VALUES (${keys.map((k) => `@${k}`).join(", ")})`).run(row);
@@ -107,9 +139,9 @@ function fill(store: DB, snap: Database.Database, o: SnapshotOptions): void {
     const comment = typeof q.comment === "string" && q.comment.trim() ? q.comment.trim() : null;
     const work = (q.work_id as number) ?? null;
     if (work !== null) works.add(work);
-    const text = words && !note ? plainText(q.text as string) : "";
-    const noteWords = words && note ? comment : null;
-    const shownComment = shareNotes && !note ? comment : null;
+    const text = words && !note ? show(q.text as string) : "";
+    const noteWords = words && note && comment ? show(comment) : null;
+    const shownComment = shareNotes && !note && comment ? show(comment) : null;
     insert("records", {
       id: q.id, kind: note ? "note" : "quote", work_id: work, text, note: noteWords, comment: shownComment,
       locator: words ? locatorText(q.locator_kind as string, (q.locator as string) ?? null) : null,

@@ -48,6 +48,7 @@ Only `QUOTE_ZOTERO_LIBRARY` and `QUOTE_ZOTERO_API_KEY` are needed, and the key o
 | `QUOTE_ZOTERO_LIBRARY`, `QUOTE_ZOTERO_API_KEY` | required | The Zotero library (`users/<id>` or `groups/<id>`) and an API key; read-only is enough. The key isn't needed when `QUOTE_ZOTERO_API` is holdings-mcp's copy. |
 | `QUOTE_ZOTERO_WRITE_KEY` | the API key above | A key that can create items. The [capture page](admin-ui.md#capturing-a-quote) uses it to file a print book after its ISBN is accepted. |
 | `QUOTE_ZOTERO_SOURCES` | none | Other Zotero libraries to import quote notes from, comma-separated. |
+| `QUOTE_DRUPAL_URL` | none | The retired site's catalogue, `mysql://user:pass@host/database`. The one-time `citekeys` and `authors` commands read it. `npm run deploy -- --env` copies it. |
 | `QUOTE_MAP_DIR` | none | quote-atlas's built maps, served at `/map/`. |
 | `QUOTE_TERMS_SYNC` | `off` | `on`: the server follows terminology-mcp's `human-work` scheme every minute. Set it in `/etc/quote-mcp/env` only; a second follower would fight the server's cursor. |
 | `TERMINOLOGY_BASE` | `http://terminology-mcp.localdomain:8000` | terminology-mcp on the LAN, where progress reports name the caller; `off` turns following off. |
@@ -101,7 +102,7 @@ The **Deploy Quotes** button in VS Code's status bar runs the deploys, as `npm r
 |---|---|---|
 | Deploy this checkout | `npm run deploy` | Builds, tests, installs this checkout as a new release, migrates the store, builds the public snapshot, restarts, checks `/health`, and rolls back to the previous release if it fails. |
 | Deploy this checkout without tests | `npm run deploy -- --skip-tests` | The same, without the tests. |
-| Push the server's settings | `npm run deploy -- --env` | Copies the server's settings from `.env` into `/etc/quote-mcp/env` and restarts, waiting until the server answers: the Zotero settings (`QUOTE_ZOTERO_API` among them), `QUOTE_WHISPER_URL`, and the D1 proxy's. Only those set in `.env` are replaced. |
+| Push the server's settings | `npm run deploy -- --env` | Copies the server's settings from `.env` into `/etc/quote-mcp/env` and restarts, waiting until the server answers: the Zotero settings (`QUOTE_ZOTERO_API` among them), `QUOTE_DRUPAL_URL`, `QUOTE_WHISPER_URL`, and the D1 proxy's. Only those set in `.env` are replaced. |
 | Deploy the public Worker | `npm run worker:deploy` | Tests, then deploys the public Worker with `CLOUDFLARE_API_TOKEN` from `.env`. |
 
 A release that adds a migration under `worker/migrations` needs it in D1 before the server's drain ships rows
