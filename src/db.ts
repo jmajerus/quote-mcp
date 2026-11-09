@@ -106,6 +106,12 @@ CREATE TABLE IF NOT EXISTS concept_sets (
 
 -- Rebuilt from quotes after every import; rowid is the quote id.
 CREATE VIRTUAL TABLE IF NOT EXISTS quotes_fts USING fts5(text, comment, tags, tokenize = 'porter unicode61');
+
+-- An old Biblio citekey (Ryan1991), the Better BibTeX citekey it names, and the Zotero item that
+-- citekey was on, so a later Better BibTeX refresh of that item is followed.
+CREATE TABLE IF NOT EXISTS citekey_aliases (
+  biblio_key TEXT PRIMARY KEY COLLATE NOCASE, citekey TEXT NOT NULL, zotero_library TEXT, zotero_key TEXT
+);
 `;
 
 export function openDb(path = process.env.QUOTE_DB ?? "data/quotes.db"): DB {
@@ -148,6 +154,10 @@ function migrate(db: DB): void {
   if (!concepts.has("former_slugs")) db.exec("ALTER TABLE concepts ADD COLUMN former_slugs TEXT NOT NULL DEFAULT '[]'");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS concepts_term ON concepts (term_id)");
   // 4: proposals and tag removals, which SCHEMA creates.
+  // The citekey alias remembers which Zotero item it named, once that item is known.
+  const aliases = columns("citekey_aliases");
+  if (!aliases.has("zotero_library")) db.exec("ALTER TABLE citekey_aliases ADD COLUMN zotero_library TEXT");
+  if (!aliases.has("zotero_key")) db.exec("ALTER TABLE citekey_aliases ADD COLUMN zotero_key TEXT");
 }
 
 /**

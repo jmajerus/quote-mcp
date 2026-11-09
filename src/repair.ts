@@ -1,7 +1,9 @@
 import { type AuditRecord, auditStore, beyond, passageRef, words } from "./audit.js";
+import { citekeyResolver } from "./bibkeys.js";
 import { type DB, NEXT_QUOTE_ID, now } from "./db.js";
 import { rebuildSearch } from "./import.js";
 import { PAGE_REFERENCE, type ParsedNote } from "./parse.js";
+import { citekeysIn } from "./public.js";
 import { quoteKey } from "./text.js";
 
 /**
@@ -49,6 +51,8 @@ const ROLLBACK = new Error("dry run");
 /** Applies clean readings to the store, or with dryRun reports them and saves nothing. `only` applies one record, even a flagged one, as a person's decision. */
 export function repairQuotes(db: DB, { dryRun, only, actor = "repair" }: { dryRun?: boolean; only?: number; actor?: string } = {}): RepairResult {
   const stamp = now();
+  const cite = citekeyResolver(db);
+  const form = (text: string | null | undefined) => citekeysIn(text ?? "", cite);
   const result: RepairResult = { repairs: [], forPerson: [], checked: 0, alreadyRight: 0 };
   const flaggedKinds = ["held", "marks_off_pattern", "no_marks", "passage_gone"] as const;
   try {
@@ -105,13 +109,13 @@ export function repairQuotes(db: DB, { dryRun, only, actor = "repair" }: { dryRu
         // One source can give the words and another the place: a place isn't taken away, or changed in kind, because this source has
         // none, unless it's the page of another passage in the note.
         const locator = first.locator ?? (parts.length === 1 && r.stored.locator && row.locator_kind !== "none" && !r.otherPage ? { kind: row.locator_kind, value: r.stored.locator, raw: "" } : undefined);
-        const same = !concepts && parts.length === 1 && first.text === r.stored.text && (locator?.value ?? null) === r.stored.locator && (first.commentary ?? null) === r.stored.comment && statusOf(first) === r.status;
+        const same = !concepts && parts.length === 1 && form(first.text) === form(r.stored.text) && (locator?.value ?? null) === r.stored.locator && form(first.commentary) === form(r.stored.comment) && statusOf(first) === r.status;
         if (same) {
           result.alreadyRight++;
           continue;
         }
         const keepOcr = (JSON.parse(row.flags) as string[]).includes("ocr_suspect") ? ["ocr_suspect"] : [];
-        const after = parts.map((p, i) => ({ text: p.text ?? "", locator: (i === 0 ? locator : p.locator)?.value ?? null, comment: p.commentary ?? null, status: statusOf(p) }));
+        const after = parts.map((p, i) => ({ text: form(p.text), locator: (i === 0 ? locator : p.locator)?.value ?? null, comment: p.commentary == null ? null : form(p.commentary), status: statusOf(p) }));
         const repair: Repair = { id: r.id, why: r.kinds, source, concepts: tags, before: { ...r.stored, status: r.status }, after, newIds: [], existingIds: [], removedConcepts: r.otherConcepts, addedConcepts: r.missingConcepts };
         // A concept from a Zotero note or another span goes; one the record got any other way, a person's, stays.
         for (const tag of r.otherConcepts) db.prepare("DELETE FROM quote_tags WHERE quote_id = ? AND tag = ? AND origin IN ('title', 'note', 'span')").run(r.id, tag);

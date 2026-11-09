@@ -25,12 +25,23 @@ export function visible(v: Visibility): string {
 
 // --- Quote text ----------------------------------------------------------------------------------
 
+/** A `[bib]Key[/bib]` marker left by the retired Drupal site. The key is that catalogue's, such as Ryan1991. */
+const BIB_MARKER = /\[bib\]([^[\]]*?)\[\/bib\]/gi;
+
 /**
- * Quote text without the old site's [bib]Key[/bib] markers, in-text citations of its Biblio records; the
- * sentence around them already names the work. For display only: the store keeps the text as imported.
+ * `[bib]Key[/bib]` as a Pandoc citekey. `resolve` turns the retired site's key into the work's Better BibTeX
+ * citekey; without one, the old key is kept, so a citation is never dropped.
  */
+export function citekeysIn(text: string, resolve: (key: string) => string = (key) => key): string {
+  return text.replace(BIB_MARKER, (whole, raw: string) => {
+    const key = String(raw).trim();
+    return key ? `[@${resolve(key)}]` : whole;
+  });
+}
+
+/** Quote text for a public page. A leftover `[bib]` marker is shown as its Pandoc citekey. */
 export function plainText(text: string): string {
-  return text.replace(/\s*\[bib\][^[\]]*\[\/bib\]/g, "");
+  return citekeysIn(text);
 }
 
 /** *emphasis* as the old site wrote it: a pair of asterisks around words, not a lone one. */

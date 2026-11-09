@@ -513,11 +513,11 @@ server has public pages, off unless they're turned on.
     the CSL JSON), search over what quotes say, and the quotes on concept,
     set, and work pages. A quote's comment counts as your own words, so
     it's shown and searched only with `QUOTE_PUBLIC_NOTES=all`.
-  - The old site's markup is tidied for display only: `[bib]Key[/bib]`
-    markers (in-text citations of its Biblio records, which the sentence
-    around them already names) are dropped, and paired `*asterisks*` are
-    emphasis. The store keeps the text as imported until phase 2's repair
-    tools can edit it with history.
+  - The old site's markup is tidied for display: `[bib]Key[/bib]` markers
+    (in-text citations of its Biblio records) are Pandoc citekeys, and
+    paired `*asterisks*` are emphasis. Drupal is retired, so
+    `quote-mcp citekeys` is the one-time migration that writes each
+    one's Better BibTeX citekey into the stored text and comments.
   - Public pages are cacheable, unlike `/admin`.
 - **Public API.** The map's `/api` routes, cut to public fields: the graph,
   concepts, and sets at `catalogue`, and quotes at `quotes`. On the public

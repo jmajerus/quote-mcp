@@ -1,5 +1,7 @@
+import { citekeyResolver } from "./bibkeys.js";
 import type { DB } from "./db.js";
 import { PAGE_REFERENCE as PAGE_REF, type ParsedNote, noteText, parseNote } from "./parse.js";
+import { citekeysIn } from "./public.js";
 import { quoteKey } from "./text.js";
 
 /**
@@ -77,8 +79,8 @@ function isSubsequence(part: string[], whole: string[]): boolean {
 const SOURCE_ORIGINS = new Set(["span", "title", "note"]);
 
 /** What each source says about the passage this record holds: the concepts that are its own and another's, and whether the page is another's. */
-function conceptsAcross(q: Row, tags: { tag: string; origin: string }[], removed: string[], origins: { kind: string; ref: string; raw: string }[]) {
-  const key = quoteKey(q.text);
+function conceptsAcross(q: Row, tags: { tag: string; origin: string }[], removed: string[], origins: { kind: string; ref: string; raw: string }[], cite: (key: string) => string) {
+  const key = quoteKey(citekeysIn(q.text, cite));
   const own = new Set<string>();
   const others = new Set<string>();
   const pagesOwn = new Set<string>();
@@ -87,7 +89,7 @@ function conceptsAcross(q: Row, tags: { tag: string; origin: string }[], removed
     const parsed = parseOrigin(o);
     const parts = [parsed, ...(parsed.more ?? [])];
     // Within one note a short key is as good as a long one: this only asks which of its passages the record is.
-    const mine = parts.find((p) => key.length > 0 && quoteKey(p.text) === key);
+    const mine = parts.find((p) => key.length > 0 && quoteKey(citekeysIn(p.text ?? "", cite)) === key);
     if (!mine) continue;
     for (const t of mine.titleTags) own.add(t.toLowerCase());
     if (mine.locator) pagesOwn.add(mine.locator.value);
@@ -106,9 +108,11 @@ function conceptsAcross(q: Row, tags: { tag: string; origin: string }[], removed
   };
 }
 
-function auditOne(q: Row, origins: { kind: string; ref: string; raw: string }[], isSplit: (o: { kind: string; ref: string }) => boolean, flagged: string[], tags: { tag: string; origin: string }[], removed: string[]): AuditRecord {
+function auditOne(q: Row, origins: { kind: string; ref: string; raw: string }[], isSplit: (o: { kind: string; ref: string }) => boolean, flagged: string[], tags: { tag: string; origin: string }[], removed: string[], cite: (key: string) => string): AuditRecord {
+  // A [bib] marker and its Pandoc citekey are the same citation, so a rewritten quote still matches its raw.
+  const form = (text: string | null | undefined) => citekeysIn(text ?? "", cite);
   // An attribution comes from the source's own fields, not its words.
-  const mine = words([q.text, q.comment, q.chapter_author].filter(Boolean).join(" "));
+  const mine = words([form(q.text), form(q.comment), q.chapter_author].filter(Boolean).join(" "));
   /** The parts of an origin's note this record stands for: one, once its note has been split into several records. */
   const partsOf = (o: { kind: string; ref: string; raw: string }): ParsedNote[] => {
     const parsed = parseOrigin(o);
@@ -116,7 +120,7 @@ function auditOne(q: Row, origins: { kind: string; ref: string; raw: string }[],
     if (!isSplit(o)) return all;
     const own = all.slice(passageOf(o), passageOf(o) + 1);
     // Its other passages may have records while this one still holds them all (#670, #833): then it's compared with the whole note.
-    const fits = !own.length || beyond(mine, words(`${own.map((p) => [p.text, p.commentary, p.locator?.raw].filter(Boolean).join(" ")).join(" ")}`)).length === 0;
+    const fits = !own.length || beyond(mine, words(`${own.map((p) => [form(p.text), form(p.commentary), p.locator?.raw].filter(Boolean).join(" ")).join(" ")}`)).length === 0;
     return fits ? own : all;
   };
   const givesPage = (o: { kind: string; ref: string; raw: string }) => (partsOf(o)[0]?.locator?.value ?? null) === q.locator;
@@ -124,8 +128,8 @@ function auditOne(q: Row, origins: { kind: string; ref: string; raw: string }[],
   const closest = origins.map((o) => {
     // Once split, the record is compared with its own passage, not the whole note.
     const plain = isSplit(o) && partsOf(o).length <= 1 ? partsOf(o).map((p) => [p.text, p.commentary].filter(Boolean).join(" ")).join(" ") : plainOf(o);
-    const theirs = words(plain.replace(PAGE_REF, " "));
-    return { o, plain, theirs, lost: beyond(theirs, mine), added: beyond(mine, words(plain)) };
+    const theirs = words(form(plain).replace(PAGE_REF, " "));
+    return { o, plain, theirs, lost: beyond(theirs, mine), added: beyond(mine, words(form(plain))) };
     // Sources can have the same words, and only one the page.
   }).sort((a, b) => a.lost.length + a.added.length - b.lost.length - b.added.length || Number(givesPage(b.o)) - Number(givesPage(a.o)))[0];
   const { o, plain, theirs, lost, added } = closest;
@@ -143,18 +147,18 @@ function auditOne(q: Row, origins: { kind: string; ref: string; raw: string }[],
   if (q.text.match(PAGE_REF)) kinds.push("page_in_text");
   if (flags.has("unbalanced_quotes")) kinds.push("marks_off_pattern");
   if (flags.has("no_marks")) kinds.push("no_marks");
-  if (flags.has("lead_in") && q.text !== first.text) kinds.push("lead_in");
-  if (parts.length === 1 && !parsed.problems.length && (q.comment ?? "") !== (first.commentary ?? "")) kinds.push("comment_differs");
+  if (flags.has("lead_in") && form(q.text) !== form(first.text)) kinds.push("lead_in");
+  if (parts.length === 1 && !parsed.problems.length && form(q.comment) !== form(first.commentary)) kinds.push("comment_differs");
   if ((q.locator ?? null) !== (first.locator?.value ?? null) && !parsed.problems.length) kinds.push("locator_differs");
   if (pages.some((n, i) => i > 0 && n < pages[i - 1])) kinds.push("pages_backward");
-  const concepts = conceptsAcross(q, tags, removed, origins);
+  const concepts = conceptsAcross(q, tags, removed, origins, cite);
   if (concepts.missing.length) kinds.push("concept_missing");
   if (concepts.otherConcepts.length) kinds.push("concept_other_passage");
   if (concepts.otherPage) kinds.push("page_other_passage");
   if (lost.length) kinds.push("words_lost");
   if (added.length) kinds.push("words_added");
-  if (!lost.length && !added.length && !isSubsequence(words(q.text.replace(PAGE_REF, " ")), theirs)) kinds.push("words_reordered");
-  const matches = parts.length === 1 && q.text === first.text && (q.locator ?? null) === (first.locator?.value ?? null) && (q.comment ?? null) === (first.commentary ?? null);
+  if (!lost.length && !added.length && !isSubsequence(words(form(q.text).replace(PAGE_REF, " ")), theirs)) kinds.push("words_reordered");
+  const matches = parts.length === 1 && form(q.text) === form(first.text) && (q.locator ?? null) === (first.locator?.value ?? null) && form(q.comment) === form(first.commentary);
   return {
     id: q.id, status: q.status, edited: !!q.edited, kinds, origin: { kind: o.kind, ref: o.ref }, raw: o.raw,
     stored: { text: q.text, locator: q.locator, comment: q.comment },
@@ -178,10 +182,11 @@ export function auditStore(db: DB): AuditReport {
   const originsOf = db.prepare("SELECT kind, ref, raw, version FROM quote_origins WHERE quote_id = ? AND kind IN ('drupal', 'drupal-quote', 'zotero-note') AND raw IS NOT NULL ORDER BY rowid");
   const tagsOf = db.prepare("SELECT tag, origin FROM quote_tags WHERE quote_id = ?");
   const removedOf = db.prepare("SELECT tag FROM tag_removals WHERE quote_id = ?").pluck();
+  const cite = citekeyResolver(db);
   const records: AuditRecord[] = [];
   for (const q of rows) {
     const origins = originsOf.all(q.id) as { kind: string; ref: string; raw: string }[];
-    if (origins.length) records.push(auditOne(q, origins, isSplit, JSON.parse(q.flags) as string[], tagsOf.all(q.id) as { tag: string; origin: string }[], removedOf.all(q.id) as string[]));
+    if (origins.length) records.push(auditOne(q, origins, isSplit, JSON.parse(q.flags) as string[], tagsOf.all(q.id) as { tag: string; origin: string }[], removedOf.all(q.id) as string[], cite));
   }
   const kinds = Object.fromEntries(Object.keys(AUDIT_KINDS).map((k) => {
     const hit = records.filter((r) => r.kinds.includes(k as AuditKind));
