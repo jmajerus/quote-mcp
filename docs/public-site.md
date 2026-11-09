@@ -41,7 +41,8 @@ The old site's markup is tidied for display: a leftover `[bib]Key[/bib]` marker 
 (`[@Key]`), and `*emphasis*` is shown as emphasis. Drupal is retired. `quote-mcp citekeys` is the one-time
 migration that writes each marker's Better BibTeX citekey into the stored text and comments. A snapshot
 then expands those citekeys the way Pandoc does, in Chicago author-date: `[@ryan1991driving, p. 12]` is
-shown as `(Ryan and Oestreich 1991, 12)`. A key with no CSL record stays `[@Key]`. The stored text keeps
+shown as `(Ryan and Oestreich 1991, 12)`. A key with no CSL record stays `[@Key]`, as does a key shared by
+two items when the primary library does not have exactly one of them. The stored text keeps
 the citekey, and Cite this still shows the Pandoc citation to paste into a manuscript.
 
 ## The snapshot

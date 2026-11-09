@@ -166,7 +166,8 @@ function expand(text: string, library: Map<string, CslItem>, engine: () => Engin
     if (!known(cites)) continue;
     pieces.push({ start, end, next: cluster(engine(), cites, false) });
   }
-  for (const match of text.matchAll(/(^|[\s(\[])@([A-Za-z][A-Za-z0-9_.:-]*)/g)) {
+  // A hyphen stays where it was: Pandoc reads `-@key` as a narrative citation glued to that hyphen.
+  for (const match of text.matchAll(/(^|[\s(\[-])@([A-Za-z][A-Za-z0-9_.:-]*)/g)) {
     const lead = match[1].length;
     const start = (match.index ?? 0) + lead;
     if (taken.some(([from, to]) => start >= from && start < to)) continue;
