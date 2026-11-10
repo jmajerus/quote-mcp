@@ -16,7 +16,7 @@ import Database from "better-sqlite3";
 
 export type DB = Database.Database;
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -163,6 +163,8 @@ function migrate(db: DB): void {
   const aliases = columns("citekey_aliases");
   if (!aliases.has("zotero_library")) db.exec("ALTER TABLE citekey_aliases ADD COLUMN zotero_library TEXT");
   if (!aliases.has("zotero_key")) db.exec("ALTER TABLE citekey_aliases ADD COLUMN zotero_key TEXT");
+  // 6: words a person has accepted, so the OCR check stops flagging them. The server opens the store
+  // without migrating, so this has to land before that build is served.
   db.exec("CREATE TABLE IF NOT EXISTS ocr_words (word TEXT PRIMARY KEY COLLATE NOCASE, accepted_by TEXT NOT NULL, accepted_at TEXT NOT NULL)");
 }
 

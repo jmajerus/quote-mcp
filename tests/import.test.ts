@@ -8,6 +8,7 @@ import { type DrupalSite, importWithSite } from "./seed.js";
 import { exportAll } from "../src/export.js";
 import { holdingsCounts } from "../src/holdings.js";
 import { searchQuotes } from "../src/queries.js";
+import { editQuote } from "../src/edits.js";
 import { runImport } from "../src/import.js";
 import { fullTitle, normalizedTitle, shareAuthor } from "../src/text.js";
 
@@ -312,6 +313,18 @@ describe("import", () => {
     expect(db.prepare("SELECT rowid FROM quotes_fts WHERE quotes_fts MATCH ?").pluck().all("layoffs")).toEqual([prose.id]);
   });
 
+  it("leaves a removed concept's keyword mark off through a re-import", () => {
+    addItem(db, PRIMARY, "NOTEKWIC", note("ATTILA01", `<p><span class="quote" title="fear">They find a <span class="kwic" title="fear">scapegoat</span> quickly.</span></p>`, ["fear"]));
+    importWithSite(db, opts());
+    const q = quoteLike("scapegoat quickly");
+    expect(db.prepare("SELECT phrase, tag FROM quote_kwic WHERE quote_id = ?").all(q.id)).toEqual([{ phrase: "scapegoat", tag: "fear" }]);
+    editQuote(db, { id: q.id as number, concepts: [] }, "jo@example.org");
+    expect(db.prepare("SELECT COUNT(*) FROM quote_kwic WHERE quote_id = ?").pluck().get(q.id)).toBe(0);
+    importWithSite(db, opts());
+    expect(db.prepare("SELECT COUNT(*) FROM quote_kwic WHERE quote_id = ?").pluck().get(q.id)).toBe(0);
+    expect(tagsOf(q.id)).toEqual([]);
+  });
+
   it("indexes quotes for full-text search", () => {
     importWithSite(db, opts());
     const hits = db.prepare("SELECT rowid FROM quotes_fts WHERE quotes_fts MATCH ?").pluck().all("enemies");
@@ -354,7 +367,22 @@ describe("schema", () => {
     const migrated = openDb(path);
     expect(migrated.pragma("user_version", { simple: true })).toBe(SCHEMA_VERSION);
     expect(migrated.prepare("SELECT kind, text FROM quotes").get()).toEqual({ kind: "quote", text: "Old quote" });
+    expect(migrated.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ocr_words'").get()).toEqual({ name: "ocr_words" });
     migrated.close();
     for (const suffix of ["", "-wal", "-shm"]) rmSync(`${path}${suffix}`, { force: true });
+  });
+
+  it("adds the accepted-words table when migrating a schema 5 store", () => {
+    const file = `${process.env.TMPDIR ?? "/tmp"}/quote-mcp-v5-${process.pid}.db`;
+    const current = openDb(file);
+    current.exec("DROP TABLE ocr_words");
+    current.pragma("user_version = 5");
+    current.close();
+    expect(() => openExisting(file)).toThrow(/Run migrate first/);
+    const migrated = openDb(file);
+    expect(migrated.pragma("user_version", { simple: true })).toBe(SCHEMA_VERSION);
+    expect(migrated.prepare("SELECT COUNT(*) FROM ocr_words").pluck().get()).toBe(0);
+    migrated.close();
+    for (const suffix of ["", "-wal", "-shm"]) rmSync(`${file}${suffix}`, { force: true });
   });
 });
