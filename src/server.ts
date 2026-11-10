@@ -22,7 +22,7 @@ import { isSitePath, renderSite } from "./site.js";
 import { VERSION, createServer } from "./mcp.js";
 import { ToolError, overview } from "./queries.js";
 import { MAX_AUDIO, MAX_IMAGE, TranscribeError, captureKind, readCapture, transcribeAudio } from "./dictate.js";
-import { renderAdmin, renderCaptureIsbn, saveAdminEdit, saveCaptureForm } from "./web.js";
+import { renderAdmin, renderCaptureIsbn, saveAcceptedWord, saveAdminEdit, saveCaptureForm } from "./web.js";
 
 /**
  * Streamable HTTP at /mcp (stateless: a fresh server per request, JSON responses), the admin pages at
@@ -227,7 +227,7 @@ async function adminPost(req: http.IncomingMessage, res: http.ServerResponse, pa
     sendHtml(res, await saveCaptureForm(capture.writer(), form, editor, { corpus: capture.corpus, primary: capture.primary, refreshZotero: capture.refreshZotero, filePrintBook: capture.filePrintBook, sets }));
     return;
   }
-  sendHtml(res, saveAdminEdit(capture.writer(), path, form, editor));
+  sendHtml(res, saveAcceptedWord(capture.writer(), path, form, editor) ?? saveAdminEdit(capture.writer(), path, form, editor, sets));
 }
 
 export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
@@ -269,7 +269,7 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
         return;
       }
       if (url.pathname === "/admin" || url.pathname.startsWith("/admin/")) {
-        if (req.method === "POST" && (url.pathname === "/admin/capture" || url.pathname === "/admin/capture/transcribe" || url.pathname === "/admin/capture/read" || /^\/admin\/quotes\/\d+\/edit$/.test(url.pathname))) {
+        if (req.method === "POST" && (url.pathname === "/admin/capture" || url.pathname === "/admin/capture/transcribe" || url.pathname === "/admin/capture/read" || /^\/admin\/quotes\/\d+\/(?:edit|words)$/.test(url.pathname))) {
           await adminPost(req, res, url.pathname, options.capture, auth.via === "access" ? (auth.email ?? auth.subject ?? "access") : "lan", options.sets);
           return;
         }

@@ -70,9 +70,13 @@ empty notes are skipped and counted.
 `title_tag_only` (a `title` term missing from the note's tags), `compound_tag`, `commentary_mixed`, and `long`
 (over 2,000 characters). Each has a worklist (see [the admin pages](admin-ui.md#worklists)).
 
-The OCR check (`ocr_suspect`) flags words that aren't in the word list (`QUOTE_DICTIONARY`, plus names and
-titles from the store) and that look like OCR confusions: `rn` for `m`, `li` for `h`, capitals or punctuation
-inside a word, repeated words.
+The OCR check (`ocr_suspect`) flags words that aren't in the word list and that look like OCR confusions:
+`rn` for `m`, `li` for `h`, capitals or punctuation inside a word, repeated words. The list is
+`QUOTE_DICTIONARY`, words accepted on a quote's page, and the label and alternative labels of each concept
+still in the vocabulary. A label of several words stays a phrase, so only a one-word label counts. A word
+one confusion away from a listed word, including a concept's label, is suggested. A word accepted on a
+quote's page is kept as real, so a later import doesn't flag it. An edited quote is left alone by the
+import, and saving the edit checks its words again.
 
 ## Works
 

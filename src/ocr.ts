@@ -31,8 +31,20 @@ export function loadDictionary(path = process.env.QUOTE_DICTIONARY ?? "/usr/shar
 }
 
 /** The word as the dictionary would list it: no possessive, no trailing apostrophe. */
-function base(word: string): string {
+export function dictionaryForm(word: string): string {
   return word.toLowerCase().replace(/’/g, "'").replace(/'s$/, "").replace(/'$/, "");
+}
+
+/** Adds one-word labels to the word list. A phrase is left out: the check looks at one token at a time. */
+export function addKnownWords(dict: Set<string>, labels: Iterable<string>): void {
+  for (const label of labels) {
+    const word = dictionaryForm(label.trim());
+    if (word && !/\s/.test(word)) dict.add(word);
+  }
+}
+
+function base(word: string): string {
+  return dictionaryForm(word);
 }
 
 function known(word: string, dict: Set<string>): boolean {

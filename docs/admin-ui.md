@@ -28,7 +28,9 @@ one work, **Add a quote** opens the [capture page](#capturing-a-quote) on that w
 - The text, or a note's words. **Add a quote** opens the capture page on this quote's work.
 - Its work and place, its tags, and its flags.
 - Details: the chapter author, the comment, a source URL, key words marked in the text, words the OCR
-  check suspects, and where it came from (the old site, a Zotero note).
+  check suspects, and where it came from (the old site, a Zotero note). **Accept** beside an unknown
+  word (one the word list doesn't have, such as `experiential`) treats that word as real, on this quote
+  and on the others that flag it.
 - The citation: the Pandoc form, what to check, and the CSL JSON.
 - Proposed changes from agents, before and after, with the command that accepts one.
 - Its history.
@@ -36,10 +38,17 @@ one work, **Add a quote** opens the [capture page](#capturing-a-quote) on that w
 ## Editing a quote or note
 
 `/admin/quotes/<id>/edit`, from the quote's **Edit** link: its text, page or location (`211`, `211-212`, or
-`Kindle loc. 208`), chapter author, and comment (a note's words), with a line for the history saying why.
-Saving is your edit: it's recorded in the history under your Access email (`lan` on the LAN), and the
-quote is marked edited, so imports leave it alone from then on. The page and chapter-author flags follow
-what you set. A quote checked against its Calibre book keeps the book's words, and you add your own marks to them:
+`Kindle loc. 208`), chapter author, comment (a note's words), and concepts, with a line for the history
+saying why. The concept control is the same as on capture: a scheme is every concept in it, a set is a
+smaller part of that scheme, and a concept in a set stays in the scheme. Add from a set, switch sets to
+add from another, or type a name. A name that isn't a concept yet is kept. Removing a concept keeps it
+off when the quote is imported again. Saving a change to the words, page, or comment is your edit: it's
+recorded in the history under your Access email (`lan` on the LAN), and the quote is marked edited, so
+imports leave those alone from then on. Changing only the concepts is recorded too, and does not mark
+the quote edited, so a later import can still update its words. The page and chapter-author flags follow
+what you set. Saving also checks the suspect words again, so correcting a misspelling clears `ocr_suspect`
+once none remain. A word the list doesn't know can be checked as a real word on the same form; that
+acceptance is kept, and the next import won't flag it. A quote checked against its Calibre book keeps the book's words, and you add your own marks to them:
 
 - `[brackets]` for anything you insert: a clarification (`he [Smith]`), `[sic]` after a misprint, or
   `[emphasis added]`;

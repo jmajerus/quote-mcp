@@ -1,7 +1,8 @@
 import { citekeyResolver } from "./bibkeys.js";
 import { type DB, NEXT_QUOTE_ID, now } from "./db.js";
 import { citekeysIn } from "./public.js";
-import { type Suspect, dropCommonUnknowns, suspectTokens } from "./ocr.js";
+import { type Suspect, addKnownWords, dropCommonUnknowns, suspectTokens } from "./ocr.js";
+import { conceptLabels } from "./queries.js";
 import { readMargin } from "./margin.js";
 import { type ParsedNote, noteText, parseNote, readLocator } from "./parse.js";
 import { fullTitle, normalizedTitle, quoteKey, shareAuthor, slugify, yearOf } from "./text.js";
@@ -329,7 +330,12 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
     // --- OCR check over every quote nobody has edited, and that wasn't checked against a book's text ---
     const all = db.prepare("SELECT id, text, status, flags, edited FROM quotes WHERE kind = 'quote'").all() as { id: number; text: string; status: string; flags: string; edited: number }[];
     const suspects = new Map<string, Suspect[]>();
-    if (opts.dictionary) for (const q of all) suspects.set(String(q.id), suspectTokens(q.text, opts.dictionary));
+    if (opts.dictionary) {
+      const dict = new Set(opts.dictionary);
+      for (const word of db.prepare("SELECT word FROM ocr_words").pluck().all() as string[]) dict.add(word);
+      addKnownWords(dict, conceptLabels(db));
+      for (const q of all) suspects.set(String(q.id), suspectTokens(q.text, dict));
+    }
     const kept = dropCommonUnknowns(suspects);
     const setOcr = db.prepare("UPDATE quotes SET suspects = ?, flags = ?, grade = ? WHERE id = ?");
     for (const q of all) {

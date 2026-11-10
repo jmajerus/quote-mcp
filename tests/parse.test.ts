@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dropCommonUnknowns, suspectTokens } from "../src/ocr.js";
+import { addKnownWords, dropCommonUnknowns, suspectTokens } from "../src/ocr.js";
 import { parseNote } from "../src/parse.js";
 
 // Real notes from the Business collection (2026-10-27 survey), by Zotero note key.
@@ -340,6 +340,14 @@ describe("OCR check", () => {
 
   it("passes names, inflections, possessives, and plural apostrophes", () => {
     expect(suspectTokens("Deming said the workers had had the students' years.", dict)).toEqual([]);
+  });
+
+  it("counts a one-word concept label, and suggests a label one confusion away", () => {
+    const dict = new Set(["the", "continued"]);
+    addKnownWords(dict, ["Mobbing", "group bullying"]);
+    expect(suspectTokens("the mobbing continued", dict)).toEqual([]);
+    expect(suspectTokens("the bullying continued", dict)).toEqual([{ token: "bullying", reason: "unknown" }]);
+    expect(suspectTokens("the rnobbing continued", dict)).toContainEqual({ token: "rnobbing", reason: "confusion", suggestion: "mobbing" });
   });
 
   it("drops unknown words that recur across notes", () => {

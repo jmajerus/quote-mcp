@@ -112,6 +112,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS quotes_fts USING fts5(text, comment, tags, to
 CREATE TABLE IF NOT EXISTS citekey_aliases (
   biblio_key TEXT PRIMARY KEY COLLATE NOCASE, citekey TEXT NOT NULL, zotero_library TEXT, zotero_key TEXT
 );
+
+-- A word the OCR list doesn't have that a person has accepted as real, so it isn't flagged again.
+CREATE TABLE IF NOT EXISTS ocr_words (
+  word TEXT PRIMARY KEY COLLATE NOCASE, accepted_by TEXT NOT NULL, accepted_at TEXT NOT NULL
+);
 `;
 
 export function openDb(path = process.env.QUOTE_DB ?? "data/quotes.db"): DB {
@@ -158,6 +163,7 @@ function migrate(db: DB): void {
   const aliases = columns("citekey_aliases");
   if (!aliases.has("zotero_library")) db.exec("ALTER TABLE citekey_aliases ADD COLUMN zotero_library TEXT");
   if (!aliases.has("zotero_key")) db.exec("ALTER TABLE citekey_aliases ADD COLUMN zotero_key TEXT");
+  db.exec("CREATE TABLE IF NOT EXISTS ocr_words (word TEXT PRIMARY KEY COLLATE NOCASE, accepted_by TEXT NOT NULL, accepted_at TEXT NOT NULL)");
 }
 
 /**

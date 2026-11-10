@@ -4,7 +4,7 @@ import { type AddQuoteOptions, workFromMirror } from "./capture.js";
 import { workLabel } from "./csl.js";
 import { type MirrorBook, type WorkHit, getWork, saveSpokenQuote, searchMirror, searchWorks } from "./dictate.js";
 import { type FiledItem, type PrintBook, filePrintBook, filedIsbn, lookupIsbn, printBookFromForm, rememberFiledItem, canonicalIsbn } from "./isbn.js";
-import { editQuote } from "./edits.js";
+import { acceptOcrWord, editQuote } from "./edits.js";
 import { emphasisHtml } from "./public.js";
 import {
   type Proposal, QUEUES, type Queue, SEARCH_RELATIONS, ToolError, type WorkSummary, citeQuote, getConcept, getQuote, listConcepts, overview, searchQuotes, worklist,
@@ -164,7 +164,7 @@ ${note ? (q.note ? `<div class="words">${esc(q.note)}</div>` : '<p class="note">
     ["Comment", note ? "" : esc(q.comment)],
     ["Source URL", q.source_url ? `<a href="${esc(q.source_url)}">${esc(q.source_url)}</a>` : ""],
     ["Key words", (q.kwic as { phrase: string; tag: string }[]).map((k) => `“${esc(k.phrase)}” → ${esc(k.tag)}`).join("<br>")],
-    ["Suspect words", (q.suspect_words as { token: string; reason: string; suggestion?: string }[]).map((s) => `${esc(s.token)}${s.suggestion ? ` → ${esc(s.suggestion)}` : ` (${esc(s.reason)})`}`).join(", ")],
+    ["Suspect words", suspectWords(id, q.suspect_words as { token: string; reason: string; suggestion?: string }[])],
     ["Came from", (q.origins as { kind: string; ref: string }[]).map((o) => `${esc(o.kind)} ${esc(o.ref)}`).join("<br>")],
   ])}</table></div>
 ${(q.proposals as Proposal[]).length ? `<h2>Proposed changes</h2>${(q.proposals as Proposal[]).map(proposalBlock).join("")}` : ""}
@@ -172,6 +172,15 @@ ${(q.proposals as Proposal[]).length ? `<h2>Proposed changes</h2>${(q.proposals 
 <details><summary>CSL JSON</summary><pre>${esc(JSON.stringify(c.csl, null, 2))}</pre></details>
 <h2>History</h2><div class="scroll"><table><tr><th>When</th><th>What</th><th>Why</th></tr>
 ${(q.history as { at: string; kind: string; reason: string }[]).map((h) => `<tr><td>${esc(h.at.slice(0, 16).replace("T", " "))}</td><td>${esc(h.kind)}</td><td>${esc(h.reason)}</td></tr>`).join("")}</table></div>`);
+}
+
+/** One suspect word, and for an unknown word a button that accepts it as real. */
+function suspectWords(id: number, suspects: { token: string; reason: string; suggestion?: string }[]): string {
+  return suspects.map((s) => {
+    const label = `${esc(s.token)}${s.suggestion ? ` → ${esc(s.suggestion)}` : ` (${esc(s.reason)})`}`;
+    if (s.reason !== "unknown" || s.token.includes(" ")) return label;
+    return `${label} <form class="accept" method="post" action="/admin/quotes/${id}/words"><input type="hidden" name="word" value="${esc(s.token)}"><button>Accept</button></form>`;
+  }).join(", ");
 }
 
 function conceptsPage(db: DB, p: URLSearchParams): string {
@@ -222,8 +231,8 @@ ${(r.proposals as (Proposal & { quote: { id: number; text: string; work: string 
   return page(QUEUE_LABEL[queue], "worklists", `<h1>${QUEUE_LABEL[queue]}</h1><p class="sub"><a href="/admin/worklists">All worklists</a></p>${body}${"tags" in r ? "" : pager(`/admin/worklists/${queue}`, {}, r.total, r.offset, r.limit)}`);
 }
 
-/** The form for fixing a quote: its text (a verified quote's words are the book's; only its spacing can change), locator, chapter author, and comment. */
-function editPage(db: DB, id: number, error?: string, sent?: URLSearchParams): string {
+/** The form for fixing a quote: its text (a verified quote's words are the book's; only its spacing can change), locator, chapter author, comment, and concepts. */
+function editPage(db: DB, id: number, error?: string, sent?: URLSearchParams, sets: ConceptSet[] = []): string {
   const q = getQuote(db, id);
   const note = q.kind === "note";
   const locked = q.status === "verified";
@@ -234,30 +243,147 @@ ${error ? `<p class="error">${esc(error)}</p>` : ""}
 <form class="edit" method="post" action="/admin/quotes/${id}/edit">
 <input type="hidden" name="updated_at" value="${esc(sent?.get("updated_at") ?? (q.updated_at as string))}">
 ${note ? "" : `<label for="text">Text</label><textarea id="text" name="text">${value("text", q.text)}</textarea>
-${locked ? '<p class="note">Checked against its Calibre book: the words are the book\'s. You can add your own marks: [brackets] for a clarification or [sic], *asterisks* around words you italicise (add [emphasis added]), and … for words left out. Spacing and line breaks can change too. Anything else that changes the words is refused.</p>' : ""}`}
+${locked ? '<p class="note">Checked against its Calibre book: the words are the book\'s. You can add your own marks: [brackets] for a clarification or [sic], *asterisks* around words you italicise (add [emphasis added]), and … for words left out. Spacing and line breaks can change too. Anything else that changes the words is refused.</p>' : ""}
+${suspectFields(q.suspect_words as { token: string; reason: string; suggestion?: string }[])}`}
 <label for="locator">Page or location</label><input id="locator" name="locator" value="${value("locator", q.locator)}" placeholder="211, 211-212, or Kindle loc. 208">
 <label for="chapter_author">Chapter author</label><input id="chapter_author" name="chapter_author" value="${value("chapter_author", q.chapter_author)}" placeholder="In an edited volume">
+${conceptFields(db, sets, (q.tags as { tag: string }[]).map((t) => t.tag), sent)}
 <label for="comment">${note ? "Note" : "Comment"}</label><textarea id="comment" name="comment">${value("comment", q.comment)}</textarea>
 <label for="reason">Why (for the history)</label><input id="reason" name="reason" value="${value("reason", null)}" placeholder="Typo fixed">
 <div class="actions"><button>Save</button><a href="/admin/quotes/${id}">Cancel</a></div>
 </form>`);
 }
 
+/** Unknown words on the edit form: saving checks the text again, and a checked word is accepted as real. */
+function suspectFields(suspects: { token: string; reason: string; suggestion?: string }[]): string {
+  if (!suspects.length) return "";
+  const unknown = suspects.filter((s) => s.reason === "unknown" && !s.token.includes(" "));
+  const rest = suspects.filter((s) => s.reason !== "unknown" || s.token.includes(" "));
+  return `<p class="note">Saving checks these words again${rest.length ? `: ${rest.map((s) => `${esc(s.token)}${s.suggestion ? ` → ${esc(s.suggestion)}` : ` (${esc(s.reason)})`}`).join(", ")}` : ""}.</p>
+${unknown.length ? `<fieldset class="suspects"><legend>Words the list doesn't know</legend>${unknown.map((s) => `<label class="check"><input type="checkbox" name="accept" value="${esc(s.token)}"> ${esc(s.token)} is a real word</label>`).join("")}<p class="note">Accepting a word keeps it, on this quote and the others that flag it.</p></fieldset>` : ""}`;
+}
+
+/** Saves an accepted word posted from the quote page: a redirect back, or a short page when it isn't a suspect. */
+export function saveAcceptedWord(writer: DB, path: string, form: URLSearchParams, editor: string): { redirect: string } | { status: number; html: string } | null {
+  const m = /^\/admin\/quotes\/(\d+)\/words$/.exec(path);
+  if (!m) return null;
+  const id = Number(m[1]);
+  try {
+    acceptOcrWord(writer, id, form.get("word") ?? "", editor);
+    return { redirect: `/admin/quotes/${id}` };
+  } catch (error) {
+    if (!(error instanceof ToolError)) throw error;
+    return { status: 400, html: page("Quote", "quotes", `<h1>Quote ${id}</h1><p class="error">${esc(error.message)}</p><p><a href="/admin/quotes/${id}">Back to the quote</a></p>`) };
+  }
+}
+
+/** The concepts on the edit form: the scheme, or a set within it, then the ones already on the quote. */
+function conceptFields(db: DB, sets: ConceptSet[], tags: string[], sent?: URLSearchParams): string {
+  const spaces = captureSpaces(db, sets);
+  const value = sent?.has("concepts") ? sent.get("concepts") ?? "" : tags.join(", ");
+  const options = spaces.map((s) => `<option value="${esc(s.id)}">${esc(s.label)}</option>`).join("");
+  return `<fieldset class="concepts"><legend>Concepts</legend>
+<label for="space">Set</label><select id="space">${options}</select>
+<p id="space-note" class="note"></p>
+<label for="pick">Add a concept</label><select id="pick"></select>
+<div id="chosen" class="chosen"></div>
+<label for="tag-type">Or type a name</label><input id="tag-type" placeholder="A concept, or a name to keep">
+<p class="note">Add every concept that applies. Switch sets to add from another. A name that isn't a concept yet is kept. Removing one keeps it off when the quote is imported again.</p>
+<input type="hidden" name="concepts" id="concepts" value="${esc(value)}">
+<script type="application/json" id="concept-spaces">${JSON.stringify(spaces).replaceAll("<", "\\u003c")}</script>
+<script>${EDIT_CONCEPTS}</script></fieldset>`;
+}
+
+const EDIT_CONCEPTS = `
+const spaces = JSON.parse(document.querySelector("#concept-spaces").textContent || "[]");
+const space = document.querySelector("#space");
+const pick = document.querySelector("#pick");
+const chosen = document.querySelector("#chosen");
+const typed = document.querySelector("#tag-type");
+const concepts = document.querySelector("#concepts");
+const spaceNote = document.querySelector("#space-note");
+let chosenTags = concepts.value.split(",").map((part) => part.trim()).filter(Boolean);
+function sameTag(a, b) { return a.toLowerCase() === b.toLowerCase(); }
+function paintConcepts() {
+  concepts.value = chosenTags.join(", ");
+  chosen.replaceChildren();
+  for (const name of chosenTags) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "chip";
+    button.textContent = name;
+    button.setAttribute("aria-label", "Remove " + name);
+    button.addEventListener("click", () => {
+      chosenTags = chosenTags.filter((t) => !sameTag(t, name));
+      paintConcepts();
+      fillConcepts();
+    });
+    chosen.append(button);
+  }
+}
+function fillConcepts() {
+  if (!spaces.length) return;
+  const here = spaces.find((s) => s.id === space.value) || spaces[0];
+  spaceNote.textContent = here && here.note ? here.note : "";
+  pick.replaceChildren();
+  const blank = document.createElement("option");
+  blank.value = "";
+  blank.textContent = "Add a concept from this set";
+  pick.append(blank);
+  for (const concept of (here && here.concepts) || []) {
+    if (chosenTags.some((t) => sameTag(t, concept.label))) continue;
+    const option = document.createElement("option");
+    option.value = concept.label;
+    option.textContent = concept.hint ? concept.label + " (" + concept.hint + ")" : concept.label;
+    pick.append(option);
+  }
+}
+function addTyped() {
+  for (const part of typed.value.split(",")) {
+    const name = part.trim();
+    if (name && !chosenTags.some((t) => sameTag(t, name))) chosenTags.push(name);
+  }
+  typed.value = "";
+  paintConcepts();
+  fillConcepts();
+}
+if (spaces.length) space.addEventListener("change", fillConcepts);
+pick.addEventListener("change", () => {
+  if (!pick.value || chosenTags.some((t) => sameTag(t, pick.value))) { pick.value = ""; return; }
+  chosenTags.push(pick.value);
+  pick.value = "";
+  paintConcepts();
+  fillConcepts();
+});
+typed.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  addTyped();
+});
+document.querySelector("form.edit").addEventListener("submit", addTyped);
+paintConcepts();
+fillConcepts();
+`;
+
 /** Saves the edit form posted to /admin/quotes/<id>/edit: a redirect to the quote, or the form again with what was wrong. */
-export function saveAdminEdit(writer: DB, path: string, form: URLSearchParams, editor: string): { redirect: string } | { status: number; html: string } | null {
+export function saveAdminEdit(writer: DB, path: string, form: URLSearchParams, editor: string, sets: ConceptSet[] = []): { redirect: string } | { status: number; html: string } | null {
   const m = /^\/admin\/quotes\/(\d+)\/edit$/.exec(path);
   if (!m) return null;
   const id = Number(m[1]);
   const field = (name: string) => (form.has(name) ? form.get(name)! : undefined);
   try {
-    editQuote(writer, { id, text: field("text"), locator: field("locator"), chapter_author: field("chapter_author"), comment: field("comment"), reason: field("reason"), updated_at: field("updated_at") }, editor);
+    editQuote(writer, {
+      id, text: field("text"), locator: field("locator"), chapter_author: field("chapter_author"), comment: field("comment"),
+      reason: field("reason"), updated_at: field("updated_at"), accept: form.getAll("accept"),
+      concepts: form.has("concepts") ? (form.get("concepts") ?? "").split(",") : undefined,
+    }, editor);
     return { redirect: `/admin/quotes/${id}` };
   } catch (error) {
     if (!(error instanceof ToolError)) throw error;
     if (/^No quote or note/.test(error.message)) return { status: 404, html: page("Not found", "quotes", `<h1>Not found</h1><p>${esc(error.message)}</p>`) };
     // Changed by someone else meanwhile: a fresh form, showing the quote as it is now. Otherwise what was sent, to correct.
     const stale = /changed after this form was opened/.test(error.message);
-    return { status: stale ? 409 : 400, html: editPage(writer, id, error.message, stale ? undefined : form) };
+    return { status: stale ? 409 : 400, html: editPage(writer, id, error.message, stale ? undefined : form, sets) };
   }
 }
 
@@ -675,7 +801,7 @@ export function renderAdmin(db: DB, path: string, params: URLSearchParams, sets:
   let m = /^\/admin\/quotes\/(\d+)$/.exec(path);
   if (m) return quotePage(db, Number(m[1]));
   m = /^\/admin\/quotes\/(\d+)\/edit$/.exec(path);
-  if (m) return editPage(db, Number(m[1]));
+  if (m) return editPage(db, Number(m[1]), undefined, undefined, sets);
   if (path === "/admin/concepts") return conceptsPage(db, params);
   m = /^\/admin\/concepts\/([^/]+)$/.exec(path);
   if (m) return conceptPage(db, decodeURIComponent(m[1]), params);
