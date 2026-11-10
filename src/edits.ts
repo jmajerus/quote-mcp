@@ -1,8 +1,9 @@
 import { type CorpusClient, conceptOf } from "./capture.js";
 import { ToolError } from "./common.js";
 import { type DB, now } from "./db.js";
+import { type Suspect, addKnownWords, dictionaryForm, loadDictionary, suspectTokens } from "./ocr.js";
 import { withoutEmphasis } from "./public.js";
-import { type ProposalFields as Fields, getQuote, locatorText, proposal } from "./queries.js";
+import { type ProposalFields as Fields, conceptLabels, getQuote, locatorText, proposal } from "./queries.js";
 import { quoteKey } from "./text.js";
 
 /**
@@ -79,6 +80,48 @@ export function updateQuote(db: DB, args: UpdateQuoteArgs, actor: string) {
   })();
 }
 
+/**
+ * The tags a person wants on the quote, as the edit form lists them. A tag already there under the same concept
+ * stays as it is. One left off is removed, and recorded so a re-import does not put it back. A name that is not a
+ * concept yet is kept. Changing tags does not mark the quote edited.
+ */
+function replaceConcepts(db: DB, id: number, wanted: string[], actor: string, reason: string): string[] {
+  const next: string[] = [];
+  for (const raw of wanted) {
+    const tag = raw.trim();
+    if (tag && !next.some((t) => t.toLowerCase() === tag.toLowerCase())) next.push(tag);
+  }
+  const rows = db.prepare("SELECT tag FROM quote_tags WHERE quote_id = ? ORDER BY tag").all(id) as { tag: string }[];
+  const same = (a: string, b: string) => {
+    if (a.toLowerCase() === b.toLowerCase()) return true;
+    const left = conceptOf(db, a);
+    return left !== null && left === conceptOf(db, b);
+  };
+  const removed = rows.filter((row) => !next.some((tag) => same(row.tag, tag)));
+  const added = next.filter((tag) => !rows.some((row) => same(row.tag, tag)));
+  if (!removed.length && !added.length) return [];
+  const stamp = now();
+  const before = rows.map((row) => row.tag);
+  const changed: string[] = [];
+  for (const row of removed) {
+    db.prepare("DELETE FROM quote_tags WHERE quote_id = ? AND tag = ?").run(id, row.tag);
+    db.prepare("DELETE FROM quote_kwic WHERE quote_id = ? AND tag = ?").run(id, row.tag);
+    db.prepare("INSERT INTO tag_removals (quote_id, tag, by, at, reason) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO UPDATE SET by = excluded.by, at = excluded.at, reason = excluded.reason")
+      .run(id, row.tag, actor, stamp, reason);
+    changed.push(`-${row.tag}`);
+  }
+  for (const tag of added) {
+    db.prepare("DELETE FROM tag_removals WHERE quote_id = ? AND tag = ?").run(id, tag);
+    db.prepare("INSERT OR IGNORE INTO quote_tags (quote_id, tag, concept_id, origin) VALUES (?, ?, ?, 'person')").run(id, tag, conceptOf(db, tag));
+    changed.push(`+${tag}`);
+  }
+  const after = db.prepare("SELECT tag FROM quote_tags WHERE quote_id = ? ORDER BY tag").pluck().all(id) as string[];
+  db.prepare("UPDATE quotes SET updated_at = ?, updated_by = ? WHERE id = ?").run(stamp, actor, id);
+  history(db, id, "tags_changed", before, after, actor, reason);
+  refreshFts(db, id);
+  return changed;
+}
+
 export interface ProposeArgs { id: number; text?: string; locator?: string | null; chapter_author?: string | null; rationale: string; evidence?: string }
 
 /** A locator as given ("p. 211", "211-212", "Kindle loc. 208") as the store keeps it: its kind and value. */
@@ -131,7 +174,8 @@ export function proposeFix(db: DB, args: ProposeArgs, actor: string) {
 /**
  * Writes a person's change to a quote's text, locator, chapter author, or comment, marking it edited (re-imports
  * leave it alone). The flags the parser sets for these follow: no_locator and kindle_locator the new locator, and
- * chapter_author, which asks a person to check the chapter author, is settled by a person setting it.
+ * chapter_author, which asks a person to check the chapter author, is settled by a person setting it. A new text
+ * is checked for suspect words again, so a corrected misspelling drops ocr_suspect.
  */
 function applyFields(db: DB, q: Record<string, unknown>, c: Fields & { comment?: string | null }, editor: string, stamp: string): void {
   const id = q.id as number;
@@ -150,7 +194,90 @@ function applyFields(db: DB, q: Record<string, unknown>, c: Fields & { comment?:
   }
   if (c.comment !== undefined) db.prepare("UPDATE quotes SET comment = ? WHERE id = ?").run(c.comment, id);
   db.prepare("UPDATE quotes SET flags = ?, edited = 1, updated_at = ?, updated_by = ? WHERE id = ?").run(JSON.stringify(flags), stamp, editor, id);
+  if (c.text !== undefined) settleOcr(db, id);
   refreshFts(db, id);
+}
+
+/** The word list plus words a person has accepted, or null when there is no word list to check against. */
+function checkingDictionary(db: DB): Set<string> | null {
+  try {
+    const dict = new Set(loadDictionary());
+    for (const word of db.prepare("SELECT word FROM ocr_words").pluck().all() as string[]) dict.add(word);
+    addKnownWords(dict, conceptLabels(db));
+    return dict;
+  } catch {
+    return null;
+  }
+}
+
+/** Whether the suspect's token is still a word in the text, not a substring of a longer one. */
+function tokenPresent(text: string, token: string): boolean {
+  const body = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^A-Za-z])${body}(?:[^A-Za-z]|$)`, "i").test(text);
+}
+
+/**
+ * Writes this quote's suspect words from its text. A corrected word drops out. With no word list, only words
+ * that have left the text drop out. An unknown word already in three quotes stays out, as the import leaves it:
+ * that is a word the list lacks, not the same error made once.
+ */
+function settleOcr(db: DB, id: number): void {
+  const q = db.prepare("SELECT kind, text, status, flags, suspects FROM quotes WHERE id = ?").get(id) as { kind: string; text: string; status: string; flags: string; suspects: string } | undefined;
+  if (!q || q.kind !== "quote") return;
+  const previous = JSON.parse(q.suspects) as Suspect[];
+  const seen = new Set(previous.map((s) => s.token.toLowerCase()));
+  const dict = checkingDictionary(db);
+  const accepted = new Set((db.prepare("SELECT word FROM ocr_words").pluck().all() as string[]).map((w) => w.toLowerCase()));
+  const fresh = dict ? suspectTokens(q.text, dict) : previous.filter((s) => tokenPresent(q.text, s.token) && !accepted.has(dictionaryForm(s.token)));
+  const found = fresh.filter((s) => {
+    if (!tokenPresent(q.text, s.token)) return false;
+    if (s.reason !== "unknown" || seen.has(s.token.toLowerCase())) return true;
+    const n = db.prepare("SELECT COUNT(*) FROM quotes WHERE kind = 'quote' AND lower(text) LIKE ?").pluck().get(`%${dictionaryForm(s.token)}%`) as number;
+    return n < 3;
+  });
+  let flags = (JSON.parse(q.flags) as string[]).filter((f) => f !== "ocr_suspect");
+  if (found.length) flags.push("ocr_suspect");
+  if (JSON.stringify(found) === q.suspects && JSON.stringify(flags) === q.flags) return;
+  const grade = q.status === "unparsed" ? "C" : flags.some((f) => f !== "no_locator") ? "B" : "A";
+  db.prepare("UPDATE quotes SET suspects = ?, flags = ?, grade = ? WHERE id = ?").run(JSON.stringify(found), JSON.stringify(flags), grade, id);
+}
+
+/** Quotes whose stored suspects name this word, so accepting it clears them all. */
+function quotesSuspecting(db: DB, word: string): number[] {
+  return (db.prepare("SELECT id FROM quotes WHERE kind = 'quote' AND lower(suspects) LIKE ?").pluck().all(`%${word}%`) as number[]);
+}
+
+/**
+ * Remembers unknown suspect words a person has accepted as real. Only a word this quote already flags as
+ * unknown is kept; anything else in the form is ignored. Returns the words newly treated as real.
+ */
+function rememberWords(db: DB, q: Record<string, unknown>, words: string[], actor: string): string[] {
+  const suspects = JSON.parse(q.suspects as string) as Suspect[];
+  const saved: string[] = [];
+  const insert = db.prepare("INSERT INTO ocr_words (word, accepted_by, accepted_at) VALUES (?, ?, ?) ON CONFLICT (word) DO NOTHING");
+  for (const raw of words) {
+    const hit = suspects.find((s) => s.reason === "unknown" && s.token.toLowerCase() === raw.trim().toLowerCase());
+    if (!hit || hit.token.includes(" ")) continue;
+    const word = dictionaryForm(hit.token);
+    if (!word) continue;
+    insert.run(word, actor, now());
+    saved.push(word);
+  }
+  return saved;
+}
+
+/** Accepts one unknown suspect word on this quote as real, and clears it on every quote that flagged it. */
+export function acceptOcrWord(db: DB, id: number, word: string, actor: string) {
+  return db.transaction(() => {
+    const q = quoteRow(db, id);
+    const saved = rememberWords(db, q, [word], actor);
+    if (!saved.length) throw new ToolError(`${word.trim() || "That"} isn't an unknown word on this quote.`);
+    for (const accepted of saved) for (const quote of quotesSuspecting(db, accepted)) settleOcr(db, quote);
+    const stamp = now();
+    db.prepare("UPDATE quotes SET updated_at = ?, updated_by = ? WHERE id = ?").run(stamp, actor, id);
+    history(db, id, "ocr_word", null, saved[0], actor, `Accepted "${saved[0]}" as a word`);
+    return { word: saved[0], quote: getQuote(db, id) };
+  })();
 }
 
 /** Text compared loosely: spacing collapsed, and *emphasis* pairs' asterisks dropped, since they're a reader's mark. */
@@ -203,13 +330,14 @@ function bookText(db: DB, id: number, current: string): string {
   return added ?? current;
 }
 
-export interface EditArgs { id: number; text?: string; locator?: string | null; chapter_author?: string | null; comment?: string | null; reason?: string; updated_at?: string }
+export interface EditArgs { id: number; text?: string; locator?: string | null; chapter_author?: string | null; comment?: string | null; reason?: string; updated_at?: string; accept?: string[]; concepts?: string[] }
 
 /**
- * A person's edit from the admin pages: fixing a typo, a page, a chapter author, or the comment. Only the fields that
- * changed are written. A verified quote's words are the book's and stay (fromBook says which marks a person may
- * add). updated_at, when given, is the quote's as the form showed it; a quote changed since is refused, so one edit
- * doesn't undo another.
+ * A person's edit from the admin pages: fixing a typo, a page, a chapter author, the comment, or the concepts
+ * attached to it. Only the fields that changed are written. A verified quote's words are the book's and stay
+ * (fromBook says which marks a person may add). updated_at, when given, is the quote's as the form showed it; a
+ * quote changed since is refused, so one edit doesn't undo another. A removed concept stays off through a
+ * re-import. Changing only the concepts does not mark the quote edited, so a later import can still update its words.
  */
 export function editQuote(db: DB, args: EditArgs, editor: string) {
   return db.transaction(() => {
@@ -245,11 +373,21 @@ export function editQuote(db: DB, args: EditArgs, editor: string) {
       if (comment !== now_.comment) change.comment = comment;
     }
     const keys = Object.keys(change) as (keyof typeof change)[];
-    if (!keys.length) return { changed: [] as string[], quote: getQuote(db, args.id) };
+    const accepted = rememberWords(db, q, args.accept ?? [], editor);
+    const why = args.reason?.trim() || "edited on the admin pages";
+    const concepts = args.concepts === undefined ? [] : replaceConcepts(db, args.id, args.concepts, editor, why);
+    if (!keys.length && !accepted.length && !concepts.length) return { changed: [] as string[], quote: getQuote(db, args.id) };
     const stamp = now();
-    applyFields(db, q, change, editor, stamp);
-    history(db, args.id, "edited", Object.fromEntries(keys.map((k) => [k, now_[k]])), change, editor, args.reason?.trim() || "edited on the admin pages");
-    return { changed: keys as string[], quote: getQuote(db, args.id) };
+    if (keys.length) {
+      applyFields(db, q, change, editor, stamp);
+      history(db, args.id, "edited", Object.fromEntries(keys.map((k) => [k, now_[k]])), change, editor, why);
+    }
+    for (const word of accepted) {
+      for (const quote of quotesSuspecting(db, word)) settleOcr(db, quote);
+      history(db, args.id, "ocr_word", null, word, editor, `Accepted "${word}" as a word`);
+    }
+    if (accepted.length && !keys.length) db.prepare("UPDATE quotes SET updated_at = ?, updated_by = ? WHERE id = ?").run(stamp, editor, args.id);
+    return { changed: [...keys, ...concepts, ...accepted.map((word) => `word:${word}`)] as string[], quote: getQuote(db, args.id) };
   })();
 }
 

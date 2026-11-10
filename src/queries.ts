@@ -13,6 +13,12 @@ export { RELATION_LABEL, SEARCH_RELATIONS, ToolError, ftsQuery, type SearchRelat
  */
 
 
+/** Labels and alternative labels of concepts still in the vocabulary, for the OCR word list. */
+export function conceptLabels(db: DB): string[] {
+  const rows = db.prepare("SELECT label, alt_labels FROM concepts WHERE status != 'retired'").all() as { label: string; alt_labels: string }[];
+  return rows.flatMap((row) => [row.label, ...(JSON.parse(row.alt_labels) as string[])]);
+}
+
 export function openReadOnly(path = process.env.QUOTE_DB ?? "data/quotes.db"): DB {
   try {
     return new Database(path, { readonly: true, fileMustExist: true });

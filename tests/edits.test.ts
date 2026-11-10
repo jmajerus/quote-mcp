@@ -1,8 +1,12 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { CorpusClient } from "../src/capture.js";
 import { ToolError } from "../src/common.js";
 import type { DB } from "../src/db.js";
-import { deleteQuote, editQuote, fromBook, proposeFix, reviewProposal, updateQuote } from "../src/edits.js";
+import { acceptOcrWord, deleteQuote, editQuote, fromBook, proposeFix, reviewProposal, updateQuote } from "../src/edits.js";
+import { saveAdminEdit } from "../src/web.js";
 import { serveHttp } from "../src/server.js";
 import { runImport } from "../src/import.js";
 import { getQuote, overview, searchQuotes, worklist } from "../src/queries.js";
@@ -234,6 +238,128 @@ describe("editing on the admin pages", () => {
     expect(editQuote(db, { id, text: "Abuse at work rarely announces itself!" }, "jo@example.org").changed).toEqual(["text"]);
     expect(editQuote(db, { id, text: "Abuse at work rarely announces itself!" }, "jo@example.org").quote.text).toBe("Abuse at work rarely announces itself!");
     expect(editQuote(db, { id, text: "Abuse at work rarely announces itself!", locator: "13" }, "jo@example.org").changed).toEqual(["locator"]);
+  });
+
+  it("adds and removes concepts, and a removed one stays off through a re-import", () => {
+    const id = byText("Mobbing is an emotional assault");
+    expect(tags(id)).toEqual(["mobbing"]);
+    const sets = [{ slug: "harm", scheme: "human-work", label: "Harm", concepts: ["abuse"] }];
+    const html = renderAdmin(db, `/admin/quotes/${id}/edit`, new URLSearchParams(), sets)!;
+    expect(html).toContain('name="concepts" id="concepts" value="mobbing"');
+    expect(html).toContain(">Harm</option>");
+    expect(html).toContain(">The human side of work</option>");
+    const spaces = JSON.parse(html.match(/id="concept-spaces">([\s\S]*?)<\/script>/)![1]) as { id: string; concepts: { label: string }[] }[];
+    const labels = (space: string) => spaces.find((s) => s.id === space)!.concepts.map((c) => c.label);
+    expect(labels("scheme:human-work")).toEqual(expect.arrayContaining(["abuse", "dignity", "mobbing"]));
+    expect(labels("set:harm")).toEqual(["abuse"]);
+
+    // An alternative label is the same concept, so the tag already on the quote stays.
+    expect(editQuote(db, { id, concepts: ["group bullying"] }, "jo@example.org").changed).toEqual([]);
+    expect(tags(id)).toEqual(["mobbing"]);
+
+    const r = editQuote(db, { id, concepts: ["dignity", "kept-name"], reason: "retag" }, "jo@example.org");
+    expect(r.changed).toEqual(["-mobbing", "+dignity", "+kept-name"]);
+    expect(r.quote.edited).toBe(false);
+    expect(tags(id)).toEqual(["dignity", "kept-name"]);
+    expect(db.prepare("SELECT origin, concept_id IS NOT NULL AS concept FROM quote_tags WHERE quote_id = ? AND tag = 'dignity'").get(id)).toEqual({ origin: "person", concept: 1 });
+    expect(db.prepare("SELECT concept_id FROM quote_tags WHERE quote_id = ? AND tag = 'kept-name'").pluck().get(id)).toBeNull();
+    expect(db.prepare("SELECT tag FROM tag_removals WHERE quote_id = ?").pluck().all(id)).toEqual(["mobbing"]);
+    expect(db.prepare("SELECT kind, reason FROM history WHERE quote_id = ? AND kind = 'tags_changed'").get(id)).toEqual({ kind: "tags_changed", reason: "retag" });
+
+    reimport();
+    expect(tags(id)).toEqual(["dignity", "kept-name"]);
+
+    const quote = getQuote(db, id);
+    const saved = saveAdminEdit(db, `/admin/quotes/${id}/edit`, new URLSearchParams({ concepts: "abuse", text: quote.text as string, updated_at: quote.updated_at as string }), "lan", sets);
+    expect(saved).toEqual({ redirect: `/admin/quotes/${id}` });
+    expect(tags(id)).toEqual(["abuse"]);
+    expect(getQuote(db, id).edited).toBe(false);
+    reimport();
+    expect(tags(id)).toEqual(["abuse"]);
+  });
+
+  it("treats a concept's label as a known word, including when the quote is saved", () => {
+    const id = byText("Everyone deserves dignity");
+    const again = () => importWithSite(db, { drupal, primary: "users/1", sources: ["users/1"], dictionary: new Set(["everyone", "deserves"]) });
+    again();
+    expect(getQuote(db, id).suspect_words).toEqual([]);
+
+    db.prepare("UPDATE concepts SET status = 'retired' WHERE slug = 'dignity'").run();
+    again();
+    expect(getQuote(db, id).suspect_words).toEqual([{ token: "dignity", reason: "unknown" }]);
+    db.prepare("UPDATE concepts SET status = 'confirmed' WHERE slug = 'dignity'").run();
+
+    const dir = mkdtempSync(path.join(tmpdir(), "quote-mcp-concepts-"));
+    const list = path.join(dir, "words");
+    writeFileSync(list, "everyone\ndeserves\nat\nwork\n");
+    const previous = process.env.QUOTE_DICTIONARY;
+    process.env.QUOTE_DICTIONARY = list;
+    try {
+      const saved = editQuote(db, { id, text: "Everyone deserves dlgnity at work." }, "jo@example.org");
+      expect(saved.quote.suspect_words).toEqual([{ token: "dlgnity", reason: "confusion", suggestion: "dignity" }]);
+    } finally {
+      if (previous === undefined) delete process.env.QUOTE_DICTIONARY;
+      else process.env.QUOTE_DICTIONARY = previous;
+    }
+  });
+
+  it("clears a corrected misspelling, and accepts an unknown word as real", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "quote-mcp-words-"));
+    const list = path.join(dir, "words");
+    writeFileSync(list, "the\nway\ntraditional\nan\npractice\nmobbing\n");
+    const previous = process.env.QUOTE_DICTIONARY;
+    process.env.QUOTE_DICTIONARY = list;
+    try {
+      const id = byText("Everyone deserves dignity");
+      const suspect = (token: string) => JSON.stringify([{ token, reason: "unknown" }]);
+      const other = db.prepare(`INSERT INTO quotes (kind, work_id, text, text_key, status, grade, flags, suspects, edited, created_at, updated_at)
+        VALUES ('quote', (SELECT work_id FROM quotes WHERE id = ?), 'The experiential way.', 'theexperientialway', 'transcribed', 'B', '["ocr_suspect"]', ?, 0, 'x', 'x') RETURNING id`).pluck()
+        .get(id, suspect("experiential")) as number;
+      db.prepare("UPDATE quotes SET text = ?, flags = ?, suspects = ?, grade = 'B' WHERE id = ?")
+        .run("The tradtional way.", JSON.stringify(["ocr_suspect"]), suspect("tradtional"), id);
+      const server = await serveHttp(db, { host: "127.0.0.1", port: 0, capture: { writer: () => db, corpus: null, primary: "users/1" } });
+      const { port } = server.address() as import("node:net").AddressInfo;
+      const base = `http://127.0.0.1:${port}`;
+      const post = (url: string, fields: Record<string, string>) => fetch(url, {
+        method: "POST", redirect: "manual", body: new URLSearchParams(fields),
+        headers: { "content-type": "application/x-www-form-urlencoded", origin: base },
+      });
+      try {
+        const quotePage = await (await fetch(`${base}/admin/quotes/${id}`)).text();
+        expect(quotePage).toContain("tradtional (unknown)");
+        expect(quotePage).toContain(`action="/admin/quotes/${id}/words"`);
+        const form = await (await fetch(`${base}/admin/quotes/${id}/edit`)).text();
+        expect(form).toContain("Saving checks these words again");
+        expect(form).toContain("tradtional is a real word");
+        const updated = /name="updated_at" value="([^"]+)"/.exec(form)![1];
+        const saved = await post(`${base}/admin/quotes/${id}/edit`, { text: "The traditional way.", locator: "", comment: "", reason: "typo", updated_at: updated });
+        expect(saved.status).toBe(303);
+        expect(getQuote(db, id).flags).not.toContain("ocr_suspect");
+        expect(getQuote(db, id).suspect_words).toEqual([]);
+
+        db.prepare("UPDATE quotes SET text = 'The experiential way.', flags = ?, suspects = ?, grade = 'B', edited = 0 WHERE id = ?").run(JSON.stringify(["ocr_suspect"]), suspect("experiential"), id);
+        const again = await (await fetch(`${base}/admin/quotes/${id}`)).text();
+        expect(again).toContain("experiential (unknown)");
+        const accepted = await post(`${base}/admin/quotes/${id}/words`, { word: "experiential" });
+        expect(accepted.status).toBe(303);
+        expect(getQuote(db, id).flags).not.toContain("ocr_suspect");
+        expect(getQuote(db, other).flags).not.toContain("ocr_suspect");
+        expect(getQuote(db, other).suspect_words).toEqual([]);
+        expect(getQuote(db, id).edited).toBe(false);
+        expect(db.prepare("SELECT word FROM ocr_words").pluck().all()).toEqual(["experiential"]);
+        fails(() => acceptOcrWord(db, id, "experiential", "jo@example.org"), /isn't an unknown word/);
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+
+      importWithSite(db, { drupal, primary: "users/1", sources: ["users/1"], dictionary: new Set(["the", "way", "traditional", "an", "practice", "mobbing"]) });
+      expect(getQuote(db, id).text).toBe("The experiential way.");
+      expect(getQuote(db, id).flags).not.toContain("ocr_suspect");
+      expect(getQuote(db, other).flags).not.toContain("ocr_suspect");
+    } finally {
+      if (previous === undefined) delete process.env.QUOTE_DICTIONARY;
+      else process.env.QUOTE_DICTIONARY = previous;
+    }
   });
 
   it("saves the form posted from its own page, and refuses one posted from elsewhere", async () => {

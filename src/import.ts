@@ -1,7 +1,8 @@
 import { citekeyResolver } from "./bibkeys.js";
 import { type DB, NEXT_QUOTE_ID, now } from "./db.js";
 import { citekeysIn } from "./public.js";
-import { type Suspect, dropCommonUnknowns, suspectTokens } from "./ocr.js";
+import { type Suspect, addKnownWords, dropCommonUnknowns, suspectTokens } from "./ocr.js";
+import { conceptLabels } from "./queries.js";
 import { readMargin } from "./margin.js";
 import { type ParsedNote, noteText, parseNote, readLocator } from "./parse.js";
 import { fullTitle, normalizedTitle, quoteKey, shareAuthor, slugify, yearOf } from "./text.js";
@@ -161,7 +162,9 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
     // A tag someone took off the quote stays off, though its source still has it.
     const addTag = db.prepare(`INSERT OR IGNORE INTO quote_tags (quote_id, tag, concept_id, origin) SELECT @q, @tag, @concept, @origin
       WHERE NOT EXISTS (SELECT 1 FROM tag_removals WHERE quote_id = @q AND tag = @tag)`);
-    const addKwic = db.prepare("INSERT OR IGNORE INTO quote_kwic (quote_id, phrase, tag, concept_id) VALUES (?, ?, ?, ?)");
+    // A keyword mark for a tag someone took off stays off, the same way the tag does.
+    const addKwic = db.prepare(`INSERT OR IGNORE INTO quote_kwic (quote_id, phrase, tag, concept_id) SELECT @q, @phrase, @tag, @concept
+      WHERE NOT EXISTS (SELECT 1 FROM tag_removals WHERE quote_id = @q AND tag = @tag)`);
     const addHistory = db.prepare("INSERT INTO history (quote_id, at, kind, before, after, actor, reason) VALUES (?, ?, ?, ?, ?, ?, ?)");
     const insertQuote = db.prepare(`
       INSERT INTO quotes (id, kind, work_id, text, text_key, locator_kind, locator, chapter_author, comment, attribution, source_url, status, grade, flags,
@@ -186,7 +189,7 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
     };
     const tagAndMark = (quoteId: number, q: Incoming) => {
       for (const t of q.tags) addTag.run({ q: quoteId, tag: t.tag, concept: conceptOf(t.tag), origin: t.origin });
-      for (const k of q.parsed.kwic) addKwic.run(quoteId, k.phrase, k.concept, conceptOf(k.concept));
+      for (const k of q.parsed.kwic) addKwic.run({ q: quoteId, phrase: k.phrase, tag: k.concept, concept: conceptOf(k.concept) });
     };
 
     // A note merged into another item in Zotero takes its quotes along, which can leave their old work empty.
@@ -329,7 +332,12 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
     // --- OCR check over every quote nobody has edited, and that wasn't checked against a book's text ---
     const all = db.prepare("SELECT id, text, status, flags, edited FROM quotes WHERE kind = 'quote'").all() as { id: number; text: string; status: string; flags: string; edited: number }[];
     const suspects = new Map<string, Suspect[]>();
-    if (opts.dictionary) for (const q of all) suspects.set(String(q.id), suspectTokens(q.text, opts.dictionary));
+    if (opts.dictionary) {
+      const dict = new Set(opts.dictionary);
+      for (const word of db.prepare("SELECT word FROM ocr_words").pluck().all() as string[]) dict.add(word);
+      addKnownWords(dict, conceptLabels(db));
+      for (const q of all) suspects.set(String(q.id), suspectTokens(q.text, dict));
+    }
     const kept = dropCommonUnknowns(suspects);
     const setOcr = db.prepare("UPDATE quotes SET suspects = ?, flags = ?, grade = ? WHERE id = ?");
     for (const q of all) {

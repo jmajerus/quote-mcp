@@ -39,7 +39,13 @@ form.filters fieldset.include { flex: 1 0 100%; display: flex; flex-wrap: wrap; 
 form.filters fieldset.include legend { padding: 0 4px; color: var(--muted); font-size: 0.85rem; }
 form.filters fieldset.include label { display: flex; gap: 4px; align-items: center; }
 form.edit label { display: block; margin: 14px 0 4px; font-weight: 600; }
-form.edit input, form.edit textarea { font: inherit; width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
+form.edit fieldset.suspects, form.edit fieldset.concepts { border: 1px solid var(--border); border-radius: 6px; margin: 14px 0 0; padding: 4px 12px 8px; }
+form.edit fieldset.suspects legend, form.edit fieldset.concepts legend { padding: 0 4px; color: var(--muted); font-size: 0.85rem; }
+form.edit label.check { font-weight: 400; display: flex; gap: 6px; align-items: center; }
+form.edit label.check input { width: auto; }
+form.accept { display: inline; }
+form.accept button { background: none; border: none; padding: 0 4px; color: var(--accent); font: inherit; cursor: pointer; }
+form.edit input, form.edit textarea, form.edit select { font: inherit; width: 100%; box-sizing: border-box; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); }
 form.edit textarea { min-height: 7em; resize: vertical; }
 form.edit textarea[readonly] { background: transparent; color: var(--muted); }
 form.edit .actions { margin-top: 16px; display: flex; gap: 12px; align-items: center; }
