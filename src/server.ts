@@ -22,7 +22,7 @@ import { isSitePath, renderSite } from "./site.js";
 import { VERSION, createServer } from "./mcp.js";
 import { ToolError, overview } from "./queries.js";
 import { MAX_AUDIO, MAX_IMAGE, TranscribeError, captureKind, readCapture, transcribeAudio } from "./dictate.js";
-import { renderAdmin, renderCaptureIsbn, saveAcceptedWord, saveAdminEdit, saveCaptureForm } from "./web.js";
+import { adminRedirect, renderAdmin, renderCaptureIsbn, saveAcceptedWord, saveAdminEdit, saveCaptureForm } from "./web.js";
 
 /**
  * Streamable HTTP at /mcp (stateless: a fresh server per request, JSON responses), the admin pages at
@@ -281,6 +281,11 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
           const answer = await renderCaptureIsbn(db, url.searchParams.get("isbn") ?? "", options.capture?.lookupIsbn);
           if ("redirect" in answer) res.writeHead(303, { location: answer.redirect }).end();
           else res.writeHead(answer.status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }).end(answer.html);
+          return;
+        }
+        const jump = adminRedirect(db, url.pathname, url.searchParams);
+        if (jump) {
+          res.writeHead(303, { location: jump }).end();
           return;
         }
         let html: string | null;

@@ -86,6 +86,7 @@ function overviewPage(db: DB): string {
   const cards = [["Quotes", o.quotes, "/admin/quotes?kind=quote"], ["Notes", o.notes, "/admin/quotes?kind=note"], ["Works", o.works, "/admin/quotes"], ["Concepts", o.concepts, "/admin/concepts"]]
     .map(([k, n, href]) => `<a class="card" href="${href}" style="text-decoration:none;color:inherit"><div class="n">${n}</div><div class="k">${k}</div></a>`).join("");
   return page("Overview", "overview", `<h1>Quotes</h1><p class="sub">Last import ${esc(String(o.last_import ?? "never").slice(0, 16).replace("T", " "))} UTC · schemes: ${o.schemes.map((s) => esc((s as { label: string }).label)).join(", ")}</p>
+<form class="filters" method="get" action="/admin/quotes"><input name="q" placeholder="${esc(JUMP_PLACEHOLDER)}" aria-label="Find quotes, or go to a quote by number"><button>Find</button></form>
 <div class="grid">${cards}</div>${worklistTable(o.queues)}`);
 }
 
@@ -94,10 +95,29 @@ function worklistTable(queues: Record<string, number>): string {
 ${QUEUES.map((q) => `<tr><td><a href="/admin/worklists/${q}">${QUEUE_LABEL[q]}</a></td><td>${queues[q] ?? 0}</td></tr>`).join("")}</table></div>`;
 }
 
+/** A quote number typed alone in the Words box ("848" or "#848") with no concept, tag, author, or work: the number, else null. */
+function quoteNumber(p: URLSearchParams): number | null {
+  const m = /^\s*#?\s*(\d{1,9})\s*$/.exec(p.get("q") ?? "");
+  if (!m || ["concept", "tag", "author", "work"].some((name) => p.get(name))) return null;
+  return Number(m[1]);
+}
+
+/** Where a GET to the admin pages should go instead: /admin/quotes?q=848 to quote 848's page, when there is one. */
+export function adminRedirect(db: DB, path: string, params: URLSearchParams): string | null {
+  if (path !== "/admin/quotes") return null;
+  const id = quoteNumber(params);
+  if (id === null || !db.prepare("SELECT 1 FROM quotes WHERE id = ?").get(id)) return null;
+  return `/admin/quotes/${id}`;
+}
+
+const JUMP_PLACEHOLDER = 'Words, "a phrase", or #848';
+
 function quotesPage(db: DB, p: URLSearchParams): string {
   const { exact, include } = includeChoice(p.has("include") ? p.getAll("include") : null);
+  // A number with no quote behind it is searched for as a word, with a note that there's no such quote.
+  const number = quoteNumber(p);
   const params = {
-    q: p.get("q") ?? "", concept: p.get("concept") ?? "", tag: p.get("tag") ?? "", author: p.get("author") ?? "", work: p.get("work") ?? "",
+    q: number === null ? p.get("q") ?? "" : String(number), concept: p.get("concept") ?? "", tag: p.get("tag") ?? "", author: p.get("author") ?? "", work: p.get("work") ?? "",
     status: p.get("status") ?? "", kind: p.get("kind") ?? "", include: includeValue(exact, include), offset: Number(p.get("offset") ?? 0),
   };
   let body: string;
@@ -116,11 +136,12 @@ function quotesPage(db: DB, p: URLSearchParams): string {
     if (!(error instanceof ToolError)) throw error;
     body = `<p class="flag">${esc(error.message)}</p>`;
   }
-  const input = (name: "q" | "concept" | "author" | "work", label: string) => `<input name="${name}" placeholder="${label}" value="${esc(params[name])}" aria-label="${label}">`;
+  if (number !== null) body = `<p class="note">No quote or note ${number}. Words that match it:</p>${body}`;
+  const input = (name: "q" | "concept" | "author" | "work", label: string) => `<input name="${name}" placeholder="${esc(label)}" value="${esc(params[name])}" aria-label="${esc(label)}">`;
   const box = (kind: string, on: boolean) => `<label><input type="checkbox" data-include value="${kind}"${on ? " checked" : ""}> ${kind}</label>`;
   const boxes = box("exact", exact) + SEARCH_RELATIONS.map((kind) => box(kind, include.includes(kind))).join("");
   return page("Quotes", "quotes", `<h1>Quotes</h1>
-<form class="filters" method="get">${input("q", "Words or \"a phrase\"")}${input("concept", "Concept")}${input("author", "Author")}${input("work", "Work")}
+<form class="filters" method="get">${input("q", JUMP_PLACEHOLDER)}${input("concept", "Concept")}${input("author", "Author")}${input("work", "Work")}
 <select name="status" aria-label="Status"><option value="">Ready to use</option>${["transcribed", "unparsed", "any"].map((s) => `<option${params.status === s ? " selected" : ""}>${s}</option>`).join("")}</select>
 <select name="kind" aria-label="Kind"><option value="">Quotes and notes</option>${[["quote", "Quotes"], ["note", "Notes"]].map(([v, label]) => `<option value="${v}"${params.kind === v ? " selected" : ""}>${label}</option>`).join("")}</select>
 <fieldset class="include"><legend>Include</legend><input type="hidden" name="include" id="include-value" value="${esc(params.include)}">${boxes}</fieldset>

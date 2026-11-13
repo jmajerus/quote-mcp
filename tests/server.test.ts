@@ -339,6 +339,27 @@ describe("admin pages", () => {
     expect(list).toContain("1–1 of 1");
   });
 
+  it("goes to a quote by its number", async () => {
+    const id = quoteId("emotional assault");
+    for (const q of [String(id), `#${id}`, ` # ${id} `]) {
+      const res = await fetch(`${base}/admin/quotes?q=${encodeURIComponent(q)}&status=&kind=&include=exact`, { redirect: "manual" });
+      expect(res.status).toBe(303);
+      expect(res.headers.get("location")).toBe(`/admin/quotes/${id}`);
+    }
+    const note = await fetch(`${base}/admin/quotes?q=${noteId()}`, { redirect: "manual" });
+    expect(note.headers.get("location")).toBe(`/admin/quotes/${noteId()}`);
+    const filtered = await fetch(`${base}/admin/quotes?q=${id}&author=Davenport`, { redirect: "manual" });
+    expect(filtered.status).toBe(200);
+    const missing = await fetch(`${base}/admin/quotes?q=%2399999`, { redirect: "manual" });
+    expect(missing.status).toBe(200);
+    const html = await missing.text();
+    expect(html).toContain("No quote or note 99999.");
+    expect(html).toContain('value="99999"');
+    expect(html).toContain('placeholder="Words, &quot;a phrase&quot;, or #848"');
+    const home = await (await fetch(`${base}/admin`)).text();
+    expect(home).toContain('action="/admin/quotes"');
+  });
+
   it("escapes what it shows", async () => {
     const html = await (await fetch(`${base}/admin/quotes?q=${encodeURIComponent('<script>x</script>')}`)).text();
     expect(html).not.toContain("<script>x</script>");
