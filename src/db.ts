@@ -38,7 +38,7 @@ const QUOTE_COLUMNS = "id, kind, work_id, text, text_key, locator_kind, locator,
 
 /** One Calibre book from corpus-mcp's books feed, kept for the works add_quote made for books not in Zotero. */
 const CALIBRE_BOOKS = `CREATE TABLE IF NOT EXISTS calibre_books (
-  calibre_uuid TEXT PRIMARY KEY, book_id TEXT, data TEXT NOT NULL, fetched_at TEXT NOT NULL
+  calibre_uuid TEXT PRIMARY KEY COLLATE NOCASE, book_id TEXT, data TEXT NOT NULL, fetched_at TEXT NOT NULL
 );`;
 
 const SCHEMA = `

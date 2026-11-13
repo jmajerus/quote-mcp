@@ -29,6 +29,15 @@ describe("Pandoc citekeys expanded as Chicago author-date", () => {
     expect(render("See [@ryan1991driving; @orwell19491984].")).toBe("See (Ryan and Oestreich 1991; Orwell 1949).");
   });
 
+  it("renders an EPUB chapter, numbered or by title in braces, as cite_quote writes them", () => {
+    // A chapter locator, not a suffix: CMOS 18 labels a plain number ("chap. 7") and leaves the label off
+    // a reference that isn't one (14.143–54), and the braces are Pandoc's, not the reader's.
+    expect(render("See [@orwell19491984, chap. 7].")).toBe("See (Orwell 1949, chap. 7).");
+    expect(render("See [@orwell19491984, chap. 7.2].")).toBe("See (Orwell 1949, 7.2).");
+    expect(render("See [@orwell19491984, {chap. Introduction}].")).toBe("See (Orwell 1949, Introduction).");
+    expect(render("See [@orwell19491984, {chap. Introduction}, and after].")).not.toMatch(/[{}]/);
+  });
+
   it("leaves a citekey that has no record, and an address", () => {
     expect(render("See [@Peters2004].")).toBe("See [@Peters2004].");
     expect(render("See [@ryan1991driving; @Peters2004].")).toBe("See [@ryan1991driving; @Peters2004].");

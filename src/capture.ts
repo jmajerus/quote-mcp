@@ -664,12 +664,15 @@ export async function followAnchors(db: DB, corpus: CorpusClient): Promise<{ rea
 
 // --- Calibre books -------------------------------------------------------------------------------
 
-/** Keeps corpus-mcp's record of a Calibre book a work here came from, for cite_quote (queries.ts calibreBookOf). */
-function keepCalibreBook(db: DB, book: Book, stamp = now()): void {
-  if (!book.calibre_uuid) return;
+/**
+ * Keeps corpus-mcp's record of a Calibre book a work here came from, for cite_quote (queries.ts calibreBookOf),
+ * under the UUID as the work's origin spells it; the table ignores case either way.
+ */
+function keepCalibreBook(db: DB, book: Book, stamp = now(), uuid = book.calibre_uuid): void {
+  if (!uuid) return;
   db.prepare(`INSERT INTO calibre_books (calibre_uuid, book_id, data, fetched_at) VALUES (?, ?, ?, ?)
     ON CONFLICT (calibre_uuid) DO UPDATE SET book_id = excluded.book_id, data = excluded.data, fetched_at = excluded.fetched_at`)
-    .run(book.calibre_uuid, book.book_id ?? null, JSON.stringify(book), stamp);
+    .run(uuid, book.book_id ?? null, JSON.stringify(book), stamp);
 }
 
 /**
@@ -683,15 +686,16 @@ export async function refreshCalibreBooks(db: DB, corpus: CorpusClient): Promise
   const etag = getMeta(db, "corpus_books_etag");
   const feed = await corpus.booksFeed(etag);
   if (!feed) return { books: uuids.length, updated: 0, unchanged: true };
-  const wanted = new Set(uuids.map((u) => u.toLowerCase()));
+  const wanted = new Map(uuids.map((u) => [u.toLowerCase(), u]));
   let updated = 0;
   const stamp = now();
   db.transaction(() => {
     for (const book of feed.books) {
-      if (!book.calibre_uuid || !wanted.has(book.calibre_uuid.toLowerCase())) continue;
-      const before = db.prepare("SELECT data FROM calibre_books WHERE calibre_uuid = ?").pluck().get(book.calibre_uuid) as string | undefined;
+      const uuid = book.calibre_uuid ? wanted.get(book.calibre_uuid.toLowerCase()) : undefined;
+      if (!uuid) continue;
+      const before = db.prepare("SELECT data FROM calibre_books WHERE calibre_uuid = ?").pluck().get(uuid) as string | undefined;
       if (before === JSON.stringify(book)) continue;
-      keepCalibreBook(db, book, stamp);
+      keepCalibreBook(db, book, stamp, uuid);
       updated++;
     }
     if (feed.etag) setMeta(db, "corpus_books_etag", feed.etag);

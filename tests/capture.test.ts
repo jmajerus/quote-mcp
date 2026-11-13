@@ -606,6 +606,15 @@ describe("EPUB chapters and works not in Zotero", () => {
     expect(c.warnings.join(" ")).toMatch(/isn't filed in Zotero yet\. The citekey is the one corpus-mcp has/);
   });
 
+  it("finds a refreshed book whatever case corpus-mcp spells its UUID in", async () => {
+    epub();
+    const id = saved(await addQuote(db, { work: "main:7", text: "Work is a story" }, options())).id;
+    corpus.booksFeed = async () => ({ etag: '"e3"', books: [{ ...unfiledBook, calibre_uuid: unfiledBook.calibre_uuid.toUpperCase(), citekey: "roe2020story" }] });
+    expect(await refreshCalibreBooks(db, corpus)).toMatchObject({ updated: 1 });
+    expect(citeQuote(db, id)).toMatchObject({ citekey: "roe2020story", pandoc: "[@roe2020story, chap. 7.2]" });
+    expect(db.prepare("SELECT calibre_uuid FROM calibre_books").pluck().all()).toEqual([unfiledBook.calibre_uuid]);
+  });
+
   it("cites by the citekey corpus-mcp named when the quote was saved, before the feed is read", async () => {
     epub();
     unfiledBook.citekey = "roe2020unfiled";

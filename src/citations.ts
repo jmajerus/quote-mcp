@@ -64,9 +64,13 @@ function assets(): { style: string; locale: string } {
   return { style: styleText, locale: localeText };
 }
 
-/** `p. 12` is a page locator. Anything else after the citekey is a suffix, as Pandoc treats it. */
+/**
+ * `p. 12` is a page locator, and so is one in braces, which Pandoc takes whole: `{chap. Introduction}`, as
+ * cite_quote writes an EPUB chapter with no number. Anything else after the citekey is a suffix, as Pandoc treats it.
+ */
 function locatorOf(rest: string): { locator?: string; label?: string; suffix?: string } {
-  const match = /^([A-Za-z]+)\.?\s+(\d[\d.–—-]*)\s*(?:,\s*(.*))?$/.exec(rest.trim());
+  const braced = /^\{([A-Za-z]+)\.?\s+([^{}]+)\}\s*(?:,\s*(.*))?$/.exec(rest.trim());
+  const match = braced ?? /^([A-Za-z]+)\.?\s+(\d[\d.–—-]*)\s*(?:,\s*(.*))?$/.exec(rest.trim());
   const label = match && LOCATOR_LABEL[match[1].toLowerCase()];
   if (!match || !label) return { suffix: rest.trim() };
   const suffix = match[3]?.trim();

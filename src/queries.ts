@@ -357,7 +357,7 @@ export function calibreBookOf(db: DB, workId: number, quoteId?: number): { calib
   if (kept) return { calibre_uuid: uuid, book: JSON.parse(kept) as Record<string, unknown> };
   // Before the import has fetched the feed: the book as corpus-mcp named it when this quote was checked.
   const saved = quoteId === undefined ? null : calibreSource(db, quoteId)?.book ?? null;
-  return { calibre_uuid: uuid, book: saved && saved.calibre_uuid === uuid ? saved : null };
+  return { calibre_uuid: uuid, book: saved && String(saved.calibre_uuid).toLowerCase() === uuid.toLowerCase() ? saved : null };
 }
 
 /** The citekey corpus-mcp has for a Calibre book: Calibre's, one pinned there, or a Zotero match's; else the one it proposes. */
