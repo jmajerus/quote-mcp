@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { type AnchorChange, type Book, type CorpusClient, CorpusError, type CorpusQuote, type Verified, addQuote, fillChapterLocators, followAnchors, importCorpusQuotes, refreshCalibreBooks, retryAnchors, zoteroRefresher } from "../src/capture.js";
+import { type AnchorChange, type Book, type CorpusClient, CorpusError, type CorpusQuote, type Verified, addQuote, fillChapterLocators, fillPageLocators, followAnchors, importCorpusQuotes, refreshCalibreBooks, retryAnchors, zoteroRefresher } from "../src/capture.js";
 import http from "node:http";
 import { ToolError } from "../src/common.js";
 import { bookQuotes, handleCorpusQuotes } from "../src/corpus-api.js";
@@ -640,5 +640,36 @@ describe("EPUB chapters and works not in Zotero", () => {
     expect(calibreAuthor("Ludwig van Beethoven")).toEqual({ family: "van Beethoven", given: "Ludwig" });
     expect(calibreAuthor("Roe, Richard")).toEqual({ family: "Roe", given: "Richard" });
     expect(calibreAuthor("Plato")).toEqual({ literal: "Plato" });
+  });
+});
+
+describe("printed pages", () => {
+  it("keeps corpus-mcp's printed page, not the file's page the agent named", async () => {
+    corpus.verify = async (r) => ({ match: true, exact: true, text: r.text, locator: "p. 392", page_label: "392", section: "Chapter 20",
+      anchor: { calibre_uuid: mobbingBook.calibre_uuid, sha256: "abc", start_page: 421, start_offset: 0, page_label: "392", end_page_label: "392", text: r.text }, book: mobbingBook });
+    const q = saved(await addQuote(db, { work: "main:42", text: "It begins when an individual", page: "422" }, options()));
+    expect(q.locator).toBe("p. 392");
+  });
+
+  it("moves a verified quote to its anchor's printed page, after a dry run, and leaves a person's edit alone", async () => {
+    const id = saved(await addQuote(db, { work: "main:42", text: "It begins when an individual" }, options())).id;
+    const other = saved(await addQuote(db, { work: "main:42", text: "disrespectful behavior" }, options())).id;
+    // Saved at the file's page; corpus-mcp's anchor (as followAnchors keeps it) has the printed one.
+    const relabel = (quote: number, label: string, end = label) => {
+      const o = db.prepare("SELECT rowid, raw FROM quote_origins WHERE quote_id = ?").get(quote) as { rowid: number; raw: string };
+      const raw = JSON.parse(o.raw);
+      db.prepare("UPDATE quote_origins SET raw = ? WHERE rowid = ?").run(JSON.stringify({ ...raw, anchor: { ...raw.anchor, page_label: label, end_page_label: end } }), o.rowid);
+    };
+    db.prepare("UPDATE quotes SET locator = '422' WHERE id = ?").run(id);
+    relabel(id, "392");
+    db.prepare("UPDATE quotes SET locator = '41', edited = 1 WHERE id = ?").run(other);
+    relabel(other, "40", "41");
+    expect(fillPageLocators(db)).toEqual([{ id, from: "422", to: "392", edited: false }, { id: other, from: "41", to: "40–41", edited: true }]);
+    expect(citeQuote(db, id).locator_text).toBe("p. 422");
+    fillPageLocators(db, { apply: true, actor: "authoring" });
+    expect(citeQuote(db, id)).toMatchObject({ locator_text: "p. 392", locator: { label: "page", locator: "392" } });
+    expect(citeQuote(db, other).locator_text).toBe("p. 41");
+    expect(db.prepare("SELECT kind, before, after FROM history WHERE quote_id = ? ORDER BY id DESC LIMIT 1").get(id)).toEqual({ kind: "locator", before: '{"locator":"p. 422"}', after: '{"locator":"p. 392"}' });
+    expect(fillPageLocators(db).filter((f) => !f.edited)).toEqual([]);
   });
 });

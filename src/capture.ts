@@ -739,3 +739,43 @@ export function fillChapterLocators(db: DB, o: { apply?: boolean; ids?: number[]
   })();
   return fills;
 }
+
+export interface PageFix { id: number; from: string; to: string; edited: boolean }
+
+/**
+ * Verified quotes whose page isn't the printed page corpus-mcp's newest anchor has: saved before corpus-mcp
+ * labelled the book's pages, or relabelled since (followAnchors keeps the new anchor, not the locator). Each gets
+ * the printed page ("392", "392–393"), with a history entry. A locator a person edited is listed and left alone.
+ * Dry run unless apply.
+ */
+export function fillPageLocators(db: DB, o: { apply?: boolean; ids?: number[]; actor?: string } = {}): PageFix[] {
+  const rows = db.prepare(`SELECT q.id, q.locator, q.edited, o.raw FROM quotes q JOIN quote_origins o ON o.quote_id = q.id
+    WHERE o.kind IN ('agent', 'corpus') AND q.status = 'verified' AND q.locator_kind = 'page' AND q.locator IS NOT NULL
+      AND json_extract(o.raw, '$.anchor.page_label') IS NOT NULL
+    ORDER BY q.id, o.imported_at DESC`).all() as { id: number; locator: string; edited: number; raw: string }[];
+  const fixes: PageFix[] = [];
+  const seen = new Set<number>();
+  for (const r of rows) {
+    // The newest origin with an anchor is the one followAnchors keeps up to date.
+    if (seen.has(r.id) || (o.ids && !o.ids.includes(r.id))) continue;
+    seen.add(r.id);
+    const a = (JSON.parse(r.raw) as { anchor: { page_label: string; end_page_label?: string | null } }).anchor;
+    const to = a.end_page_label && a.end_page_label !== a.page_label ? `${a.page_label}–${a.end_page_label}` : a.page_label;
+    if (r.locator.replace(/-/g, "–") === to) continue;
+    fixes.push({ id: r.id, from: r.locator, to, edited: Boolean(r.edited) });
+  }
+  if (!o.apply) return fixes;
+  const actor = o.actor ?? "migrate";
+  db.transaction(() => {
+    const stamp = now();
+    for (const f of fixes) {
+      if (f.edited) continue;
+      const changed = db.prepare("UPDATE quotes SET locator = ?, updated_at = ?, updated_by = ? WHERE id = ? AND locator = ? AND edited = 0")
+        .run(f.to, stamp, actor, f.id, f.from).changes;
+      if (!changed) continue;
+      db.prepare("INSERT INTO history (quote_id, at, kind, before, after, actor, reason) VALUES (?, ?, 'locator', ?, ?, ?, ?)")
+        .run(f.id, stamp, JSON.stringify({ locator: `p. ${f.from}` }), JSON.stringify({ locator: `p. ${f.to}` }), actor, "The printed page corpus-mcp's anchor has, not the file's page");
+    }
+  })();
+  return fixes;
+}

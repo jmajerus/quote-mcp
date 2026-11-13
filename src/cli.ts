@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUSINESS_AND_LITERATURE, addAuthors, authorFills, mirrorItems } from "./authors.js";
 import { canonicalizeCitekeys, loadBiblioCatalogue } from "./bibkeys.js";
-import { corpusClient, corpusConfig, fillChapterLocators, followAnchors, importCorpusQuotes, refreshCalibreBooks, retryAnchors, storeWriter, zoteroRefresher } from "./capture.js";
+import { corpusClient, corpusConfig, fillChapterLocators, fillPageLocators, followAnchors, importCorpusQuotes, refreshCalibreBooks, retryAnchors, storeWriter, zoteroRefresher } from "./capture.js";
 import { SCHEMA_VERSION, openDb, openExisting } from "./db.js";
 import { reviewProposal } from "./edits.js";
 import { ToolError } from "./common.js";
@@ -49,7 +49,8 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *                                       a deploy that rolls back can put back a store the previous build opens.
  *   quote-mcp locators [--apply] [--id 844,845]
  *                                       EPUB quotes saved with no locator get their chapter ("chap. 7.2") from the section
- *                                       corpus-mcp found them in. Prints the plan; --apply writes it.
+ *                                       corpus-mcp found them in, and verified quotes whose page isn't the printed page of
+ *                                       their anchor get that page. Prints the plan; --apply writes it.
  *   quote-mcp export [--out file]      Everything as JSON (stdout by default).
  *   quote-mcp take-corpus-quotes [--skip 2,…] [--dry-run]
  *                                       Takes over corpus-mcp's own saved quotes, once: each is checked against
@@ -559,10 +560,15 @@ function locatorsCommand() {
   if (ids && (!ids.length || ids.some((n, i) => !raw![i] || !Number.isInteger(n) || n < 1))) throw new Error("--id takes quote numbers, such as --id 844,845. Nothing was done.");
   const db = apply ? openDb() : openExisting();
   try {
-    const fills = fillChapterLocators(db, { apply, ids, actor: process.env.SUDO_USER || userInfo().username });
+    const actor = process.env.SUDO_USER || userInfo().username;
+    const fills = fillChapterLocators(db, { apply, ids, actor });
     for (const f of fills) console.log(`  ${f.id}: ${f.locator}  (${f.section})`);
-    console.log(`${fills.length} quote${fills.length === 1 ? "" : "s"} ${apply ? "given" : "would get"} a chapter locator.${apply ? "" : " Dry run: nothing was saved; --apply writes it."}`);
-    if (apply && fills.length) publishFrom(db);
+    console.log(`${fills.length} quote${fills.length === 1 ? "" : "s"} ${apply ? "given" : "would get"} a chapter locator.`);
+    const pages = fillPageLocators(db, { apply, ids, actor });
+    for (const f of pages) console.log(`  ${f.id}: p. ${f.from} → p. ${f.to}${f.edited ? "  (edited by a person: left alone)" : ""}`);
+    const moved = pages.filter((f) => !f.edited).length;
+    console.log(`${moved} quote${moved === 1 ? "" : "s"} ${apply ? "moved" : "would move"} to the printed page corpus-mcp's anchor has.${apply ? "" : " Dry run: nothing was saved; --apply writes it."}`);
+    if (apply && (fills.length || moved)) publishFrom(db);
   } finally {
     db.close();
   }
