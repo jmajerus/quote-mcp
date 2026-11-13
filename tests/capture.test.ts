@@ -550,6 +550,7 @@ describe("EPUB chapters and works not in Zotero", () => {
     expect(chapterLocator("Chapter IV › Notes")).toBe("IV");
     expect(chapterLocator("Part One › Introduction:")).toBe("Introduction");
     expect(chapterLocator("1984 and After")).toBe("1984 and After");
+    expect(chapterLocator("7 Epilogue:\u200b Digital Roads › 7.\u200b2 The Chinese Panopticon")).toBe("7.2");
     expect(chapterLocator(null)).toBeNull();
   });
 
@@ -633,13 +634,28 @@ describe("EPUB chapters and works not in Zotero", () => {
     // As the earlier add_quote left it.
     db.prepare("UPDATE quotes SET locator_kind = 'none', locator = NULL, flags = '[\"no_locator\"]' WHERE id = ?").run(id);
     const dry = fillChapterLocators(db);
-    expect(dry).toEqual([{ id, section: SECTION, locator: "chap. 7.2", comment_section: true }]);
+    expect(dry).toEqual([{ id, section: SECTION, from: null, locator: "chap. 7.2", comment_section: true }]);
     expect(citeQuote(db, id).locator).toBeNull();
     expect(fillChapterLocators(db, { apply: true, ids: [page] })).toEqual([]);
     expect(fillChapterLocators(db, { apply: true, actor: "authoring" })).toHaveLength(1);
     expect(citeQuote(db, id)).toMatchObject({ locator: { label: "chapter", locator: "7.2" } });
     expect(saved({ quote: (await import("../src/queries.js")).getQuote(db, id) }).flags).toEqual([]);
     expect(db.prepare("SELECT kind, actor, after FROM history WHERE quote_id = ? ORDER BY id DESC LIMIT 1").get(id)).toEqual({ kind: "locator", actor: "authoring", after: '{"locator":"chap. 7.2"}' });
+    expect(fillChapterLocators(db)).toEqual([]);
+  });
+
+  it("corrects a chapter locator it read wrongly, and leaves a person's alone", async () => {
+    epub();
+    const id = saved(await addQuote(db, { work: "main:7", text: "Work is a story" }, options())).id;
+    const other = saved(await addQuote(db, { work: "main:7", text: "a story we tell ourselves" }, options())).id;
+    // As the zero-width space in "7.\u200b2" left them: the parent chapter.
+    db.prepare("UPDATE quotes SET locator = '7' WHERE id IN (?, ?)").run(id, other);
+    db.prepare("UPDATE quotes SET edited = 1 WHERE id = ?").run(other);
+    expect(fillChapterLocators(db)).toEqual([{ id, section: SECTION, from: "chap. 7", locator: "chap. 7.2", comment_section: true }]);
+    fillChapterLocators(db, { apply: true, actor: "authoring" });
+    expect(citeQuote(db, id).locator_text).toBe("chap. 7.2");
+    expect(citeQuote(db, other).locator_text).toBe("chap. 7");
+    expect(db.prepare("SELECT before, after FROM history WHERE quote_id = ? ORDER BY id DESC LIMIT 1").get(id)).toEqual({ before: '{"locator":"chap. 7"}', after: '{"locator":"chap. 7.2"}' });
     expect(fillChapterLocators(db)).toEqual([]);
   });
 

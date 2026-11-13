@@ -92,7 +92,9 @@ function chapterNumber(title: string): string | null {
  * title is numbered, the deepest title itself. Null for no section.
  */
 export function chapterLocator(section: string | null | undefined): string | null {
-  const titles = (section ?? "").split(" › ").map((t) => t.trim()).filter(Boolean);
+  // EPUB titles carry invisible break hints ("7.\u200b2 The Chinese Panopticon"): a zero-width space or joiner,
+  // a word joiner, a soft hyphen, a byte-order mark. They'd split the number, so they go first.
+  const titles = (section ?? "").replace(/[\u00ad\u200b-\u200d\u2060\ufeff]/g, "").split(" › ").map((t) => t.trim()).filter(Boolean);
   if (!titles.length) return null;
   for (let i = titles.length - 1; i >= 0; i--) {
     const n = chapterNumber(titles[i]);

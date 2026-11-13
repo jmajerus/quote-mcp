@@ -705,19 +705,22 @@ export async function refreshCalibreBooks(db: DB, corpus: CorpusClient): Promise
 
 // --- Chapter locators ----------------------------------------------------------------------------
 
-export interface ChapterFill { id: number; section: string; locator: string; comment_section: boolean }
+export interface ChapterFill { id: number; section: string; from: string | null; locator: string; comment_section: boolean }
 
 /**
  * Quotes checked against an EPUB before add_quote kept the chapter as the locator: no locator, and a section in
  * the place corpus-mcp named. Each gets "chap. <n>" (or the section's title), loses no_locator, and a history
- * entry; the "Section: …" line in its comment stays. A quote with any locator is left alone. Dry run unless apply.
+ * entry; the "Section: …" line in its comment stays. A chapter locator add_quote or this set is worked out again,
+ * and corrected when it differs (a better reading of the section); a page, or a locator a person edited, is left
+ * alone. Dry run unless apply.
  */
 export function fillChapterLocators(db: DB, o: { apply?: boolean; ids?: number[]; actor?: string } = {}): ChapterFill[] {
-  const rows = db.prepare(`SELECT q.id, q.comment, o.raw FROM quotes q JOIN quote_origins o ON o.quote_id = q.id
-    WHERE o.kind IN ('agent', 'corpus') AND q.kind = 'quote' AND q.locator IS NULL AND q.locator_kind = 'none'
+  const rows = db.prepare(`SELECT q.id, q.comment, q.locator, o.raw FROM quotes q JOIN quote_origins o ON o.quote_id = q.id
+    WHERE o.kind IN ('agent', 'corpus') AND q.kind = 'quote'
+      AND ((q.locator IS NULL AND q.locator_kind = 'none') OR (q.locator_kind = 'chapter' AND q.edited = 0))
       AND COALESCE(json_extract(o.raw, '$.position.section'), json_extract(o.raw, '$.anchor.section')) IS NOT NULL
       AND COALESCE(json_extract(o.raw, '$.position.page_label'), json_extract(o.raw, '$.anchor.page_label')) IS NULL
-    ORDER BY q.id, o.imported_at`).all() as { id: number; comment: string | null; raw: string }[];
+    ORDER BY q.id, o.imported_at`).all() as { id: number; comment: string | null; locator: string | null; raw: string }[];
   const fills: ChapterFill[] = [];
   const seen = new Set<number>();
   for (const r of rows) {
@@ -726,8 +729,8 @@ export function fillChapterLocators(db: DB, o: { apply?: boolean; ids?: number[]
     const raw = JSON.parse(r.raw) as { position?: { section?: string | null }; anchor?: { section?: string | null } };
     const section = raw.position?.section ?? raw.anchor?.section ?? null;
     const locator = chapterLocator(section);
-    if (!section || !locator) continue;
-    fills.push({ id: r.id, section, locator: `chap. ${locator}`, comment_section: (r.comment ?? "").includes(`Section: ${section}`) });
+    if (!section || !locator || locator === r.locator) continue;
+    fills.push({ id: r.id, section, from: r.locator === null ? null : `chap. ${r.locator}`, locator: `chap. ${locator}`, comment_section: (r.comment ?? "").includes(`Section: ${section}`) });
   }
   if (!o.apply) return fills;
   const actor = o.actor ?? "migrate";
@@ -737,10 +740,11 @@ export function fillChapterLocators(db: DB, o: { apply?: boolean; ids?: number[]
       const value = f.locator.slice("chap. ".length);
       const changed = db.prepare(`UPDATE quotes SET locator_kind = 'chapter', locator = ?,
         flags = (SELECT json_group_array(value) FROM json_each(flags) WHERE value != 'no_locator'), updated_at = ?, updated_by = ?
-        WHERE id = ? AND locator IS NULL`).run(value, stamp, actor, f.id).changes;
+        WHERE id = ? AND ${f.from === null ? "locator IS NULL" : "locator_kind = 'chapter' AND edited = 0 AND locator = ?"}`)
+        .run(value, stamp, actor, f.id, ...(f.from === null ? [] : [f.from.slice("chap. ".length)])).changes;
       if (!changed) continue;
       db.prepare("INSERT INTO history (quote_id, at, kind, before, after, actor, reason) VALUES (?, ?, 'locator', ?, ?, ?, ?)")
-        .run(f.id, stamp, JSON.stringify({ locator: null }), JSON.stringify({ locator: f.locator }), actor, `The EPUB's chapter, from the section corpus-mcp named: ${f.section}`);
+        .run(f.id, stamp, JSON.stringify({ locator: f.from }), JSON.stringify({ locator: f.locator }), actor, `The EPUB's chapter, from the section corpus-mcp named: ${f.section}`);
     }
   })();
   return fills;

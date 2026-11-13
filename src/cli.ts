@@ -562,8 +562,8 @@ async function locatorsCommand() {
   try {
     const actor = process.env.SUDO_USER || userInfo().username;
     const fills = fillChapterLocators(db, { apply, ids, actor });
-    for (const f of fills) console.log(`  ${f.id}: ${f.locator}  (${f.section})`);
-    console.log(`${fills.length} quote${fills.length === 1 ? "" : "s"} ${apply ? "given" : "would get"} a chapter locator.`);
+    for (const f of fills) console.log(`  ${f.id}: ${f.from ? `${f.from} → ` : ""}${f.locator}  (${f.section})`);
+    console.log(`${fills.length} quote${fills.length === 1 ? "" : "s"} ${apply ? "given" : "would get"} a chapter locator, or a corrected one.`);
     const corpus = corpusConfig();
     if (!corpus) say("corpus-mcp is off (CORPUS_BASE): pages are checked against each quote's stored anchor only.\n");
     const pages = await fillPageLocators(db, corpus ? corpusClient(corpus) : null, { apply, ids, actor });
