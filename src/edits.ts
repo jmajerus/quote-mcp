@@ -124,12 +124,15 @@ function replaceConcepts(db: DB, id: number, wanted: string[], actor: string, re
 
 export interface ProposeArgs { id: number; text?: string; locator?: string | null; chapter_author?: string | null; rationale: string; evidence?: string }
 
-/** A locator as given ("p. 211", "211-212", "Kindle loc. 208") as the store keeps it: its kind and value. */
+/** A locator as given ("p. 211", "211-212", "Kindle loc. 208", "chap. 7.2") as the store keeps it: its kind and value. */
 function parseLocator(locator: string | null): { kind: string; value: string | null } {
   const l = locator?.trim() || "";
   if (!l) return { kind: "none", value: null };
   const kindle = /^kindle(?:\s+loc(?:ation)?\.?)?\s*(.+)$/i.exec(l);
   if (kindle) return { kind: "kindle", value: kindle[1].trim() };
+  // An EPUB's chapter: "chap. 7.2", "chapter 3", "ch. Introduction".
+  const chapter = /^(?:chap(?:ter)?|ch)\.?\s+(.+)$/i.exec(l);
+  if (chapter) return { kind: "chapter", value: chapter[1].trim() };
   return { kind: "page", value: l.replace(/^pp?\.\s*/i, "") };
 }
 

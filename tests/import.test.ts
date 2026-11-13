@@ -334,6 +334,40 @@ describe("import", () => {
 });
 
 describe("schema", () => {
+  it("rebuilds a schema 6 quotes table to allow chapter locators, keeping its rows and what references them", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "quote-mcp-v6-"));
+    try {
+      const file = path.join(dir, "quotes.db");
+      const v6 = openDb(file);
+      // As schema 6 made it: no chapter kind.
+      v6.pragma("foreign_keys = OFF");
+      v6.pragma("legacy_alter_table = ON");
+      const sql = (v6.prepare("SELECT sql FROM sqlite_master WHERE name = 'quotes'").pluck().get() as string).replace("'page', 'kindle', 'chapter', 'none'", "'page', 'kindle', 'none'");
+      v6.exec(`ALTER TABLE quotes RENAME TO q_old; ${sql}; DROP TABLE q_old; CREATE INDEX quotes_work ON quotes (work_id); DROP TABLE calibre_books;`);
+      v6.pragma("legacy_alter_table = OFF");
+      v6.pragma("foreign_keys = ON");
+      v6.exec(`INSERT INTO quotes (id, text, text_key, locator_kind, locator, status, created_at, updated_at) VALUES (5, 'Kept', 'kept', 'page', '12', 'transcribed', 'then', 'then');
+        INSERT INTO quote_tags (quote_id, tag, origin) VALUES (5, 'dignity', 'test');`);
+      expect(() => v6.prepare("UPDATE quotes SET locator_kind = 'chapter' WHERE id = 5").run()).toThrow(/CHECK/);
+      v6.pragma("user_version = 6");
+      v6.close();
+
+      const db7 = openDb(file);
+      expect(db7.prepare("SELECT id, text, locator_kind, locator FROM quotes").all()).toEqual([{ id: 5, text: "Kept", locator_kind: "page", locator: "12" }]);
+      db7.prepare("UPDATE quotes SET locator_kind = 'chapter', locator = '7.2' WHERE id = 5").run();
+      expect(db7.pragma("foreign_key_check")).toEqual([]);
+      expect(db7.pragma("foreign_keys", { simple: true })).toBe(1);
+      // The tag still belongs to the quote: deleting it cascades.
+      db7.prepare("DELETE FROM quotes WHERE id = 5").run();
+      expect(db7.prepare("SELECT COUNT(*) FROM quote_tags").pluck().get()).toBe(0);
+      expect(db7.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'quotes' ORDER BY name").pluck().all()).toEqual(["quotes_text_key", "quotes_work"]);
+      expect(db7.prepare("SELECT COUNT(*) FROM calibre_books").pluck().get()).toBe(0);
+      db7.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("leaves a store alone for a dry run: it won't create one or migrate one", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "quote-mcp-existing-"));
     try {

@@ -40,9 +40,16 @@ Each result has its kind, text (a note's words are in `note`), work, locator, ta
 
 ## cite_quote
 
-Returns the quote, a CSL JSON item for its work (from Zotero, or the old site's record when the work isn't in
-Zotero yet), the locator, the Better BibTeX citekey, and a Pandoc citation such as
-`[@roberts1993victory, p. 44]`. `item_type` is the stored Zotero type. CSL `type` is Zotero's type for that
+Returns the quote, a CSL JSON item for its work, the locator, the Better BibTeX citekey, and a Pandoc
+citation such as `[@roberts1993victory, p. 44]`. A quote from an EPUB, which has no pages, is located by
+chapter: `chap. 7.2`, the number of the deepest numbered title in corpus-mcp's section path, or the section's
+title when none is numbered (written `{chap. Introduction}` for Pandoc).
+
+A work not in Zotero yet is cited from what it came from. For a Calibre book that add_quote checked the words
+against, that's the citekey corpus-mcp has for the book (Calibre's, one pinned there, or a matched Zotero
+item's), or else the one corpus-mcp proposes; `csl` is built from the Calibre metadata, and the warning says
+which key it is and that the work isn't filed yet. The import refreshes corpus-mcp's record of these books
+from its books feed. Only a work imported from the old site is cited from that site's record. `item_type` is the stored Zotero type. CSL `type` is Zotero's type for that
 item, so a journal article is an article and a podcast is a broadcast. An item type Zotero does not map is
 a document. `warnings` says what to check first: no page, possible OCR errors, a work
 not yet filed in Zotero. When a work has several editions in Zotero, `editions` lists each one's citekey;

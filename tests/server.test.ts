@@ -167,7 +167,7 @@ describe("queries", () => {
   it("cites a work not in Zotero from the old site's record, and says so", () => {
     const c = citeQuote(db, quoteId("deserves dignity"));
     expect(c.csl).toMatchObject({ type: "book", title: "A Book Nobody Filed", author: [{ family: "Doe", given: "Jane" }], ISBN: "9780000000000" });
-    expect(c.warnings.join(" ")).toMatch(/isn't in Zotero yet/);
+    expect(c.warnings.join(" ")).toMatch(/isn't filed in Zotero yet.*the old site's record/);
     expect(c.warnings.join(" ")).toMatch(/no page/);
   });
 

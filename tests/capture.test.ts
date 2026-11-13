@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { type AnchorChange, type Book, type CorpusClient, CorpusError, type CorpusQuote, type Verified, addQuote, followAnchors, importCorpusQuotes, retryAnchors, zoteroRefresher } from "../src/capture.js";
+import { type AnchorChange, type Book, type CorpusClient, CorpusError, type CorpusQuote, type Verified, addQuote, fillChapterLocators, followAnchors, importCorpusQuotes, refreshCalibreBooks, retryAnchors, zoteroRefresher } from "../src/capture.js";
 import http from "node:http";
 import { ToolError } from "../src/common.js";
 import { bookQuotes, handleCorpusQuotes } from "../src/corpus-api.js";
@@ -7,7 +7,7 @@ import { deleteQuote } from "../src/edits.js";
 import type { DB } from "../src/db.js";
 import { holdingsCounts } from "../src/holdings.js";
 import { runImport } from "../src/import.js";
-import { citeQuote, searchQuotes, worklist } from "../src/queries.js";
+import { calibreAuthor, chapterLocator, citeQuote, searchQuotes, worklist } from "../src/queries.js";
 import { drupal, makeStore } from "./fixture.js";
 import { importWithSite } from "./seed.js";
 
@@ -35,6 +35,7 @@ class FakeCorpus implements CorpusClient {
   verified: { book: string; text: string; page?: number }[] = [];
   /** Errors the next anchor POSTs throw, in order. */
   anchorErrors: CorpusError[] = [];
+  booksFeed?: CorpusClient["booksFeed"];
 
   async verify(r: { book: string; text: string; page?: number }): Promise<Verified> {
     this.verified.push(r);
@@ -530,5 +531,114 @@ describe("the reader's routes for corpus-mcp", () => {
     } finally {
       await s.close();
     }
+  });
+});
+
+describe("EPUB chapters and works not in Zotero", () => {
+  const SECTION = "Part Two › 7 Watching Work › 7.2 The Glass Office";
+  /** corpus-mcp's answer for an EPUB: no page, a section. */
+  const epub = (section: string | null = SECTION) => {
+    corpus.verify = async (r) => ({ match: true, exact: true, text: r.text, locator: null, page_label: null, section,
+      anchor: { calibre_uuid: unfiledBook.calibre_uuid, sha256: "abc", start_page: 80, start_offset: 0, text: r.text, section }, book: unfiledBook });
+  };
+
+  it("reads a chapter from corpus-mcp's section path", () => {
+    expect(chapterLocator(SECTION)).toBe("7.2");
+    expect(chapterLocator("Part One › Chapter 1: If We Succeed")).toBe("1");
+    expect(chapterLocator("1. If We Succeed › The Gorilla Problem")).toBe("1");
+    expect(chapterLocator("CHAPTER SEVEN")).toBe("7");
+    expect(chapterLocator("Chapter IV › Notes")).toBe("IV");
+    expect(chapterLocator("Part One › Introduction:")).toBe("Introduction");
+    expect(chapterLocator("1984 and After")).toBe("1984 and After");
+    expect(chapterLocator(null)).toBeNull();
+  });
+
+  it("keeps an EPUB quote's chapter as its locator, and cites it by chapter", async () => {
+    epub();
+    const r = await addQuote(db, { work: "main:7", text: "Work is a story" }, options());
+    const q = saved(r);
+    expect(q).toMatchObject({ status: "verified", locator: "chap. 7.2", flags: [] });
+    expect(db.prepare("SELECT locator_kind, locator, comment FROM quotes WHERE id = ?").get(q.id)).toEqual({ locator_kind: "chapter", locator: "7.2", comment: `Section: ${SECTION}` });
+    const c = citeQuote(db, q.id);
+    expect(c).toMatchObject({ locator: { label: "chapter", locator: "7.2" }, locator_text: "chap. 7.2", position: { section: SECTION } });
+    expect(c.warnings.join(" ")).not.toMatch(/no page/);
+    expect(searchQuotes(db, { flag: "no_locator", status: "any" }).quotes.map((x) => x.id)).not.toContain(q.id);
+  });
+
+  it("brackets an unnumbered chapter for Pandoc", async () => {
+    epub("Introduction");
+    unfiledBook.citekey = "roe2020unfiled";
+    try {
+      const id = saved(await addQuote(db, { work: "main:7", text: "Work is a story" }, options())).id;
+      expect(citeQuote(db, id)).toMatchObject({ locator_text: "chap. Introduction", pandoc: "[@roe2020unfiled, {chap. Introduction}]" });
+    } finally {
+      unfiledBook.citekey = null;
+    }
+  });
+
+  it("cites a Calibre book not in Zotero by corpus-mcp's citekey, and says the work isn't filed", async () => {
+    epub();
+    const id = saved(await addQuote(db, { work: "main:7", text: "Work is a story" }, options())).id;
+    // No citekey anywhere yet: no Pandoc citation, and no word of the old site.
+    let c = citeQuote(db, id);
+    expect(c).toMatchObject({ citekey: null, pandoc: null, csl: { title: "An Unfiled Ebook", author: [{ family: "Roe", given: "Richard" }] } });
+    expect(String((c.csl as { id: string }).id)).toMatch(/^work-\d+$/);
+    expect(c.warnings.join(" ")).toMatch(/isn't filed in Zotero yet and has no citekey.*Calibre book's metadata.*cite_passage \(book main:7\)/);
+    expect(c.warnings.join(" ")).not.toMatch(/old site/);
+
+    // The feed proposes one: cited by it, and the warning says it's only proposed.
+    const feed = (books: Book[], etag = '"e1"') => {
+      corpus.booksFeed = async (since?: string) => (since === etag ? null : { etag, books });
+    };
+    feed([mobbingBook, { ...unfiledBook, proposed_citekey: "roe2020unfiled" }]);
+    expect(await refreshCalibreBooks(db, corpus)).toMatchObject({ books: 1, updated: 1 });
+    c = citeQuote(db, id);
+    expect(c).toMatchObject({ citekey: "roe2020unfiled", pandoc: "[@roe2020unfiled, chap. 7.2]", csl: { id: "roe2020unfiled" } });
+    expect(c.warnings.join(" ")).toMatch(/isn't filed in Zotero yet.*proposes/);
+    // Unchanged since: one short request, nothing written.
+    expect(await refreshCalibreBooks(db, corpus)).toMatchObject({ updated: 0, unchanged: true });
+
+    // Pinned since: that key, no longer "proposed".
+    feed([{ ...unfiledBook, citekey: "roe2020story", citekey_source: "pinned", proposed_citekey: "roe2020unfiled" }], '"e2"');
+    await refreshCalibreBooks(db, corpus);
+    c = citeQuote(db, id);
+    expect(c).toMatchObject({ citekey: "roe2020story", pandoc: "[@roe2020story, chap. 7.2]" });
+    expect(c.warnings.join(" ")).toMatch(/isn't filed in Zotero yet\. The citekey is the one corpus-mcp has/);
+  });
+
+  it("cites by the citekey corpus-mcp named when the quote was saved, before the feed is read", async () => {
+    epub();
+    unfiledBook.citekey = "roe2020unfiled";
+    try {
+      const id = saved(await addQuote(db, { work: "main:7", text: "Work is a story" }, options())).id;
+      expect(citeQuote(db, id)).toMatchObject({ citekey: "roe2020unfiled", pandoc: "[@roe2020unfiled, chap. 7.2]" });
+    } finally {
+      unfiledBook.citekey = null;
+    }
+  });
+
+  it("gives EPUB quotes saved before chapters their chapter, after a dry run", async () => {
+    epub();
+    const id = saved(await addQuote(db, { work: "main:7", text: "Work is a story" }, options())).id;
+    const page = saved(await addQuote(db, { work: "main:42", text: "It begins when an individual" }, options())).id;
+    // As the earlier add_quote left it.
+    db.prepare("UPDATE quotes SET locator_kind = 'none', locator = NULL, flags = '[\"no_locator\"]' WHERE id = ?").run(id);
+    const dry = fillChapterLocators(db);
+    expect(dry).toEqual([{ id, section: SECTION, locator: "chap. 7.2", comment_section: true }]);
+    expect(citeQuote(db, id).locator).toBeNull();
+    expect(fillChapterLocators(db, { apply: true, ids: [page] })).toEqual([]);
+    expect(fillChapterLocators(db, { apply: true, actor: "authoring" })).toHaveLength(1);
+    expect(citeQuote(db, id)).toMatchObject({ locator: { label: "chapter", locator: "7.2" } });
+    expect(saved({ quote: (await import("../src/queries.js")).getQuote(db, id) }).flags).toEqual([]);
+    expect(db.prepare("SELECT kind, actor, after FROM history WHERE quote_id = ? ORDER BY id DESC LIMIT 1").get(id)).toEqual({ kind: "locator", actor: "authoring", after: '{"locator":"chap. 7.2"}' });
+    expect(fillChapterLocators(db)).toEqual([]);
+  });
+
+  it("splits a Calibre author into family and given names", () => {
+    expect(calibreAuthor("Stuart Russell")).toEqual({ family: "Russell", given: "Stuart" });
+    expect(calibreAuthor("Ursula K. Le Guin")).toEqual({ family: "Le Guin", given: "Ursula K." });
+    expect(calibreAuthor("Ludwig van Beethoven")).toEqual({ family: "van Beethoven", given: "Ludwig" });
+    expect(calibreAuthor("Roe, Richard")).toEqual({ family: "Roe", given: "Richard" });
+    expect(calibreAuthor("Plato")).toEqual({ literal: "Plato" });
   });
 });

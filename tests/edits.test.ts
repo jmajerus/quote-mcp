@@ -98,6 +98,10 @@ describe("proposals", () => {
     expect(flags()).not.toContain("no_locator");
     reviewProposal(db, proposeFix(db, { id, locator: null, rationale: "no page after all" }, "agent").proposal.id, "accept", "authoring");
     expect(flags()).toContain("no_locator");
+    reviewProposal(db, proposeFix(db, { id, locator: "chap. 7.2", rationale: "an EPUB's chapter" }, "agent").proposal.id, "accept", "authoring");
+    expect(getQuote(db, id).locator).toBe("chap. 7.2");
+    expect(flags()).not.toContain("no_locator");
+    expect(db.prepare("SELECT locator_kind, locator FROM quotes WHERE id = ?").get(id)).toEqual({ locator_kind: "chapter", locator: "7.2" });
 
     db.prepare(`UPDATE quotes SET flags = json_insert(flags, '$[#]', 'chapter_author') WHERE id = ?`).run(id);
     reviewProposal(db, proposeFix(db, { id, chapter_author: "Roe, Richard", rationale: "the volume's contents page" }, "agent").proposal.id, "accept", "authoring");

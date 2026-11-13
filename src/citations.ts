@@ -66,7 +66,7 @@ function assets(): { style: string; locale: string } {
 
 /** `p. 12` is a page locator. Anything else after the citekey is a suffix, as Pandoc treats it. */
 function locatorOf(rest: string): { locator?: string; label?: string; suffix?: string } {
-  const match = /^([A-Za-z]+)\.?\s+(\d[\d–—-]*)\s*(?:,\s*(.*))?$/.exec(rest.trim());
+  const match = /^([A-Za-z]+)\.?\s+(\d[\d.–—-]*)\s*(?:,\s*(.*))?$/.exec(rest.trim());
   const label = match && LOCATOR_LABEL[match[1].toLowerCase()];
   if (!match || !label) return { suffix: rest.trim() };
   const suffix = match[3]?.trim();

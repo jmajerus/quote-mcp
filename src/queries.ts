@@ -63,7 +63,49 @@ function workKey(work: string): { id?: number; library?: string; key?: string } 
 export function locatorText(kind: string, value: string | null): string | null {
   if (!value) return null;
   if (kind === "kindle") return `Kindle loc. ${value}`;
+  if (kind === "chapter") return `chap. ${value}`;
   return /[–-]/.test(value) ? `pp. ${value}` : `p. ${value}`;
+}
+
+const NUMBER_WORDS = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen",
+  "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"];
+
+/** A chapter's number in one outline title: "7.2 Watching", "Chapter 1: If We Succeed", "CHAPTER SEVEN", "Chapter IV". */
+function chapterNumber(title: string): string | null {
+  const t = title.trim();
+  const named = /^(?:chapter|chap\.?|ch\.?)\s+(\d+(?:\.\d+)*|[ivxlc]+|[a-z]+)(?=$|[\s.:,;–—-])/i.exec(t);
+  if (named) {
+    const n = named[1];
+    if (/^\d/.test(n)) return n;
+    const word = NUMBER_WORDS.indexOf(n.toLowerCase());
+    if (word >= 0) return String(word + 1);
+    return /^[ivxlc]+$/i.test(n) ? n.toUpperCase() : null;
+  }
+  // A bare number leads the title: "7.2 Watching", "1. If We Succeed". A year ("1984") isn't a chapter.
+  const bare = /^(\d{1,3}(?:\.\d+)*)\.?(?=$|[\s:–—-])/.exec(t);
+  return bare ? bare[1] : null;
+}
+
+/**
+ * The chapter locator for a place in an EPUB, from corpus-mcp's section path (outline titles joined with " › "):
+ * the number of the deepest numbered title ("Part Two › 7 Watching › 7.2 The Glass Office" is 7.2), or, when no
+ * title is numbered, the deepest title itself. Null for no section.
+ */
+export function chapterLocator(section: string | null | undefined): string | null {
+  const titles = (section ?? "").split(" › ").map((t) => t.trim()).filter(Boolean);
+  if (!titles.length) return null;
+  for (let i = titles.length - 1; i >= 0; i--) {
+    const n = chapterNumber(titles[i]);
+    if (n) return n;
+  }
+  return titles.at(-1)!.replace(/[\s.:;,]+$/, "").slice(0, 200);
+}
+
+/** A chapter locator for Pandoc: a number as it is, a title in braces so Pandoc takes all of it as the locator. */
+export function pandocLocator(text: string): string {
+  const chapter = /^chap\. (.+)$/.exec(text);
+  if (!chapter || /^(?:\d+(?:\.\d+)*|[IVXLC]+)$/.test(chapter[1])) return text;
+  return `{chap. ${chapter[1].replace(/[{}]/g, "")}}`;
 }
 
 // --- Concepts ------------------------------------------------------------------------------------
@@ -307,6 +349,43 @@ export function calibreSource(db: DB, id: number): { book: Record<string, unknow
   return { book: r.book, position: r.position ?? null };
 }
 
+/** The Calibre book a work came from, by the UUID add_quote filed it under: corpus-mcp's record, newest first. */
+export function calibreBookOf(db: DB, workId: number, quoteId?: number): { calibre_uuid: string; book: Record<string, unknown> | null } | null {
+  const uuid = db.prepare("SELECT ref FROM work_origins WHERE kind = 'calibre' AND work_id = ? LIMIT 1").pluck().get(workId) as string | undefined;
+  if (!uuid) return null;
+  const kept = db.prepare("SELECT data FROM calibre_books WHERE calibre_uuid = ?").pluck().get(uuid) as string | undefined;
+  if (kept) return { calibre_uuid: uuid, book: JSON.parse(kept) as Record<string, unknown> };
+  // Before the import has fetched the feed: the book as corpus-mcp named it when this quote was checked.
+  const saved = quoteId === undefined ? null : calibreSource(db, quoteId)?.book ?? null;
+  return { calibre_uuid: uuid, book: saved && saved.calibre_uuid === uuid ? saved : null };
+}
+
+/** The citekey corpus-mcp has for a Calibre book: Calibre's, one pinned there, or a Zotero match's; else the one it proposes. */
+function calibreCitekey(book: Record<string, unknown> | null): { key: string; proposed: boolean } | null {
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const key = str(book?.citekey);
+  if (key) return { key, proposed: false };
+  const proposed = str(book?.proposed_citekey);
+  return proposed ? { key: proposed, proposed: true } : null;
+}
+
+/**
+ * A Calibre author ("Stuart Russell", "Ursula K. Le Guin") as CSL: the last word is the family name, with a
+ * lower-case particle or a known prefix before it ("van", "de", "Le"). A name already "Family, Given" splits at the comma.
+ */
+export function calibreAuthor(name: string): Record<string, string> {
+  const n = name.trim();
+  if (n.includes(",")) {
+    const [family, given] = n.split(/,\s*/, 2);
+    return given ? { family, given } : { literal: n };
+  }
+  const words = n.split(/\s+/);
+  if (words.length < 2) return { literal: n };
+  let at = words.length - 1;
+  while (at > 1 && /^(?:van|von|der|den|de|du|da|di|del|della|des|la|le|st\.?|ter|ten)$/i.test(words[at - 1])) at--;
+  return { family: words.slice(at).join(" "), given: words.slice(0, at).join(" ") };
+}
+
 export function citeQuote(db: DB, id: number) {
   const q = getQuote(db, id);
   const row = db.prepare("SELECT w.* FROM works w JOIN quotes q ON q.work_id = w.id WHERE q.id = ?").get(id) as Record<string, unknown> | undefined;
@@ -320,6 +399,7 @@ export function citeQuote(db: DB, id: number) {
     citekey = z.citekey;
     if (!citekey) warnings.push("The Zotero item has no Better BibTeX citekey yet; the CSL id is its item key.");
   }
+  const pandocAt = q.locator ? `, ${pandocLocator(q.locator)}` : "";
   // Several editions in Zotero: offer each, so a citation can name the one the page belongs to.
   const editions = row && !z && row.match === "ambiguous"
     ? json<string[]>(row.candidates as string, []).map((key) => {
@@ -327,19 +407,36 @@ export function citeQuote(db: DB, id: number) {
       if (!c) return null;
       const year = (c.data.date ?? "").match(/\d{4}/)?.[0] ?? null;
       return { zotero_key: key, year, title: c.data.title ?? null, citekey: c.citekey, csl: zoteroToCsl(key, c.data),
-        pandoc: c.citekey ? `[@${c.citekey}${q.locator ? `, ${q.locator}` : ""}]` : null };
+        pandoc: c.citekey ? `[@${c.citekey}${pandocAt}]` : null };
     }).filter((e) => e !== null)
     : null;
   if (row && !z) {
+    // Only works imported from the old site have its record; a work add_quote made has Calibre's or the store's.
+    const legacy = db.prepare("SELECT 1 FROM work_origins WHERE kind = 'drupal' AND work_id = ? LIMIT 1").pluck().get(row.id) !== undefined;
+    const calibre = calibreBookOf(db, row.id as number, id);
+    const key = calibreCitekey(calibre?.book ?? null);
     const authors = json<string[]>(row.authors as string, []);
     csl = {
-      id: `work-${row.id}`, type: cslType(typeof row.item_type === "string" ? row.item_type : null), title: row.title,
-      author: authors.map((a) => { const [family, given] = a.split(/,\s*/, 2); return given ? { family, given } : { literal: a }; }),
+      id: key?.key ?? `work-${row.id}`, type: cslType(typeof row.item_type === "string" ? row.item_type : null), title: row.title,
+      author: authors.map((a) => {
+        if (calibre) return calibreAuthor(a);
+        const [family, given] = a.split(/,\s*/, 2);
+        return given ? { family, given } : { literal: a };
+      }),
       ...(row.year ? { issued: { "date-parts": [[Number(row.year)]] } } : {}), ...(row.isbn ? { ISBN: row.isbn } : {}),
     };
-    warnings.push(row.match === "ambiguous"
-      ? "Several Zotero items could be this work (different editions); `editions` has each one's citekey and CSL. Cite the edition the page number belongs to; csl here is the old site's record."
-      : "This work isn't in Zotero yet; this citation uses the old site's record until it's filed.");
+    citekey = key?.key ?? null;
+    const record = legacy ? "the old site's record" : calibre ? "the Calibre book's metadata" : "this store's record of the work";
+    const file = calibre ? ` corpus-mcp's cite_passage (book ${String(calibre.book?.book_id ?? calibre.calibre_uuid)}) has the data to file it with.` : "";
+    if (row.match === "ambiguous") {
+      warnings.push(`Several Zotero items could be this work (different editions); \`editions\` has each one's citekey and CSL. Cite the edition the page number belongs to; csl here is ${record}.`);
+    } else if (key && !key.proposed) {
+      warnings.push(`This work isn't filed in Zotero yet. The citekey is the one corpus-mcp has for its Calibre book, and csl is ${record}, until the work is filed.${file}`);
+    } else if (key) {
+      warnings.push(`This work isn't filed in Zotero yet. The citekey is the one corpus-mcp proposes for its Calibre book, which it gets when filed with cite_passage's BibTeX entry; until then it won't be in your bibliography. csl is ${record}.${file}`);
+    } else {
+      warnings.push(`This work isn't filed in Zotero yet and has no citekey, so there's no Pandoc citation; csl is ${record} until it's filed.${file}`);
+    }
   } else if (!row) {
     warnings.push(q.attribution ? `No work to cite; the quote is attributed to ${q.attribution}.` : "No work to cite.");
   }
@@ -349,8 +446,11 @@ export function citeQuote(db: DB, id: number) {
   if (q.flags.includes("anchor_lost")) warnings.push("The Calibre book's file has changed and corpus-mcp no longer finds these words in it. The quote was checked when saved; check it against the current edition before quoting.");
   if (q.flags.includes("ocr_suspect")) warnings.push("Some words may be OCR errors; check them against the book (see suspect_words in get_quote).");
   const kindle = q.locator?.startsWith("Kindle");
-  const locator = q.locator && !kindle ? { label: "page", locator: q.locator.replace(/^pp?\. /, "") } : null;
-  const pandoc = citekey ? `[@${citekey}${locator ? `, ${q.locator}` : kindle ? `, ${q.locator}` : ""}]` : null;
+  const chapter = q.locator?.startsWith("chap. ");
+  const locator = !q.locator || kindle ? null
+    : chapter ? { label: "chapter", locator: q.locator.slice("chap. ".length) }
+    : { label: "page", locator: q.locator.replace(/^pp?\. /, "") };
+  const pandoc = citekey ? `[@${citekey}${pandocAt}]` : null;
   // Extraction owns paragraph structure; preserve the stored wording and intentional breaks.
   const source = q.status === "verified" ? calibreSource(db, id) : null;
   return {
