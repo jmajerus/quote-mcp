@@ -115,7 +115,7 @@ export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture)
     annotations: readOnly,
   }, ({ concept }) => run(() => getConcept(db, concept)));
 
-  server.registerTool("quote_worklist", {
+  server.registerTool("worklist", {
     title: "Quote worklist",
     description: "What needs a person: unparsed quotes to split, works whose Zotero edition is ambiguous or that aren't in Zotero yet, tags that aren't concepts, and quotes by flag (no_locator, ocr_suspect, anchor_lost: a verified quote its Calibre book's new file no longer has, …). Call with no queue for the counts. terminology-mcp holds the concepts: to make an unresolved tag one, call its propose_term with scheme \"human-work\", a label, and evidence {quote: <id>, tag}, and leave the quote's tags alone.",
     inputSchema: {
@@ -130,7 +130,7 @@ export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture)
   if (capture) {
     server.registerTool("add_quote", {
       title: "Add a quote",
-      description: `Save a quote from a work. When the work has a Calibre book with text, corpus-mcp checks the words against it first: on a match the quote is saved with the book's exact wording and page (for an EPUB, which has no pages, its chapter: "chap. 7.2"), status "verified"; with no match nothing is saved and the error lists the closest passages, so quote again from those. A work with no Calibre book (a paper book) is saved "transcribed", with the page you give. A retry with the same request_id, or the same words for the same work, returns the quote already saved. The answer carries book, the Calibre book it was checked against (null when it wasn't). Tags that aren't concepts are kept as written (see quote_worklist unresolved_tags).`,
+      description: `Save a quote from a work. When the work has a Calibre book with text, corpus-mcp checks the words against it first: on a match the quote is saved with the book's exact wording and page (for an EPUB, which has no pages, its chapter: "chap. 7.2"), status "verified"; with no match nothing is saved and the error lists the closest passages, so quote again from those. A work with no Calibre book (a paper book) is saved "transcribed", with the page you give. A retry with the same request_id, or the same words for the same work, returns the quote already saved. The answer carries book, the Calibre book it was checked against (null when it wasn't). Tags that aren't concepts are kept as written (see worklist unresolved_tags).`,
       inputSchema: {
         work: z.string().describe("The work: a key from holdings-mcp's find_work (zotero:<library>/<key> or quote:<id>), a citekey, a Zotero item key, or a Calibre book id (main:42)"),
         text: z.string().max(MAX_QUOTE).describe("The words quoted, as in the book"),
@@ -157,7 +157,7 @@ export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture)
 
     server.registerTool("propose_quote_fix", {
       title: "Propose a fix to a quote",
-      description: "Propose a change to a quote's text, page or location, or chapter author, for a person to accept or reject; nothing changes until they do. Say why, and give evidence (where you checked) when there is some. A quote checked against its Calibre book (status verified) keeps the book's text; to quote another passage, use add_quote. Pending proposals show in get_quote and quote_worklist proposals.",
+      description: "Propose a change to a quote's text, page or location, or chapter author, for a person to accept or reject; nothing changes until they do. Say why, and give evidence (where you checked) when there is some. A quote checked against its Calibre book (status verified) keeps the book's text; to quote another passage, use add_quote. Pending proposals show in get_quote and worklist proposals.",
       inputSchema: {
         id: quoteId,
         text: z.string().max(MAX_QUOTE).optional().describe("The corrected words"),

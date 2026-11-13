@@ -247,7 +247,7 @@ describe("MCP over HTTP", () => {
     const client = new Client({ name: "test", version: "1" });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp`)));
     const tools = (await client.listTools()).tools.map((t) => t.name).sort();
-    expect(tools).toEqual(["cite_quote", "get_concept", "get_quote", "list_concepts", "list_sets", "quote_worklist", "search_quotes"]);
+    expect(tools).toEqual(["cite_quote", "get_concept", "get_quote", "list_concepts", "list_sets", "search_quotes", "worklist"]);
 
     const search = await client.callTool({ name: "search_quotes", arguments: { query: "assault" } });
     const found = JSON.parse((search.content as { text: string }[])[0].text);
@@ -257,7 +257,7 @@ describe("MCP over HTTP", () => {
     const missing = await client.callTool({ name: "get_quote", arguments: { id: 9999 } });
     expect(missing.isError).toBe(true);
 
-    const counts = JSON.parse(((await client.callTool({ name: "quote_worklist", arguments: {} })).content as { text: string }[])[0].text);
+    const counts = JSON.parse(((await client.callTool({ name: "worklist", arguments: {} })).content as { text: string }[])[0].text);
     expect(counts.queues).toMatchObject({ unmatched_works: 1, kindle_locator: 1 });
     await client.close();
   });

@@ -12,7 +12,11 @@ read-only for now: nothing an agent does changes the store. Editing comes with p
 | `list_concepts` | List concepts | The concepts, with definitions, alternative labels, and quote counts |
 | `get_concept` | Get a concept | One concept, its relations, and its quote counts |
 | `list_sets` | List concept sets | The named concept sets, with how many concepts each has |
-| `quote_worklist` | Quote worklist | What needs a person: unparsed quotes, unmatched works, tags that aren't concepts, flags |
+| `worklist` | Quote worklist | What needs a person: unparsed quotes, unmatched works, tags that aren't concepts, flags |
+
+`worklist` was `quote_worklist` before 2026-11-13. The Authoring portal prefixes each server's tools, and
+the old name showed there as `quote_quote_worklist`; it's now `quote_worklist`, as `holdings_status` and
+`corpus_status` are.
 
 ## The typical flow
 
