@@ -49,8 +49,8 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *                                       a deploy that rolls back can put back a store the previous build opens.
  *   quote-mcp locators [--apply] [--id 844,845]
  *                                       EPUB quotes saved with no locator get their chapter ("chap. 7.2") from the section
- *                                       corpus-mcp found them in, and verified quotes whose page isn't the printed page of
- *                                       their anchor get that page. Prints the plan; --apply writes it.
+ *                                       corpus-mcp found them in, and verified quotes whose page isn't the printed page
+ *                                       corpus-mcp finds them on now get that page. Prints the plan; --apply writes it.
  *   quote-mcp export [--out file]      Everything as JSON (stdout by default).
  *   quote-mcp take-corpus-quotes [--skip 2,…] [--dry-run]
  *                                       Takes over corpus-mcp's own saved quotes, once: each is checked against
@@ -552,7 +552,7 @@ async function rematchCommand() {
 }
 
 /** EPUB quotes saved before add_quote kept the chapter: their chapter as the locator. */
-function locatorsCommand() {
+async function locatorsCommand() {
   onlyFlags("locators", ["--apply", "--id"]);
   const apply = flag("--apply");
   const raw = flag("--id") ? (option("--id") ?? "").split(",").map((n) => n.trim()) : undefined;
@@ -564,10 +564,12 @@ function locatorsCommand() {
     const fills = fillChapterLocators(db, { apply, ids, actor });
     for (const f of fills) console.log(`  ${f.id}: ${f.locator}  (${f.section})`);
     console.log(`${fills.length} quote${fills.length === 1 ? "" : "s"} ${apply ? "given" : "would get"} a chapter locator.`);
-    const pages = fillPageLocators(db, { apply, ids, actor });
-    for (const f of pages) console.log(`  ${f.id}: p. ${f.from} → p. ${f.to}${f.edited ? "  (edited by a person: left alone)" : ""}`);
+    const corpus = corpusConfig();
+    if (!corpus) say("corpus-mcp is off (CORPUS_BASE): pages are checked against each quote's stored anchor only.\n");
+    const pages = await fillPageLocators(db, corpus ? corpusClient(corpus) : null, { apply, ids, actor });
+    for (const f of pages) console.log(`  ${f.id}: p. ${f.from} → p. ${f.to}${f.source === "anchor" ? "  (from the stored anchor)" : ""}${f.edited ? "  (edited by a person: left alone)" : ""}`);
     const moved = pages.filter((f) => !f.edited).length;
-    console.log(`${moved} quote${moved === 1 ? "" : "s"} ${apply ? "moved" : "would move"} to the printed page corpus-mcp's anchor has.${apply ? "" : " Dry run: nothing was saved; --apply writes it."}`);
+    console.log(`${moved} quote${moved === 1 ? "" : "s"} ${apply ? "moved" : "would move"} to the printed page the passage is on.${apply ? "" : " Dry run: nothing was saved; --apply writes it."}`);
     if (apply && (fills.length || moved)) publishFrom(db);
   } finally {
     db.close();

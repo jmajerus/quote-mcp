@@ -664,12 +664,33 @@ describe("printed pages", () => {
     relabel(id, "392");
     db.prepare("UPDATE quotes SET locator = '41', edited = 1 WHERE id = ?").run(other);
     relabel(other, "40", "41");
-    expect(fillPageLocators(db)).toEqual([{ id, from: "422", to: "392", edited: false }, { id: other, from: "41", to: "40–41", edited: true }]);
+    expect(await fillPageLocators(db, null)).toEqual([{ id, from: "422", to: "392", edited: false, source: "anchor" }, { id: other, from: "41", to: "40–41", edited: true, source: "anchor" }]);
     expect(citeQuote(db, id).locator_text).toBe("p. 422");
-    fillPageLocators(db, { apply: true, actor: "authoring" });
+    await fillPageLocators(db, null, { apply: true, actor: "authoring" });
     expect(citeQuote(db, id)).toMatchObject({ locator_text: "p. 392", locator: { label: "page", locator: "392" } });
     expect(citeQuote(db, other).locator_text).toBe("p. 41");
     expect(db.prepare("SELECT kind, before, after FROM history WHERE quote_id = ? ORDER BY id DESC LIMIT 1").get(id)).toEqual({ kind: "locator", before: '{"locator":"p. 422"}', after: '{"locator":"p. 392"}' });
-    expect(fillPageLocators(db).filter((f) => !f.edited)).toEqual([]);
+    expect((await fillPageLocators(db, null)).filter((f) => !f.edited)).toEqual([]);
+  });
+
+  it("asks corpus-mcp for the page the passage is on now, when the stored anchor still has the old label", async () => {
+    const id = saved(await addQuote(db, { work: "main:42", text: "It begins when an individual" }, options())).id;
+    // Saved when the book's labels said 422; a re-index relabelled the page without re-anchoring.
+    db.prepare("UPDATE quotes SET locator = '422' WHERE id = ?").run(id);
+    const o = db.prepare("SELECT rowid, raw FROM quote_origins WHERE quote_id = ?").get(id) as { rowid: number; raw: string };
+    const raw = JSON.parse(o.raw);
+    db.prepare("UPDATE quote_origins SET raw = ? WHERE rowid = ?").run(JSON.stringify({ ...raw, anchor: { ...raw.anchor, page_label: "422", end_page_label: "422" } }), o.rowid);
+    expect(await fillPageLocators(db, null)).toEqual([]);
+    const asked: { book: string; text: string; page?: number }[] = [];
+    corpus.verify = async (r) => {
+      asked.push(r);
+      return { match: true, exact: true, text: r.text, locator: "p. 392", page_label: "392", section: null,
+        anchor: { calibre_uuid: mobbingBook.calibre_uuid, text: r.text, page_label: "392", end_page_label: "392" }, book: mobbingBook };
+    };
+    expect(await fillPageLocators(db, corpus)).toEqual([{ id, from: "422", to: "392", edited: false, source: "corpus" }]);
+    expect(asked).toEqual([{ book: mobbingBook.calibre_uuid, text: raw.anchor.text, page: raw.anchor.start_page + 1 }]);
+    // corpus-mcp unreachable: the stored anchor, which agrees with the quote.
+    corpus.verify = async () => { throw new CorpusError(0, "unreachable"); };
+    expect(await fillPageLocators(db, corpus)).toEqual([]);
   });
 });

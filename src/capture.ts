@@ -29,6 +29,8 @@ const ANCHOR_LOST = "anchor_lost";
 /** One entry of corpus-mcp's /api/holdings/books feed. */
 export interface Book {
   calibre_uuid: string; book_id: string; title: string; authors: string[]; year: string | number | null; citekey: string | null;
+  /** The key corpus-mcp's citekey rule gives the book; absent when the metadata blocks one. Sent beside a real citekey too. */
+  proposed_citekey?: string;
   zotero: { library: string; key: string } | null; [field: string]: unknown;
 }
 export type Verified =
@@ -740,18 +742,22 @@ export function fillChapterLocators(db: DB, o: { apply?: boolean; ids?: number[]
   return fills;
 }
 
-export interface PageFix { id: number; from: string; to: string; edited: boolean }
+export interface PageFix { id: number; from: string; to: string; edited: boolean; source: "corpus" | "anchor" }
+
+const pageSpan = (label: string, end?: string | null) => (end && end !== label ? `${label}–${end}` : label);
 
 /**
- * Verified quotes whose page isn't the printed page corpus-mcp's newest anchor has: saved before corpus-mcp
- * labelled the book's pages, or relabelled since (followAnchors keeps the new anchor, not the locator). Each gets
- * the printed page ("392", "392–393"), with a history entry. A locator a person edited is listed and left alone.
+ * Verified quotes whose page isn't the book's printed page now: saved before corpus-mcp labelled the book's
+ * pages, or relabelled since (a re-index changes labels without re-anchoring, and followAnchors keeps a new
+ * anchor, not the locator). With corpus-mcp, each passage is looked up again (its anchor's text, from its page)
+ * for the label it has now; without, or when it isn't found, the newest anchor's label is used. Each gets the
+ * printed page ("392", "392–393"), with a history entry; a locator a person edited is listed and left alone.
  * Dry run unless apply.
  */
-export function fillPageLocators(db: DB, o: { apply?: boolean; ids?: number[]; actor?: string } = {}): PageFix[] {
+export async function fillPageLocators(db: DB, corpus: CorpusClient | null, o: { apply?: boolean; ids?: number[]; actor?: string } = {}): Promise<PageFix[]> {
   const rows = db.prepare(`SELECT q.id, q.locator, q.edited, o.raw FROM quotes q JOIN quote_origins o ON o.quote_id = q.id
     WHERE o.kind IN ('agent', 'corpus') AND q.status = 'verified' AND q.locator_kind = 'page' AND q.locator IS NOT NULL
-      AND json_extract(o.raw, '$.anchor.page_label') IS NOT NULL
+      AND json_extract(o.raw, '$.anchor') IS NOT NULL
     ORDER BY q.id, o.imported_at DESC`).all() as { id: number; locator: string; edited: number; raw: string }[];
   const fixes: PageFix[] = [];
   const seen = new Set<number>();
@@ -759,10 +765,20 @@ export function fillPageLocators(db: DB, o: { apply?: boolean; ids?: number[]; a
     // The newest origin with an anchor is the one followAnchors keeps up to date.
     if (seen.has(r.id) || (o.ids && !o.ids.includes(r.id))) continue;
     seen.add(r.id);
-    const a = (JSON.parse(r.raw) as { anchor: { page_label: string; end_page_label?: string | null } }).anchor;
-    const to = a.end_page_label && a.end_page_label !== a.page_label ? `${a.page_label}–${a.end_page_label}` : a.page_label;
-    if (r.locator.replace(/-/g, "–") === to) continue;
-    fixes.push({ id: r.id, from: r.locator, to, edited: Boolean(r.edited) });
+    const a = (JSON.parse(r.raw) as { anchor: { calibre_uuid?: string; text?: string; start_page?: number; page_label?: string | null; end_page_label?: string | null } }).anchor;
+    let to = a.page_label ? pageSpan(a.page_label, a.end_page_label) : null;
+    let source: PageFix["source"] = "anchor";
+    if (corpus && a.calibre_uuid && a.text) {
+      try {
+        const v = await corpus.verify({ book: a.calibre_uuid, text: a.text, ...(typeof a.start_page === "number" ? { page: a.start_page + 1 } : {}) });
+        const now_ = v.match ? (v.anchor as { page_label?: string | null; end_page_label?: string | null }) : null;
+        if (now_?.page_label) [to, source] = [pageSpan(now_.page_label, now_.end_page_label), "corpus"];
+      } catch (error) {
+        if (!(error instanceof CorpusError)) throw error;
+      }
+    }
+    if (!to || r.locator.replace(/-/g, "–") === to) continue;
+    fixes.push({ id: r.id, from: r.locator, to, edited: Boolean(r.edited), source });
   }
   if (!o.apply) return fixes;
   const actor = o.actor ?? "migrate";
@@ -774,7 +790,8 @@ export function fillPageLocators(db: DB, o: { apply?: boolean; ids?: number[]; a
         .run(f.to, stamp, actor, f.id, f.from).changes;
       if (!changed) continue;
       db.prepare("INSERT INTO history (quote_id, at, kind, before, after, actor, reason) VALUES (?, ?, 'locator', ?, ?, ?, ?)")
-        .run(f.id, stamp, JSON.stringify({ locator: `p. ${f.from}` }), JSON.stringify({ locator: `p. ${f.to}` }), actor, "The printed page corpus-mcp's anchor has, not the file's page");
+        .run(f.id, stamp, JSON.stringify({ locator: `p. ${f.from}` }), JSON.stringify({ locator: `p. ${f.to}` }), actor,
+          f.source === "corpus" ? "The printed page corpus-mcp finds the passage on now, not the file's page" : "The printed page corpus-mcp's anchor has, not the file's page");
     }
   })();
   return fixes;
