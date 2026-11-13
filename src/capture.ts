@@ -4,7 +4,7 @@ import { ToolError } from "./common.js";
 import { type DB, NEXT_QUOTE_ID, getMeta, now, setMeta } from "./db.js";
 import { creators } from "./import.js";
 import { citedKey, citekeyOf } from "./csl.js";
-import { calibreSource, getQuote } from "./queries.js";
+import { calibreSource, chapterLocator, getQuote } from "./queries.js";
 import { quoteKey, yearOf } from "./text.js";
 import { syncLibrary } from "./sync.js";
 import { type ApiItem, ZoteroClient, needsKey, zoteroConfig } from "./zotero.js";
@@ -29,6 +29,8 @@ const ANCHOR_LOST = "anchor_lost";
 /** One entry of corpus-mcp's /api/holdings/books feed. */
 export interface Book {
   calibre_uuid: string; book_id: string; title: string; authors: string[]; year: string | number | null; citekey: string | null;
+  /** The key corpus-mcp's citekey rule gives the book; absent when the metadata blocks one. Sent beside a real citekey too. */
+  proposed_citekey?: string;
   zotero: { library: string; key: string } | null; [field: string]: unknown;
 }
 export type Verified =
@@ -54,6 +56,8 @@ export interface CorpusClient {
   anchorChanges(since: number): Promise<AnchorChanges>;
   /** corpus-mcp's own saved quotes (GET /api/quotes), for taking them over. */
   quotes(): Promise<CorpusQuote[]>;
+  /** The books feed (GET /api/holdings/books), or null when it hasn't changed since the ETag given. */
+  booksFeed?(etag?: string): Promise<{ etag: string | null; books: Book[] } | null>;
 }
 
 /** corpus-mcp's base URL from CORPUS_BASE, or null when it's "off". */
@@ -79,6 +83,21 @@ export function corpusClient({ baseUrl, timeoutMs = 20_000, fetchImpl = fetch }:
   };
   return {
     baseUrl,
+    booksFeed: async (etag) => {
+      let res: Response;
+      try {
+        res = await fetchImpl(`${baseUrl}/api/holdings/books`, { headers: etag ? { "if-none-match": etag } : {}, signal: AbortSignal.timeout(timeoutMs * 3) });
+      } catch (error) {
+        throw new CorpusError(0, `corpus-mcp unreachable at ${baseUrl}: ${(error as Error).message}`);
+      }
+      if (res.status === 304) {
+        await res.body?.cancel();
+        return null;
+      }
+      const body = (await res.json().catch(() => null)) as { books?: Book[] } | null;
+      if (!res.ok || !Array.isArray(body?.books)) throw new CorpusError(res.status, `corpus-mcp GET /api/holdings/books answered ${res.status}`, body as Record<string, unknown> | null);
+      return { etag: res.headers.get("etag"), books: body.books };
+    },
     verify: (r) => request("POST", "/api/verify", r),
     anchor: (quoteId, anchor) => request("POST", "/api/anchors", { quote_id: quoteId, anchor }),
     anchorChanges: (since) => request("GET", `/api/anchors/changes?since=${since}`),
@@ -315,7 +334,7 @@ const pageOf = (page: string | undefined) => {
 };
 
 interface Plan {
-  status: "verified" | "transcribed"; work: number; text: string; locator: string | null; section: string | null;
+  status: "verified" | "transcribed"; work: number; text: string; locatorKind: "page" | "chapter"; locator: string | null; section: string | null;
   position: { section: string | null; page_label: string | null } | null; anchor: Record<string, unknown> | null; book: Book | null; exact: boolean; note: string;
 }
 
@@ -390,7 +409,7 @@ function alreadySaved(db: DB, origin: string, requestId: string, work?: number, 
 
 async function planQuote(db: DB, t: Target, text: string, page: string | undefined, corpus: CorpusClient | null, spoken = false): Promise<Plan> {
   const transcribed = (work: number, note: string, book: Book | null = null): Plan =>
-    ({ status: "transcribed", work, text, locator: page?.trim() || null, section: null, position: null, anchor: null, book, exact: true, note });
+    ({ status: "transcribed", work, text, locatorKind: "page", locator: page?.trim() || null, section: null, position: null, anchor: null, book, exact: true, note });
   // Spoken on the capture page: the words are what was heard, corrected by the person, not a passage to prove against a file.
   if (spoken) {
     if (!t.work) throw new ToolError(`${t.label} isn't a work in the store. Choose the book on the capture page.`);
@@ -425,8 +444,10 @@ async function planQuote(db: DB, t: Target, text: string, page: string | undefin
   }
   // The work comes from the book corpus-mcp matched, unless the caller named it and the book isn't in Zotero.
   const work = v.book.zotero ? bookWork(db, v.book) : t.work ? t.work() : calibreWork(db, v.book);
-  const locator = v.page_label ? v.locator?.replace(/^pp?\.\s*/, "") ?? v.page_label : null;
-  return { status: "verified", work, text: v.text, locator, section: v.locator ? null : v.section,
+  // A printed page when the book has one; an EPUB has none, and is cited by chapter, from its section.
+  const page_ = v.page_label ? v.locator?.replace(/^pp?\.\s*/, "") ?? v.page_label : null;
+  const chapter = page_ ? null : chapterLocator(v.section);
+  return { status: "verified", work, text: v.text, locatorKind: chapter ? "chapter" : "page", locator: page_ ?? chapter, section: v.locator ? null : v.section,
     position: { section: v.section, page_label: v.page_label }, anchor: v.anchor, book: v.book, exact: v.exact, note: "" };
 }
 
@@ -451,8 +472,9 @@ function save(db: DB, args: AddQuoteArgs, plan: Plan, requestId: string, actor: 
     if (earlier) return earlier;
     const id = db.prepare(`INSERT INTO quotes (id, kind, work_id, text, text_key, locator_kind, locator, comment, status, grade, flags, created_at, created_by, updated_at, updated_by)
       VALUES (${NEXT_QUOTE_ID}, 'quote', ?, ?, ?, ?, ?, ?, ?, 'A', ?, ?, ?, ?, ?) RETURNING id`).pluck()
-      .get(plan.work, plan.text, quoteKey(plan.text), plan.locator ? "page" : "none", plan.locator, comment, plan.status, JSON.stringify(flags), stamp, actor, stamp, actor) as number;
+      .get(plan.work, plan.text, quoteKey(plan.text), plan.locator ? plan.locatorKind : "none", plan.locator, comment, plan.status, JSON.stringify(flags), stamp, actor, stamp, actor) as number;
     db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, version, raw, imported_at) VALUES (?, ?, ?, NULL, ?, ?)").run(origin, requestId, id, raw, stamp);
+    if (plan.book) keepCalibreBook(db, plan.book, stamp);
     const tags = [...new Set((args.tags ?? []).map((t) => t.trim()).filter(Boolean))];
     for (const tag of tags) db.prepare("INSERT OR IGNORE INTO quote_tags (quote_id, tag, concept_id, origin) VALUES (?, ?, ?, ?)").run(id, tag, conceptOf(db, tag), origin);
     const how = plan.status === "verified" ? `checked against Calibre book ${plan.book!.book_id}${plan.exact ? "" : "; the wording is the book's"}` : plan.note;
@@ -638,4 +660,143 @@ export async function followAnchors(db: DB, corpus: CorpusClient): Promise<{ rea
   }
   counts.to = since;
   return counts;
+}
+
+// --- Calibre books -------------------------------------------------------------------------------
+
+/**
+ * Keeps corpus-mcp's record of a Calibre book a work here came from, for cite_quote (queries.ts calibreBookOf),
+ * under the UUID as the work's origin spells it; the table ignores case either way.
+ */
+function keepCalibreBook(db: DB, book: Book, stamp = now(), uuid = book.calibre_uuid): void {
+  if (!uuid) return;
+  db.prepare(`INSERT INTO calibre_books (calibre_uuid, book_id, data, fetched_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT (calibre_uuid) DO UPDATE SET book_id = excluded.book_id, data = excluded.data, fetched_at = excluded.fetched_at`)
+    .run(uuid, book.book_id ?? null, JSON.stringify(book), stamp);
+}
+
+/**
+ * Brings corpus-mcp's record of each Calibre book a work here came from up to date, from its books feed: a
+ * citekey pinned since, or a Zotero item matched, is what cite_quote cites the work by until the work is filed.
+ * Run after each import; the feed's ETag is kept, so an unchanged feed is one short request.
+ */
+export async function refreshCalibreBooks(db: DB, corpus: CorpusClient): Promise<{ books: number; updated: number; unchanged: boolean }> {
+  const uuids = db.prepare("SELECT DISTINCT ref FROM work_origins WHERE kind = 'calibre'").pluck().all() as string[];
+  if (!uuids.length || !corpus.booksFeed) return { books: uuids.length, updated: 0, unchanged: true };
+  const etag = getMeta(db, "corpus_books_etag");
+  const feed = await corpus.booksFeed(etag);
+  if (!feed) return { books: uuids.length, updated: 0, unchanged: true };
+  const wanted = new Map(uuids.map((u) => [u.toLowerCase(), u]));
+  let updated = 0;
+  const stamp = now();
+  db.transaction(() => {
+    for (const book of feed.books) {
+      const uuid = book.calibre_uuid ? wanted.get(book.calibre_uuid.toLowerCase()) : undefined;
+      if (!uuid) continue;
+      const before = db.prepare("SELECT data FROM calibre_books WHERE calibre_uuid = ?").pluck().get(uuid) as string | undefined;
+      if (before === JSON.stringify(book)) continue;
+      keepCalibreBook(db, book, stamp, uuid);
+      updated++;
+    }
+    if (feed.etag) setMeta(db, "corpus_books_etag", feed.etag);
+  })();
+  return { books: uuids.length, updated, unchanged: false };
+}
+
+// --- Chapter locators ----------------------------------------------------------------------------
+
+export interface ChapterFill { id: number; section: string; locator: string; comment_section: boolean }
+
+/**
+ * Quotes checked against an EPUB before add_quote kept the chapter as the locator: no locator, and a section in
+ * the place corpus-mcp named. Each gets "chap. <n>" (or the section's title), loses no_locator, and a history
+ * entry; the "Section: …" line in its comment stays. A quote with any locator is left alone. Dry run unless apply.
+ */
+export function fillChapterLocators(db: DB, o: { apply?: boolean; ids?: number[]; actor?: string } = {}): ChapterFill[] {
+  const rows = db.prepare(`SELECT q.id, q.comment, o.raw FROM quotes q JOIN quote_origins o ON o.quote_id = q.id
+    WHERE o.kind IN ('agent', 'corpus') AND q.kind = 'quote' AND q.locator IS NULL AND q.locator_kind = 'none'
+      AND COALESCE(json_extract(o.raw, '$.position.section'), json_extract(o.raw, '$.anchor.section')) IS NOT NULL
+      AND COALESCE(json_extract(o.raw, '$.position.page_label'), json_extract(o.raw, '$.anchor.page_label')) IS NULL
+    ORDER BY q.id, o.imported_at`).all() as { id: number; comment: string | null; raw: string }[];
+  const fills: ChapterFill[] = [];
+  const seen = new Set<number>();
+  for (const r of rows) {
+    if (seen.has(r.id) || (o.ids && !o.ids.includes(r.id))) continue;
+    seen.add(r.id);
+    const raw = JSON.parse(r.raw) as { position?: { section?: string | null }; anchor?: { section?: string | null } };
+    const section = raw.position?.section ?? raw.anchor?.section ?? null;
+    const locator = chapterLocator(section);
+    if (!section || !locator) continue;
+    fills.push({ id: r.id, section, locator: `chap. ${locator}`, comment_section: (r.comment ?? "").includes(`Section: ${section}`) });
+  }
+  if (!o.apply) return fills;
+  const actor = o.actor ?? "migrate";
+  db.transaction(() => {
+    const stamp = now();
+    for (const f of fills) {
+      const value = f.locator.slice("chap. ".length);
+      const changed = db.prepare(`UPDATE quotes SET locator_kind = 'chapter', locator = ?,
+        flags = (SELECT json_group_array(value) FROM json_each(flags) WHERE value != 'no_locator'), updated_at = ?, updated_by = ?
+        WHERE id = ? AND locator IS NULL`).run(value, stamp, actor, f.id).changes;
+      if (!changed) continue;
+      db.prepare("INSERT INTO history (quote_id, at, kind, before, after, actor, reason) VALUES (?, ?, 'locator', ?, ?, ?, ?)")
+        .run(f.id, stamp, JSON.stringify({ locator: null }), JSON.stringify({ locator: f.locator }), actor, `The EPUB's chapter, from the section corpus-mcp named: ${f.section}`);
+    }
+  })();
+  return fills;
+}
+
+export interface PageFix { id: number; from: string; to: string; edited: boolean; source: "corpus" | "anchor" }
+
+const pageSpan = (label: string, end?: string | null) => (end && end !== label ? `${label}–${end}` : label);
+
+/**
+ * Verified quotes whose page isn't the book's printed page now: saved before corpus-mcp labelled the book's
+ * pages, or relabelled since (a re-index changes labels without re-anchoring, and followAnchors keeps a new
+ * anchor, not the locator). With corpus-mcp, each passage is looked up again (its anchor's text, from its page)
+ * for the label it has now; without, or when it isn't found, the newest anchor's label is used. Each gets the
+ * printed page ("392", "392–393"), with a history entry; a locator a person edited is listed and left alone.
+ * Dry run unless apply.
+ */
+export async function fillPageLocators(db: DB, corpus: CorpusClient | null, o: { apply?: boolean; ids?: number[]; actor?: string } = {}): Promise<PageFix[]> {
+  const rows = db.prepare(`SELECT q.id, q.locator, q.edited, o.raw FROM quotes q JOIN quote_origins o ON o.quote_id = q.id
+    WHERE o.kind IN ('agent', 'corpus') AND q.status = 'verified' AND q.locator_kind = 'page' AND q.locator IS NOT NULL
+      AND json_extract(o.raw, '$.anchor') IS NOT NULL
+    ORDER BY q.id, o.imported_at DESC`).all() as { id: number; locator: string; edited: number; raw: string }[];
+  const fixes: PageFix[] = [];
+  const seen = new Set<number>();
+  for (const r of rows) {
+    // The newest origin with an anchor is the one followAnchors keeps up to date.
+    if (seen.has(r.id) || (o.ids && !o.ids.includes(r.id))) continue;
+    seen.add(r.id);
+    const a = (JSON.parse(r.raw) as { anchor: { calibre_uuid?: string; text?: string; start_page?: number; page_label?: string | null; end_page_label?: string | null } }).anchor;
+    let to = a.page_label ? pageSpan(a.page_label, a.end_page_label) : null;
+    let source: PageFix["source"] = "anchor";
+    if (corpus && a.calibre_uuid && a.text) {
+      try {
+        const v = await corpus.verify({ book: a.calibre_uuid, text: a.text, ...(typeof a.start_page === "number" ? { page: a.start_page + 1 } : {}) });
+        const now_ = v.match ? (v.anchor as { page_label?: string | null; end_page_label?: string | null }) : null;
+        if (now_?.page_label) [to, source] = [pageSpan(now_.page_label, now_.end_page_label), "corpus"];
+      } catch (error) {
+        if (!(error instanceof CorpusError)) throw error;
+      }
+    }
+    if (!to || r.locator.replace(/-/g, "–") === to) continue;
+    fixes.push({ id: r.id, from: r.locator, to, edited: Boolean(r.edited), source });
+  }
+  if (!o.apply) return fixes;
+  const actor = o.actor ?? "migrate";
+  db.transaction(() => {
+    const stamp = now();
+    for (const f of fixes) {
+      if (f.edited) continue;
+      const changed = db.prepare("UPDATE quotes SET locator = ?, updated_at = ?, updated_by = ? WHERE id = ? AND locator = ? AND edited = 0")
+        .run(f.to, stamp, actor, f.id, f.from).changes;
+      if (!changed) continue;
+      db.prepare("INSERT INTO history (quote_id, at, kind, before, after, actor, reason) VALUES (?, ?, 'locator', ?, ?, ?, ?)")
+        .run(f.id, stamp, JSON.stringify({ locator: `p. ${f.from}` }), JSON.stringify({ locator: `p. ${f.to}` }), actor,
+          f.source === "corpus" ? "The printed page corpus-mcp finds the passage on now, not the file's page" : "The printed page corpus-mcp's anchor has, not the file's page");
+    }
+  })();
+  return fixes;
 }

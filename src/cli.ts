@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUSINESS_AND_LITERATURE, addAuthors, authorFills, mirrorItems } from "./authors.js";
 import { canonicalizeCitekeys, loadBiblioCatalogue } from "./bibkeys.js";
-import { corpusClient, corpusConfig, followAnchors, importCorpusQuotes, retryAnchors, storeWriter, zoteroRefresher } from "./capture.js";
+import { corpusClient, corpusConfig, fillChapterLocators, fillPageLocators, followAnchors, importCorpusQuotes, refreshCalibreBooks, retryAnchors, storeWriter, zoteroRefresher } from "./capture.js";
 import { SCHEMA_VERSION, openDb, openExisting } from "./db.js";
 import { reviewProposal } from "./edits.js";
 import { ToolError } from "./common.js";
@@ -47,6 +47,10 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *   quote-mcp migrate [--backup <file>] Brings the store up to this build's schema (the server opens it read-only);
  *                                       with --backup, copies it to <file> first when its schema will change, so
  *                                       a deploy that rolls back can put back a store the previous build opens.
+ *   quote-mcp locators [--apply] [--id 844,845]
+ *                                       EPUB quotes saved with no locator get their chapter ("chap. 7.2") from the section
+ *                                       corpus-mcp found them in, and verified quotes whose page isn't the printed page
+ *                                       corpus-mcp finds them on now get that page. Prints the plan; --apply writes it.
  *   quote-mcp export [--out file]      Everything as JSON (stdout by default).
  *   quote-mcp take-corpus-quotes [--skip 2,…] [--dry-run]
  *                                       Takes over corpus-mcp's own saved quotes, once: each is checked against
@@ -131,6 +135,12 @@ async function importCommand() {
       if (f.read) console.log(`Anchor changes from corpus-mcp: ${f.read} (changes ${f.from}–${f.to}); ${f.lost} no longer found, ${f.found} found again, ${f.updated} anchors updated.`);
     } catch (error) {
       say(`Anchors not followed: ${(error as Error).message}\n`);
+    }
+    try {
+      const b = await refreshCalibreBooks(db, corpusClient(corpus));
+      if (b.updated) console.log(`Calibre books from corpus-mcp's feed: ${b.updated} of ${b.books} changed (citekeys and Zotero matches cite_quote uses).`);
+    } catch (error) {
+      say(`Calibre books not refreshed: ${(error as Error).message}\n`);
     }
   }
   const publish = snapshotOptions();
@@ -541,6 +551,31 @@ async function rematchCommand() {
   }
 }
 
+/** EPUB quotes saved before add_quote kept the chapter: their chapter as the locator. */
+async function locatorsCommand() {
+  onlyFlags("locators", ["--apply", "--id"]);
+  const apply = flag("--apply");
+  const raw = flag("--id") ? (option("--id") ?? "").split(",").map((n) => n.trim()) : undefined;
+  const ids = raw?.map(Number);
+  if (ids && (!ids.length || ids.some((n, i) => !raw![i] || !Number.isInteger(n) || n < 1))) throw new Error("--id takes quote numbers, such as --id 844,845. Nothing was done.");
+  const db = apply ? openDb() : openExisting();
+  try {
+    const actor = process.env.SUDO_USER || userInfo().username;
+    const fills = fillChapterLocators(db, { apply, ids, actor });
+    for (const f of fills) console.log(`  ${f.id}: ${f.locator}  (${f.section})`);
+    console.log(`${fills.length} quote${fills.length === 1 ? "" : "s"} ${apply ? "given" : "would get"} a chapter locator.`);
+    const corpus = corpusConfig();
+    if (!corpus) say("corpus-mcp is off (CORPUS_BASE): pages are checked against each quote's stored anchor only.\n");
+    const pages = await fillPageLocators(db, corpus ? corpusClient(corpus) : null, { apply, ids, actor });
+    for (const f of pages) console.log(`  ${f.id}: p. ${f.from} → p. ${f.to}${f.source === "anchor" ? "  (from the stored anchor)" : ""}${f.edited ? "  (edited by a person: left alone)" : ""}`);
+    const moved = pages.filter((f) => !f.edited).length;
+    console.log(`${moved} quote${moved === 1 ? "" : "s"} ${apply ? "moved" : "would move"} to the printed page the passage is on.${apply ? "" : " Dry run: nothing was saved; --apply writes it."}`);
+    if (apply && (fills.length || moved)) publishFrom(db);
+  } finally {
+    db.close();
+  }
+}
+
 async function takeCorpusQuotesCommand() {
   const config = corpusConfig();
   if (!config) throw new Error("CORPUS_BASE is off; there's no corpus-mcp to take quotes from.");
@@ -587,7 +622,7 @@ function proposalsCommand() {
 
 const commands: Record<string, () => unknown> = {
   import: importCommand, migrate: migrateCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, sets: setsCommand, publish: publishCommand, config: configCommand, serve: serveCommand,
-  terms: termsCommand, propose: proposeCommand, "take-corpus-quotes": takeCorpusQuotesCommand, rematch: rematchCommand, audit: auditCommand, repair: repairCommand, citekeys: citekeysCommand, authors: authorsCommand, proposals: proposalsCommand,
+  terms: termsCommand, propose: proposeCommand, "take-corpus-quotes": takeCorpusQuotesCommand, rematch: rematchCommand, locators: locatorsCommand, audit: auditCommand, repair: repairCommand, citekeys: citekeysCommand, authors: authorsCommand, proposals: proposalsCommand,
   stdio: () => serveStdio(openReadOnly(), sets(), capture()),
 };
 const command = commands[process.argv[2] ?? ""];

@@ -85,7 +85,7 @@ export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture)
 
   server.registerTool("cite_quote", {
     title: "Cite a quote",
-    description: "The quote with a CSL JSON item for its work (from Zotero, or the old site's record when the work isn't in Zotero yet), the locator, the Better BibTeX citekey, and a Pandoc citation such as [@roberts1993victory, p. 44]. A quote checked against a Calibre book keeps its stored text, including paragraph breaks, verse lines, lists, and indentation supplied by corpus-mcp's extractor, with book (the Calibre book, its book_id for corpus-mcp's cite_passage) and position (section, for citing an EPUB by chapter, and page_label). Warnings say what to check: no page, possible OCR errors, a work not yet in Zotero.",
+    description: "The quote with a CSL JSON item for its work, the locator, the Better BibTeX citekey, and a Pandoc citation such as [@roberts1993victory, p. 44] or, for an EPUB, [@russell2019human, chap. 1]. A work not in Zotero yet is cited from its Calibre book: by the citekey corpus-mcp has for it (pinned, or a Zotero match's), else the one corpus-mcp proposes, with a warning saying which; a work from the old site uses that site's record. A quote checked against a Calibre book keeps its stored text, including paragraph breaks, verse lines, lists, and indentation supplied by corpus-mcp's extractor, with book (the Calibre book, its book_id for corpus-mcp's cite_passage) and position (section, for citing an EPUB by chapter, and page_label). Warnings say what to check: no page, possible OCR errors, a work not yet in Zotero.",
     inputSchema: { id: quoteId },
     annotations: readOnly,
   }, ({ id }) => run(() => citeQuote(db, id)));
@@ -130,7 +130,7 @@ export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture)
   if (capture) {
     server.registerTool("add_quote", {
       title: "Add a quote",
-      description: `Save a quote from a work. When the work has a Calibre book with text, corpus-mcp checks the words against it first: on a match the quote is saved with the book's exact wording and page, status "verified"; with no match nothing is saved and the error lists the closest passages, so quote again from those. A work with no Calibre book (a paper book) is saved "transcribed", with the page you give. A retry with the same request_id, or the same words for the same work, returns the quote already saved. The answer carries book, the Calibre book it was checked against (null when it wasn't). Tags that aren't concepts are kept as written (see quote_worklist unresolved_tags).`,
+      description: `Save a quote from a work. When the work has a Calibre book with text, corpus-mcp checks the words against it first: on a match the quote is saved with the book's exact wording and page (for an EPUB, which has no pages, its chapter: "chap. 7.2"), status "verified"; with no match nothing is saved and the error lists the closest passages, so quote again from those. A work with no Calibre book (a paper book) is saved "transcribed", with the page you give. A retry with the same request_id, or the same words for the same work, returns the quote already saved. The answer carries book, the Calibre book it was checked against (null when it wasn't). Tags that aren't concepts are kept as written (see quote_worklist unresolved_tags).`,
       inputSchema: {
         work: z.string().describe("The work: a key from holdings-mcp's find_work (zotero:<library>/<key> or quote:<id>), a citekey, a Zotero item key, or a Calibre book id (main:42)"),
         text: z.string().max(MAX_QUOTE).describe("The words quoted, as in the book"),
@@ -161,7 +161,7 @@ export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture)
       inputSchema: {
         id: quoteId,
         text: z.string().max(MAX_QUOTE).optional().describe("The corrected words"),
-        locator: z.string().max(100).nullable().optional().describe('The page as printed ("211", "211-212") or "Kindle loc. 208"; empty or null for none'),
+        locator: z.string().max(100).nullable().optional().describe('The page as printed ("211", "211-212"), "Kindle loc. 208", or an EPUB\'s chapter ("chap. 7.2"); empty or null for none'),
         chapter_author: z.string().max(200).nullable().optional().describe("Who wrote the chapter, in an edited volume; empty or null for none"),
         rationale: z.string().min(1).max(1000).describe("Why the change is right"),
         evidence: z.string().max(1000).optional().describe("Where you checked: a book and page, a URL"),

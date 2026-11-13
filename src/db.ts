@@ -16,7 +16,30 @@ import Database from "better-sqlite3";
 
 export type DB = Database.Database;
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
+
+/**
+ * The quotes table. A locator is a printed page, a Kindle location, or (for an EPUB, which has no pages) a
+ * chapter: its number ("7.2") or, when the outline numbers none, its title.
+ */
+const QUOTES_TABLE = `CREATE TABLE IF NOT EXISTS quotes (
+  id INTEGER PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'quote' CHECK (kind IN ('quote', 'note')),
+  work_id INTEGER REFERENCES works(id), text TEXT NOT NULL, text_key TEXT NOT NULL,
+  locator_kind TEXT NOT NULL DEFAULT 'none' CHECK (locator_kind IN ('page', 'kindle', 'chapter', 'none')), locator TEXT, chapter_author TEXT,
+  comment TEXT, attribution TEXT, source_url TEXT,
+  status TEXT NOT NULL CHECK (status IN ('transcribed', 'verified', 'unparsed')), grade TEXT, flags TEXT NOT NULL DEFAULT '[]',
+  suspects TEXT NOT NULL DEFAULT '[]',
+  -- Set once a person changes the quote: re-imports then leave it alone.
+  edited INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL, created_by TEXT, updated_at TEXT NOT NULL, updated_by TEXT
+);`;
+
+const QUOTE_COLUMNS = "id, kind, work_id, text, text_key, locator_kind, locator, chapter_author, comment, attribution, source_url, status, grade, flags, suspects, edited, created_at, created_by, updated_at, updated_by";
+
+/** One Calibre book from corpus-mcp's books feed, kept for the works add_quote made for books not in Zotero. */
+const CALIBRE_BOOKS = `CREATE TABLE IF NOT EXISTS calibre_books (
+  calibre_uuid TEXT PRIMARY KEY COLLATE NOCASE, book_id TEXT, data TEXT NOT NULL, fetched_at TEXT NOT NULL
+);`;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -51,17 +74,7 @@ CREATE TABLE IF NOT EXISTS works (
 -- Where a work was seen: a Drupal node, a Zotero item (in any library).
 CREATE TABLE IF NOT EXISTS work_origins (kind TEXT NOT NULL, ref TEXT NOT NULL, work_id INTEGER NOT NULL REFERENCES works(id), PRIMARY KEY (kind, ref));
 
-CREATE TABLE IF NOT EXISTS quotes (
-  id INTEGER PRIMARY KEY, kind TEXT NOT NULL DEFAULT 'quote' CHECK (kind IN ('quote', 'note')),
-  work_id INTEGER REFERENCES works(id), text TEXT NOT NULL, text_key TEXT NOT NULL,
-  locator_kind TEXT NOT NULL DEFAULT 'none' CHECK (locator_kind IN ('page', 'kindle', 'none')), locator TEXT, chapter_author TEXT,
-  comment TEXT, attribution TEXT, source_url TEXT,
-  status TEXT NOT NULL CHECK (status IN ('transcribed', 'verified', 'unparsed')), grade TEXT, flags TEXT NOT NULL DEFAULT '[]',
-  suspects TEXT NOT NULL DEFAULT '[]',
-  -- Set once a person changes the quote: re-imports then leave it alone.
-  edited INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL, created_by TEXT, updated_at TEXT NOT NULL, updated_by TEXT
-);
+${QUOTES_TABLE}
 CREATE INDEX IF NOT EXISTS quotes_text_key ON quotes (text_key);
 CREATE INDEX IF NOT EXISTS quotes_work ON quotes (work_id);
 CREATE TABLE IF NOT EXISTS quote_origins (
@@ -117,6 +130,10 @@ CREATE TABLE IF NOT EXISTS citekey_aliases (
 CREATE TABLE IF NOT EXISTS ocr_words (
   word TEXT PRIMARY KEY COLLATE NOCASE, accepted_by TEXT NOT NULL, accepted_at TEXT NOT NULL
 );
+
+-- corpus-mcp's record of each Calibre book a work here came from (its citekey, or the one it proposes), as
+-- add_quote and the import last saw it: cite_quote cites a work not in Zotero yet by it.
+${CALIBRE_BOOKS}
 `;
 
 export function openDb(path = process.env.QUOTE_DB ?? "data/quotes.db"): DB {
@@ -166,6 +183,33 @@ function migrate(db: DB): void {
   // 6: words a person has accepted, so the OCR check stops flagging them. The server opens the store
   // without migrating, so this has to land before that build is served.
   db.exec("CREATE TABLE IF NOT EXISTS ocr_words (word TEXT PRIMARY KEY COLLATE NOCASE, accepted_by TEXT NOT NULL, accepted_at TEXT NOT NULL)");
+  // 7: an EPUB quote's chapter as its locator, and corpus-mcp's record of the Calibre books works came from.
+  // SQLite can't change a CHECK in place, so the quotes table is copied into one that allows the chapter kind.
+  db.exec(CALIBRE_BOOKS);
+  const quotesSql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'quotes'").pluck().get() as string;
+  if (!quotesSql.includes("'chapter'")) rebuildQuotes(db);
+}
+
+/**
+ * Copies the quotes table into one made by this build's QUOTES_TABLE, as SQLite's ALTER TABLE documentation
+ * describes: foreign keys off, so dropping the old table cascades nothing; the tables that reference quotes
+ * name it again once the copy is renamed; then the keys are checked before the copy is kept.
+ */
+function rebuildQuotes(db: DB): void {
+  db.pragma("foreign_keys = OFF");
+  try {
+    db.transaction(() => {
+      db.exec(QUOTES_TABLE.replace("CREATE TABLE IF NOT EXISTS quotes (", "CREATE TABLE quotes_rebuilt ("));
+      db.exec(`INSERT INTO quotes_rebuilt (${QUOTE_COLUMNS}) SELECT ${QUOTE_COLUMNS} FROM quotes`);
+      db.exec("DROP TABLE quotes");
+      db.exec("ALTER TABLE quotes_rebuilt RENAME TO quotes");
+      db.exec("CREATE INDEX IF NOT EXISTS quotes_text_key ON quotes (text_key); CREATE INDEX IF NOT EXISTS quotes_work ON quotes (work_id);");
+      const broken = db.pragma("foreign_key_check") as unknown[];
+      if (broken.length) throw new Error(`Rebuilding the quotes table broke ${broken.length} foreign keys; nothing was changed.`);
+    })();
+  } finally {
+    db.pragma("foreign_keys = ON");
+  }
 }
 
 /**
