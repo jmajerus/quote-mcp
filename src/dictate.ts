@@ -116,7 +116,7 @@ export async function saveSpokenQuote(db: DB, spoken: SpokenQuote, actor: string
   const page = pageNumber(spoken.page);
   const tags = conceptTags(spoken.tag);
   const result = await addQuote(db, {
-    work: spoken.work, text, page, tags, ...(spoken.request_id?.trim() ? { request_id: spoken.request_id.trim() } : {}),
+    work: spoken.work, text, page_label: page, tags, ...(spoken.request_id?.trim() ? { request_id: spoken.request_id.trim() } : {}),
   }, { ...o, origin: "capture", actor });
   const quote = result.quote as { id: number; tags: { tag: string; concept: string | null }[] };
   const unresolved = quote.tags.filter((t) => tags.some((tag) => tag.toLowerCase() === t.tag.toLowerCase()) && !t.concept).map((t) => t.tag);

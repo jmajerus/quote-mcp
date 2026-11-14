@@ -122,7 +122,12 @@ function replaceConcepts(db: DB, id: number, wanted: string[], actor: string, re
   return changed;
 }
 
-export interface ProposeArgs { id: number; text?: string; locator?: string | null; chapter_author?: string | null; rationale: string; evidence?: string }
+export interface ProposeArgs {
+  id: number; text?: string; locator?: string | null;
+  /** The number printed on the page, the one to cite: a page locator by its own name. Not a file page. */
+  page_label?: string;
+  chapter_author?: string | null; rationale: string; evidence?: string;
+}
 
 /** A locator as given ("p. 211", "211-212", "Kindle loc. 208", "chap. 7.2") as the store keeps it: its kind and value. */
 function parseLocator(locator: string | null): { kind: string; value: string | null } {
@@ -156,8 +161,17 @@ export function proposeFix(db: DB, args: ProposeArgs, actor: string) {
       if (q.status === "verified") throw new ToolError(`${args.id} was checked against its Calibre book, so its text is the book's. To quote a different passage, save it with add_quote.`);
       if (text !== now_.text) change.text = text;
     }
-    if (args.locator !== undefined) {
-      const l = parseLocator(args.locator);
+    if (args.page_label !== undefined) {
+      const l = parseLocator(args.page_label);
+      if (!args.page_label.trim() || l.kind !== "page") throw new ToolError(`page_label is the number printed on the page ("211", "211-212"); ${JSON.stringify(args.page_label)} isn't one. For a chapter or a Kindle location, use locator.`);
+      // A null or blank locator is "none", the documented empty form: page_label stands in for it.
+      const asLocator = args.locator?.trim() ? parseLocator(args.locator) : null;
+      if (asLocator && locatorText(asLocator.kind, asLocator.value) !== locatorText(l.kind, l.value)) {
+        throw new ToolError(`locator is ${JSON.stringify(args.locator)} but page_label is ${JSON.stringify(args.page_label)}. Give one of them.`);
+      }
+    }
+    if (args.locator !== undefined || args.page_label !== undefined) {
+      const l = parseLocator(args.page_label ?? args.locator ?? null);
       const proposed = locatorText(l.kind, l.value);
       if (proposed !== now_.locator) change.locator = proposed;
     }
