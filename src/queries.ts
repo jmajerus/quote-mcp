@@ -81,6 +81,10 @@ function chapterNumber(title: string): string | null {
     if (word >= 0) return String(word + 1);
     return /^[ivxlc]+$/i.test(n) ? n.toUpperCase() : null;
   }
+  // A number word leads the title, set off by a dash or colon: "Seven - Reconciliation", "Three: Breathing".
+  const spelled = /^([a-z]+)\s*[-–—:]\s+\S/i.exec(t);
+  const word = spelled ? NUMBER_WORDS.indexOf(spelled[1].toLowerCase()) : -1;
+  if (word >= 0) return String(word + 1);
   // A bare number leads the title: "7.2 Watching", "1. If We Succeed". A year ("1984") isn't a chapter.
   const bare = /^(\d{1,3}(?:\.\d+)*)\.?(?=$|[\s:–—-])/.exec(t);
   return bare ? bare[1] : null;
@@ -349,11 +353,18 @@ export function calibreSource(db: DB, id: number): { book: Record<string, unknow
   if (!raw) return null;
   const r = JSON.parse(raw) as { book: Record<string, unknown>; position?: { section: string | null; page_label: string | null; file_page?: number | null } };
   if (!r.position) return { book: r.book, position: null };
-  // The file page is where the passage starts in the book's file: the newest anchor's, as followAnchors keeps it.
-  const start = db.prepare(`SELECT json_extract(raw, '$.anchor.start_page') FROM quote_origins WHERE quote_id = ? AND kind IN ('agent', 'corpus')
-    AND json_extract(raw, '$.anchor') IS NOT NULL ORDER BY imported_at DESC LIMIT 1`).pluck().get(id) as number | null | undefined;
-  const file_page = typeof start === "number" ? start + 1 : (r.position.file_page ?? null);
-  return { book: r.book, position: { section: r.position.section, page_label: r.position.page_label, file_page } };
+  // Where the passage starts and the section it's in are the newest anchor's, as followAnchors keeps it: corpus-mcp
+  // re-anchors when it reads a book better (a section corrected), and the position saved with the quote stays as it was.
+  const a = currentAnchor(db, id);
+  const file_page = typeof a?.start_page === "number" ? a.start_page + 1 : (r.position.file_page ?? null);
+  return { book: r.book, position: { section: a?.section !== undefined ? a.section : r.position.section, page_label: r.position.page_label, file_page } };
+}
+
+/** The newest anchor kept with a quote's origins (followAnchors updates it from corpus-mcp's changes), or null. */
+export function currentAnchor(db: DB, id: number): { start_page?: number; section?: string | null; [field: string]: unknown } | null {
+  const raw = db.prepare(`SELECT json_extract(raw, '$.anchor') FROM quote_origins WHERE quote_id = ? AND kind IN ('agent', 'corpus')
+    AND json_extract(raw, '$.anchor') IS NOT NULL ORDER BY imported_at DESC LIMIT 1`).pluck().get(id) as string | undefined;
+  return raw ? (JSON.parse(raw) as Record<string, unknown>) : null;
 }
 
 /** The Calibre book a work came from, by the UUID add_quote filed it under: corpus-mcp's record, newest first. */

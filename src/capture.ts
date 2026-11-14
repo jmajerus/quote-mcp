@@ -4,7 +4,7 @@ import { ToolError } from "./common.js";
 import { type DB, NEXT_QUOTE_ID, getMeta, now, setMeta } from "./db.js";
 import { creators } from "./import.js";
 import { citedKey, citekeyOf } from "./csl.js";
-import { calibreSource, chapterLocator, getQuote } from "./queries.js";
+import { calibreSource, chapterLocator, currentAnchor, getQuote } from "./queries.js";
 import { quoteKey, yearOf } from "./text.js";
 import { syncLibrary } from "./sync.js";
 import { type ApiItem, ZoteroClient, needsKey, zoteroConfig } from "./zotero.js";
@@ -794,7 +794,7 @@ export function fillChapterLocators(db: DB, o: { apply?: boolean; ids?: number[]
   const rows = db.prepare(`SELECT q.id, q.comment, q.locator, o.raw FROM quotes q JOIN quote_origins o ON o.quote_id = q.id
     WHERE o.kind IN ('agent', 'corpus') AND q.kind = 'quote'
       AND ((q.locator IS NULL AND q.locator_kind = 'none') OR (q.locator_kind = 'chapter' AND q.edited = 0))
-      AND COALESCE(json_extract(o.raw, '$.position.section'), json_extract(o.raw, '$.anchor.section')) IS NOT NULL
+      AND COALESCE(json_extract(o.raw, '$.anchor.section'), json_extract(o.raw, '$.position.section')) IS NOT NULL
       AND COALESCE(json_extract(o.raw, '$.position.page_label'), json_extract(o.raw, '$.anchor.page_label')) IS NULL
     ORDER BY q.id, o.imported_at`).all() as { id: number; comment: string | null; locator: string | null; raw: string }[];
   const fills: ChapterFill[] = [];
@@ -803,7 +803,8 @@ export function fillChapterLocators(db: DB, o: { apply?: boolean; ids?: number[]
     if (seen.has(r.id) || (o.ids && !o.ids.includes(r.id))) continue;
     seen.add(r.id);
     const raw = JSON.parse(r.raw) as { position?: { section?: string | null }; anchor?: { section?: string | null } };
-    const section = raw.position?.section ?? raw.anchor?.section ?? null;
+    // The newest anchor's section first: corpus-mcp corrects a section by re-anchoring, and followAnchors keeps that.
+    const section = currentAnchor(db, r.id)?.section ?? raw.position?.section ?? raw.anchor?.section ?? null;
     const locator = chapterLocator(section);
     if (!section || !locator || locator === r.locator) continue;
     fills.push({ id: r.id, section, from: r.locator === null ? null : `chap. ${r.locator}`, locator: `chap. ${locator}`, comment_section: (r.comment ?? "").includes(`Section: ${section}`) });

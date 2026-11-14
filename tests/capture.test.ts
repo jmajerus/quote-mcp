@@ -547,6 +547,9 @@ describe("EPUB chapters and works not in Zotero", () => {
     expect(chapterLocator("Part One › Chapter 1: If We Succeed")).toBe("1");
     expect(chapterLocator("1. If We Succeed › The Gorilla Problem")).toBe("1");
     expect(chapterLocator("CHAPTER SEVEN")).toBe("7");
+    expect(chapterLocator("part one - TEACHINGS ON HEALING › Seven - Reconciliation › When We've Hurt Other People")).toBe("7");
+    expect(chapterLocator("Three: Breathing")).toBe("3");
+    expect(chapterLocator("One Day in the Life")).toBe("One Day in the Life");
     expect(chapterLocator("Chapter IV › Notes")).toBe("IV");
     expect(chapterLocator("Part One › Introduction:")).toBe("Introduction");
     expect(chapterLocator("1984 and After")).toBe("1984 and After");
@@ -657,6 +660,23 @@ describe("EPUB chapters and works not in Zotero", () => {
     expect(citeQuote(db, other).locator_text).toBe("chap. 7");
     expect(db.prepare("SELECT before, after FROM history WHERE quote_id = ? ORDER BY id DESC LIMIT 1").get(id)).toEqual({ before: '{"locator":"chap. 7"}', after: '{"locator":"chap. 7.2"}' });
     expect(fillChapterLocators(db)).toEqual([]);
+  });
+
+  it("takes a section corpus-mcp corrected by re-anchoring, in cite_quote and the chapter fix-up", async () => {
+    const WRONG = "part one - TEACHINGS ON HEALING › Seven - Reconciliation › What Prevents Us from Being Happy?";
+    const RIGHT = "part one - TEACHINGS ON HEALING › Seven - Reconciliation › When We've Hurt Other People";
+    epub(WRONG);
+    const id = saved(await addQuote(db, { work: "main:7", text: "Work is a story" }, options())).id;
+    // As the old chapterLocator left it: the deepest title, before it read "Seven - Reconciliation".
+    db.prepare("UPDATE quotes SET locator = 'What Prevents Us from Being Happy?' WHERE id = ?").run(id);
+    // corpus-mcp re-anchored with the heading in effect at the passage's offset; followAnchors kept the new anchor.
+    const o = db.prepare("SELECT rowid, raw FROM quote_origins WHERE quote_id = ? AND kind = 'agent'").get(id) as { rowid: number; raw: string };
+    const raw = JSON.parse(o.raw);
+    db.prepare("UPDATE quote_origins SET raw = ? WHERE rowid = ?").run(JSON.stringify({ ...raw, anchor: { ...raw.anchor, section: RIGHT } }), o.rowid);
+    expect(citeQuote(db, id).position).toMatchObject({ section: RIGHT, file_page: 81 });
+    expect(fillChapterLocators(db)).toEqual([{ id, section: RIGHT, from: "chap. What Prevents Us from Being Happy?", locator: "chap. 7", comment_section: false }]);
+    fillChapterLocators(db, { apply: true });
+    expect(citeQuote(db, id)).toMatchObject({ locator_text: "chap. 7", locator: { label: "chapter", locator: "7" } });
   });
 
   it("splits a Calibre author into family and given names", () => {
