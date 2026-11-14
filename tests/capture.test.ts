@@ -7,7 +7,7 @@ import { deleteQuote } from "../src/edits.js";
 import type { DB } from "../src/db.js";
 import { holdingsCounts } from "../src/holdings.js";
 import { runImport } from "../src/import.js";
-import { calibreAuthor, chapterLocator, citeQuote, searchQuotes, worklist } from "../src/queries.js";
+import { calibreAuthor, chapterLocator, citeQuote, getQuote, searchQuotes, worklist } from "../src/queries.js";
 import { drupal, makeStore } from "./fixture.js";
 import { importWithSite } from "./seed.js";
 
@@ -717,5 +717,102 @@ describe("printed pages", () => {
     // corpus-mcp unreachable: the stored anchor, which agrees with the quote.
     corpus.verify = async () => { throw new CorpusError(0, "unreachable"); };
     expect(await fillPageLocators(db, corpus)).toEqual([]);
+  });
+});
+
+describe("file_page and page_label", () => {
+  const TEXT = "It begins when an individual becomes the target";
+  const count = () => db.prepare("SELECT COUNT(*) FROM quotes").pluck().get() as number;
+  const mismatch = async (p: Promise<unknown>) => {
+    const error = await p.then(() => null, (e: unknown) => e);
+    expect(error).toBeInstanceOf(ToolError);
+    return error as ToolError;
+  };
+
+  it("checks a page_label against the passage found, without starting the search there, and answers with both names", async () => {
+    const r = await addQuote(db, { work: "main:42", text: TEXT, page_label: "40" }, options());
+    expect(r).toMatchObject({ saved: true, status: "verified", position: { section: "Chapter 1", page_label: "40", file_page: 40 } });
+    expect(corpus.verified).toEqual([{ book: "main:42", text: TEXT }]);
+    const id = saved(r).id;
+    expect(citeQuote(db, id)).toMatchObject({ position: { section: "Chapter 1", page_label: "40", file_page: 40 }, locator_text: "p. 40" });
+    // A range that covers the page found agrees with it.
+    expect(await addQuote(db, { work: "main:42", text: "disrespectful behavior", page_label: "pp. 39-41" }, options())).toMatchObject({ saved: true });
+  });
+
+  it("starts the search at file_page, and saves when file_page and page_label agree with the passage", async () => {
+    const r = await addQuote(db, { work: "main:42", text: TEXT, file_page: 40, page_label: "40" }, options());
+    expect(r).toMatchObject({ saved: true, position: { page_label: "40", file_page: 40 } });
+    expect(corpus.verified).toEqual([{ book: "main:42", text: TEXT, page: 40 }]);
+  });
+
+  it("refuses, naming both, when the page_label or file_page given isn't where the passage is", async () => {
+    const before = count();
+    const label = await mismatch(addQuote(db, { work: "main:42", text: TEXT, page_label: "392" }, options()));
+    expect(label.message).toMatch(/found the passage in Mobbing \(main:42\) at file_page 40 and page_label "40", but page_label "392" was given\. Nothing was saved\./);
+    expect(label.data).toMatchObject({ error: "page-mismatch", given: { page_label: "392" }, found: { file_page: 40, page_label: "40" } });
+    const both = await mismatch(addQuote(db, { work: "main:42", text: TEXT, file_page: 422, page_label: "40" }, options()));
+    expect(both.message).toMatch(/but file_page 422 and page_label "40" was given/);
+    expect(both.data).toMatchObject({ error: "page-mismatch", given: { file_page: 422, page_label: "40" } });
+    const file = await mismatch(addQuote(db, { work: "main:42", text: TEXT, file_page: 41 }, options()));
+    expect(file.data).toMatchObject({ error: "page-mismatch", given: { file_page: 41 }, found: { file_page: 40 } });
+    expect(count()).toBe(before);
+  });
+
+  it("refuses a page_label for a book with no printed pages", async () => {
+    corpus.verify = async (r) => ({ match: true, exact: true, text: r.text, locator: null, page_label: null, section: "7.2 The Glass Office",
+      anchor: { calibre_uuid: unfiledBook.calibre_uuid, sha256: "abc", start_page: 80, start_offset: 0, text: r.text }, book: unfiledBook });
+    const e = await mismatch(addQuote(db, { work: "main:7", text: "Work is a story", page_label: "392" }, options()));
+    expect(e.message).toMatch(/file_page 81 and no page_label \(an EPUB or MOBI has no printed pages/);
+    const r = await addQuote(db, { work: "main:7", text: "Work is a story", file_page: 81 }, options());
+    expect(r).toMatchObject({ saved: true, position: { page_label: null, file_page: 81, section: "7.2 The Glass Office" } });
+  });
+
+  it("keeps the deprecated page as it was: the printed page, a starting point, and not checked", async () => {
+    // The agent's 422 was the file's page; the printed page corpus-mcp has, 392, is kept.
+    corpus.verify = async (r) => ({ match: true, exact: true, text: r.text, locator: "p. 392", page_label: "392", section: null,
+      anchor: { calibre_uuid: mobbingBook.calibre_uuid, sha256: "abc", start_page: 421, start_offset: 0, page_label: "392", text: r.text }, book: mobbingBook });
+    const r = await addQuote(db, { work: "main:42", text: TEXT, page: "422" }, options());
+    expect(r).toMatchObject({ saved: true, position: { page_label: "392", file_page: 422 }, quote: { locator: "p. 392" } });
+    await rejects(addQuote(db, { work: "main:42", text: "disrespectful behavior", page: "392", page_label: "391" }, options()), /page \(deprecated; it means page_label here\) is "392" but page_label is "391"/);
+    await rejects(addQuote(db, { work: "main:42", text: TEXT, file_page: 0 }, options()), /file_page is a position in the book's file from 1/);
+  });
+
+  it("saves a paper book's quote with its page_label, and says file_page wasn't used", async () => {
+    const work = db.prepare("SELECT id FROM works WHERE title = 'A Book Nobody Filed'").pluck().get() as number;
+    const r = await addQuote(db, { work: `quote:${work}`, text: "Dignity is not negotiable.", page_label: "12", file_page: 30 }, options());
+    expect(saved(r)).toMatchObject({ status: "transcribed", locator: "p. 12" });
+    expect(r).not.toHaveProperty("position");
+    expect((r.warnings as string[]).join(" ")).toMatch(/file_page wasn't used/);
+  });
+
+  it("gives get_quote's text exactly as cite_quote's quote", async () => {
+    corpus.books.set("main:7", { book: unfiledBook, text: "Work is a story\nwe tell “ourselves.”\n\n  And then it ends." });
+    const id = saved(await addQuote(db, { work: "main:7", text: "Work is a story we tell \"ourselves.\" And then it ends." }, options())).id;
+    expect(getQuote(db, id).text).toBe(citeQuote(db, id).quote);
+    for (const q of db.prepare("SELECT id FROM quotes WHERE kind = 'quote'").pluck().all() as number[]) expect(getQuote(db, q).text).toBe(citeQuote(db, q).quote);
+  });
+
+  it("takes file_page and page_label on the reader's route, with page as file_page", async () => {
+    const server = http.createServer((req, res) => void handleCorpusQuotes(db, { writer: () => db, corpus, primary: PRIMARY }, req, res, new URL(req.url ?? "/", "http://x")));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/corpus/quotes`;
+    const post = (body: unknown) => fetch(base, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    try {
+      const made = await post({ work: "main:42", text: TEXT, file_page: 40, page_label: "40" });
+      expect(made.status).toBe(201);
+      expect(await made.json()).toMatchObject({ position: { file_page: 40, page_label: "40" } });
+      expect(corpus.verified.at(-1)).toEqual({ book: "main:42", text: TEXT, page: 40 });
+      const off = await post({ work: "main:42", text: "disrespectful behavior", page_label: "392" });
+      expect(off.status).toBe(422);
+      expect(await off.json()).toMatchObject({ error: "page-mismatch", given: { page_label: "392" }, found: { file_page: 40, page_label: "40" }, message: expect.stringMatching(/Nothing was saved/) });
+      const both = await post({ work: "main:42", text: "disrespectful behavior", page: 40, file_page: 41 });
+      expect(both.status).toBe(422);
+      expect(await both.json()).toMatchObject({ error: "page-mismatch", message: expect.stringMatching(/page \(deprecated; it means file_page here\) is 40 but file_page is 41/) });
+      expect((await post({ work: "main:42", text: "x", file_page: "forty" })).status).toBe(400);
+      expect((await post({ work: "main:42", text: "disrespectful behavior", page: "40" })).status).toBe(201);
+      expect(corpus.verified.at(-1)).toEqual({ book: "main:42", text: "disrespectful behavior", page: 40 });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });

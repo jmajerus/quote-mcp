@@ -255,7 +255,14 @@ function bookKey(db: DB, library: string, key: string, primary: string | null): 
 export interface AddQuoteArgs {
   work: string;
   text: string;
-  /** The page as printed ("211", "211-212"); for a book with text, also where corpus-mcp starts looking. */
+  /** The number printed on the page ("211", "211-212"), the one to cite. Checked against where corpus-mcp finds the passage. */
+  page_label?: string;
+  /** The 1-based position in the book's file, as corpus-mcp's read_book shows it: where its check starts looking. Not citable. */
+  file_page?: number;
+  /**
+   * Deprecated: page_label, as add_quote took it before file_page and page_label were named. Also where corpus-mcp starts
+   * looking when file_page isn't given, and not checked against the passage found.
+   */
   page?: string;
   comment?: string;
   tags?: string[];
@@ -333,9 +340,47 @@ const pageOf = (page: string | undefined) => {
   return m && Number(m[1]) >= 1 ? Number(m[1]) : undefined;
 };
 
+/** A printed page as given ("p. 211", "211-212") without its "p." and with an en dash, for comparing. */
+const labelOf = (label: string) => label.trim().replace(/^pp?\.\s*/i, "").replace(/\s*[-–]\s*/, "–");
+
+/**
+ * The pages a request names, from add_quote's arguments: the printed page to cite or keep (page_label, or the
+ * deprecated page), where corpus-mcp starts looking (file_page, or page's number when there's no file_page), and
+ * which of them to check against the passage it finds (those given by their own names).
+ */
+interface Pages { label: string | undefined; hint: number | undefined; checkLabel: boolean; checkFile: boolean }
+
+function pagesOf(args: AddQuoteArgs): Pages {
+  const label = args.page_label?.trim() || undefined;
+  const legacy = args.page?.trim() || undefined;
+  if (args.file_page !== undefined && !(Number.isInteger(args.file_page) && args.file_page >= 1)) {
+    throw new ToolError(`file_page is a position in the book's file from 1, as read_book shows it; ${JSON.stringify(args.file_page)} isn't one. Nothing was saved.`, { error: "bad-request" });
+  }
+  if (label && legacy && labelOf(label) !== labelOf(legacy)) {
+    throw new ToolError(`page (deprecated; it means page_label here) is ${JSON.stringify(legacy)} but page_label is ${JSON.stringify(label)}. Pass page_label alone. Nothing was saved.`, { error: "page-mismatch" });
+  }
+  return { label: label ?? legacy, hint: args.file_page ?? (label ? undefined : pageOf(legacy)), checkLabel: label !== undefined, checkFile: args.file_page !== undefined };
+}
+
+/** Whether a printed page given ("211", "211-212") falls on the pages the passage was found on. */
+function sameLabel(given: string, start: string, end: string | null): boolean {
+  const [gs, ge = gs] = labelOf(given).split("–");
+  const [fs, fe] = [start.trim(), (end ?? start).trim()];
+  const nums = [gs, ge, fs, fe].map((x) => (/^\d+$/.test(x) ? Number(x) : NaN));
+  if (nums.every((n) => !Number.isNaN(n))) return nums[0] <= nums[3] && nums[1] >= nums[2];
+  return [gs, ge].some((g) => [fs, fe].some((f) => g.toLowerCase() === f.toLowerCase()));
+}
+
+/** The file pages (1-based) an anchor spans, when it says. */
+function filePages(anchor: Record<string, unknown>): { start: number; end: number } | null {
+  const s = anchor.start_page, e = anchor.end_page;
+  if (typeof s !== "number") return null;
+  return { start: s + 1, end: (typeof e === "number" ? e : s) + 1 };
+}
+
 interface Plan {
   status: "verified" | "transcribed"; work: number; text: string; locatorKind: "page" | "chapter"; locator: string | null; section: string | null;
-  position: { section: string | null; page_label: string | null } | null; anchor: Record<string, unknown> | null; book: Book | null; exact: boolean; note: string;
+  position: { section: string | null; page_label: string | null; file_page: number | null } | null; anchor: Record<string, unknown> | null; book: Book | null; exact: boolean; note: string;
 }
 
 /**
@@ -380,7 +425,7 @@ async function addQuoteOnce(db: DB, args: AddQuoteArgs, o: AddQuoteOptions): Pro
   const same = t.known !== undefined && origin !== "corpus" ? alreadySaved(db, origin, requestId, t.known, text) : undefined;
   if (same) return same;
   const spoken = origin === "capture";
-  const plan = await planQuote(db, t, text, args.page, spoken ? null : o.corpus, spoken);
+  const plan = await planQuote(db, t, text, pagesOf(args), spoken ? null : o.corpus, spoken);
 
   const saving = save(db, args, plan, requestId, o.actor ?? origin, origin, o.source);
   if (typeof saving !== "number" && !("takenOver" in saving)) return saving;
@@ -389,13 +434,13 @@ async function addQuoteOnce(db: DB, args: AddQuoteArgs, o: AddQuoteOptions): Pro
   let anchored = false;
   const warnings: string[] = [];
   if (plan.anchor && o.corpus) {
-    anchored = await postAnchor(db, o.corpus, id, plan.anchor, args.page);
+    anchored = await postAnchor(db, o.corpus, id, plan.anchor, hintOf(args));
     if (!anchored) warnings.push("corpus-mcp didn't store the anchor; the quote is flagged anchor_missing and the next import posts it again.");
   }
   if (takenOver) return { saved: false, taken_over: true, reason: "The work already had these words; corpus-mcp's quote was joined to it.", anchored, warnings, book: plan.book, quote: getQuote(db, id) };
   if (plan.status === "verified" && !plan.exact) warnings.push("The text is the book's wording, which differs from what was sent (quote marks, spacing, or case).");
   if (plan.status === "transcribed") warnings.push(plan.note);
-  return { saved: true, status: plan.status, anchored, warnings, book: plan.book, quote: getQuote(db, id) };
+  return { saved: true, status: plan.status, anchored, warnings, book: plan.book, ...(plan.position ? { position: plan.position } : {}), quote: getQuote(db, id) };
 }
 
 /** The quote this request id, or these words for this work, already saved, as add_quote returns it. */
@@ -407,9 +452,13 @@ function alreadySaved(db: DB, origin: string, requestId: string, work?: number, 
   return byWords !== undefined ? { saved: false, reason: "The work already has this quote.", book: calibreSource(db, byWords)?.book ?? null, quote: getQuote(db, byWords) } : undefined;
 }
 
-async function planQuote(db: DB, t: Target, text: string, page: string | undefined, corpus: CorpusClient | null, spoken = false): Promise<Plan> {
+/** Where corpus-mcp starts looking for a request's passage: its file_page, or the deprecated page's number. */
+const hintOf = (args: AddQuoteArgs | undefined) => (args ? (args.file_page ?? (args.page_label?.trim() ? undefined : pageOf(args.page))) : undefined);
+
+async function planQuote(db: DB, t: Target, text: string, pages: Pages, corpus: CorpusClient | null, spoken = false): Promise<Plan> {
   const transcribed = (work: number, note: string, book: Book | null = null): Plan =>
-    ({ status: "transcribed", work, text, locatorKind: "page", locator: page?.trim() || null, section: null, position: null, anchor: null, book, exact: true, note });
+    ({ status: "transcribed", work, text, locatorKind: "page", locator: pages.label?.trim() || null, section: null, position: null, anchor: null, book, exact: true,
+      note: pages.checkFile ? `${note} file_page wasn't used: it's a place in a Calibre book's file, and the words weren't checked against one.` : note });
   // Spoken on the capture page: the words are what was heard, corrected by the person, not a passage to prove against a file.
   if (spoken) {
     if (!t.work) throw new ToolError(`${t.label} isn't a work in the store. Choose the book on the capture page.`);
@@ -421,7 +470,7 @@ async function planQuote(db: DB, t: Target, text: string, page: string | undefin
   }
   let v: Verified;
   try {
-    v = await corpus.verify({ book: t.book, text, ...(pageOf(page) ? { page: pageOf(page) } : {}) });
+    v = await corpus.verify({ book: t.book, text, ...(pages.hint ? { page: pages.hint } : {}) });
   } catch (error) {
     if (!(error instanceof CorpusError)) throw error;
     if (error.code === "no-book") {
@@ -442,13 +491,33 @@ async function planQuote(db: DB, t: Target, text: string, page: string | undefin
     throw new ToolError(`Not found in ${v.book.title} (${v.book.book_id}). Nothing was saved. The closest passages: ${JSON.stringify(v.closest)}`,
       { error: "no-match", message: `Not found in ${v.book.title} (${v.book.book_id}). Nothing was saved.`, closest: v.closest, book: v.book });
   }
+  const files = filePages(v.anchor);
+  checkPages(pages, v, files);
   // The work comes from the book corpus-mcp matched, unless the caller named it and the book isn't in Zotero.
   const work = v.book.zotero ? bookWork(db, v.book) : t.work ? t.work() : calibreWork(db, v.book);
   // A printed page when the book has one; an EPUB has none, and is cited by chapter, from its section.
   const page_ = v.page_label ? v.locator?.replace(/^pp?\.\s*/, "") ?? v.page_label : null;
   const chapter = page_ ? null : chapterLocator(v.section);
   return { status: "verified", work, text: v.text, locatorKind: chapter ? "chapter" : "page", locator: page_ ?? chapter, section: v.locator ? null : v.section,
-    position: { section: v.section, page_label: v.page_label }, anchor: v.anchor, book: v.book, exact: v.exact, note: "" };
+    position: { section: v.section, page_label: v.page_label, file_page: files?.start ?? null }, anchor: v.anchor, book: v.book, exact: v.exact, note: "" };
+}
+
+/**
+ * Refuses a passage found somewhere other than the file_page or page_label given (by those names; the deprecated
+ * page isn't checked), naming both, so a citation can't take a page the passage isn't on.
+ */
+function checkPages(pages: Pages, v: Extract<Verified, { match: true }>, files: { start: number; end: number } | null): void {
+  const endLabel = typeof v.anchor.end_page_label === "string" ? v.anchor.end_page_label : null;
+  const labelOk = !pages.checkLabel || (v.page_label !== null && sameLabel(pages.label!, v.page_label, endLabel));
+  const fileOk = !pages.checkFile || !files || (pages.hint! >= files.start && pages.hint! <= files.end);
+  if (labelOk && fileOk) return;
+  const span = (a: string | number, b: string | number) => (a === b ? `${a}` : `${a}–${b}`);
+  const given = [pages.checkFile ? `file_page ${pages.hint}` : null, pages.checkLabel ? `page_label ${JSON.stringify(pages.label)}` : null].filter(Boolean).join(" and ");
+  const foundLabel = v.page_label ? `page_label ${JSON.stringify(span(v.page_label, endLabel ?? v.page_label))}` : "no page_label (an EPUB or MOBI has no printed pages: it's cited by chapter, so leave page_label out)";
+  const found = `${files ? `file_page ${span(files.start, files.end)}` : "an unknown file_page"} and ${foundLabel}`;
+  throw new ToolError(`corpus-mcp found the passage in ${v.book.title} (${v.book.book_id}) at ${found}, but ${given} was given. Nothing was saved. file_page is the position in the book's file (read_book's page); page_label is the number printed on the page, the one to cite. Pass the right one, or leave it out.`,
+    { error: "page-mismatch", given: { ...(pages.checkFile ? { file_page: pages.hint } : {}), ...(pages.checkLabel ? { page_label: pages.label } : {}) },
+      found: { file_page: files?.start ?? null, page_label: v.page_label, section: v.section }, book: v.book });
 }
 
 /**
@@ -504,7 +573,7 @@ function takeOver(db: DB, id: number, args: AddQuoteArgs, plan: Plan, requestId:
  * Posts a quote's anchor, trying a failed connection again and verifying again once if corpus-mcp says the
  * anchor is stale; clears anchor_missing when stored.
  */
-async function postAnchor(db: DB, corpus: CorpusClient, id: number, anchor: Record<string, unknown>, page?: string): Promise<boolean> {
+async function postAnchor(db: DB, corpus: CorpusClient, id: number, anchor: Record<string, unknown>, hint?: number): Promise<boolean> {
   let current = anchor;
   let reverified = false;
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -520,7 +589,7 @@ async function postAnchor(db: DB, corpus: CorpusClient, id: number, anchor: Reco
         reverified = true;
         const text = db.prepare("SELECT text FROM quotes WHERE id = ?").pluck().get(id) as string;
         try {
-          const v = await corpus.verify({ book: String(current.calibre_uuid), text, ...(pageOf(page) ? { page: pageOf(page) } : {}) });
+          const v = await corpus.verify({ book: String(current.calibre_uuid), text, ...(hint ? { page: hint } : {}) });
           if (!v.match) return false;
           current = v.anchor;
         } catch {
@@ -541,7 +610,7 @@ export async function retryAnchors(db: DB, corpus: CorpusClient): Promise<{ trie
   let stored = 0;
   for (const r of rows) {
     const raw = JSON.parse(r.raw) as { anchor?: Record<string, unknown>; request?: AddQuoteArgs };
-    if (raw.anchor && (await postAnchor(db, corpus, r.id, raw.anchor, raw.request?.page))) stored++;
+    if (raw.anchor && (await postAnchor(db, corpus, r.id, raw.anchor, hintOf(raw.request)))) stored++;
   }
   return { tried: rows.length, stored };
 }
@@ -569,7 +638,7 @@ export async function importCorpusQuotes(db: DB, corpus: CorpusClient, quotes: C
     if (o.dryRun) { results.push({ corpus_id: c.id, skipped: `dry run: would check it against ${c.calibre_uuid} (${c.title})` }); continue; }
     try {
       const r = await addQuote(db, {
-        work: c.calibre_uuid, text: c.text, ...(c.page ? { page: String(c.page) } : {}), ...(c.note?.trim() ? { comment: c.note } : {}),
+        work: c.calibre_uuid, text: c.text, ...(c.page ? { file_page: c.page } : {}), ...(c.note?.trim() ? { comment: c.note } : {}),
         tags: c.labels, request_id: String(c.id),
       }, { corpus, primary: o.primary, origin: "corpus", actor: `corpus-mcp${c.created_by ? `:${c.created_by}` : ""}`, source: c });
       const q = r.quote as { id: number; status: string };

@@ -12,10 +12,15 @@ import { locatorText } from "./queries.js";
  *
  *   GET  /api/corpus/quotes?book=<calibre_uuid or book_id>
  *        → { book, quotes: [{ id, kind, text, prose, note?, comment, tags, status, flags, locator, anchor, admin_path }] }
- *   POST /api/corpus/quotes  { work, text, page?, comment?, tags?, request_id?, by? } (page a string or a number;
- *        null for any optional field is the same as leaving it out)
- *        → 201 with add_quote's answer when saved, 200 when it was already (saved: false);
- *          422 { error: "no-match", message, closest, book } | { error: "ambiguous", books } | { error, message };
+ *   POST /api/corpus/quotes  { work, text, file_page?, page_label?, comment?, tags?, request_id?, by? }
+ *        file_page is the reader's page: the 1-based position in the book's file (a number, or a string of one), where
+ *        corpus-mcp starts looking. page_label is the number printed on the page. Each one given is checked against
+ *        where the passage is found. page is a deprecated name for file_page, kept for one release. null for any
+ *        optional field is the same as leaving it out.
+ *        → 201 with add_quote's answer when saved (position carries file_page and page_label), 200 when it was
+ *          already (saved: false);
+ *          422 { error: "no-match", message, closest, book } | { error: "ambiguous", books }
+ *            | { error: "page-mismatch", message, given, found, book } | { error, message };
  *          502 { error: "corpus-unavailable" } when verify couldn't be reached
  */
 
@@ -69,18 +74,31 @@ const str = (v: unknown) => (typeof v === "string" ? v : undefined);
 
 /** The add_quote arguments in a POST body, or a ToolError saying what's wrong. */
 function quoteArgs(body: unknown): AddQuoteArgs & { by?: string } {
-  if (!body || typeof body !== "object" || Array.isArray(body)) throw new ToolError("Send { work, text, page?, comment?, tags?, request_id?, by? }.", { error: "bad-request" });
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new ToolError("Send { work, text, file_page?, page_label?, comment?, tags?, request_id?, by? }.", { error: "bad-request" });
   const b = body as Record<string, unknown>;
   if (!str(b.work)?.trim()) throw new ToolError("Send the work: a Calibre book id or UUID, a citekey, or a work key.", { error: "bad-request" });
   if (!str(b.text)?.trim()) throw new ToolError("Send the text to save.", { error: "bad-request" });
-  // An optional field sent as null is one left out; a page may come as a number (the reader's file page).
-  for (const k of ["page", "comment", "tags", "request_id", "by"]) if (b[k] === null) delete b[k];
-  if (typeof b.page === "number" && Number.isInteger(b.page) && b.page >= 1) b.page = String(b.page);
-  if (b.tags !== undefined && !(Array.isArray(b.tags) && b.tags.every((t) => typeof t === "string"))) throw new ToolError("tags is a list of strings.", { error: "bad-request" });
-  for (const k of ["page", "comment", "request_id", "by"]) {
-    if (b[k] !== undefined && typeof b[k] !== "string") throw new ToolError(k === "page" ? "page is a page number from 1." : `${k} is a string.`, { error: "bad-request" });
+  // An optional field sent as null is one left out.
+  for (const k of ["file_page", "page_label", "page", "comment", "tags", "request_id", "by"]) if (b[k] === null) delete b[k];
+  // page is the deprecated name for file_page here: the reader's page.
+  const filePage = (k: string) => {
+    const v = b[k];
+    if (v === undefined) return undefined;
+    const n = typeof v === "string" && /^\s*\d+\s*$/.test(v) ? Number(v) : v;
+    if (typeof n === "number" && Number.isInteger(n) && n >= 1) return n;
+    throw new ToolError(`${k} is a position in the book's file from 1, the reader's page.`, { error: "bad-request" });
+  };
+  const [file, legacy] = [filePage("file_page"), filePage("page")];
+  if (file !== undefined && legacy !== undefined && file !== legacy) {
+    throw new ToolError(`page (deprecated; it means file_page here) is ${legacy} but file_page is ${file}. Send file_page alone.`, { error: "page-mismatch" });
   }
-  return { work: str(b.work)!, text: str(b.text)!, page: str(b.page), comment: str(b.comment), tags: b.tags as string[] | undefined, request_id: str(b.request_id), by: str(b.by)?.trim() || undefined };
+  if (b.tags !== undefined && !(Array.isArray(b.tags) && b.tags.every((t) => typeof t === "string"))) throw new ToolError("tags is a list of strings.", { error: "bad-request" });
+  for (const k of ["page_label", "comment", "request_id", "by"]) {
+    if (b[k] !== undefined && typeof b[k] !== "string") throw new ToolError(`${k} is a string.`, { error: "bad-request" });
+  }
+  const fp = file ?? legacy;
+  return { work: str(b.work)!, text: str(b.text)!, ...(fp !== undefined ? { file_page: fp } : {}), ...(str(b.page_label)?.trim() ? { page_label: str(b.page_label) } : {}),
+    comment: str(b.comment), tags: b.tags as string[] | undefined, request_id: str(b.request_id), by: str(b.by)?.trim() || undefined };
 }
 
 /** Answers /api/corpus/quotes; the caller has checked the request came over the LAN. */

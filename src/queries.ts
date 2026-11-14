@@ -343,12 +343,17 @@ export function getQuote(db: DB, id: number) {
  * The Calibre book a quote was checked against, and where in it, as corpus-mcp's verify answered (kept in the
  * origin of a quote saved by add_quote, or taken from corpus-mcp); null for any other quote.
  */
-export function calibreSource(db: DB, id: number): { book: Record<string, unknown>; position: { section: string | null; page_label: string | null } | null } | null {
+export function calibreSource(db: DB, id: number): { book: Record<string, unknown>; position: { section: string | null; page_label: string | null; file_page: number | null } | null } | null {
   const raw = db.prepare(`SELECT raw FROM quote_origins WHERE quote_id = ? AND kind IN ('agent', 'corpus')
     AND json_extract(raw, '$.book') IS NOT NULL ORDER BY imported_at LIMIT 1`).pluck().get(id) as string | undefined;
   if (!raw) return null;
-  const r = JSON.parse(raw) as { book: Record<string, unknown>; position?: { section: string | null; page_label: string | null } };
-  return { book: r.book, position: r.position ?? null };
+  const r = JSON.parse(raw) as { book: Record<string, unknown>; position?: { section: string | null; page_label: string | null; file_page?: number | null } };
+  if (!r.position) return { book: r.book, position: null };
+  // The file page is where the passage starts in the book's file: the newest anchor's, as followAnchors keeps it.
+  const start = db.prepare(`SELECT json_extract(raw, '$.anchor.start_page') FROM quote_origins WHERE quote_id = ? AND kind IN ('agent', 'corpus')
+    AND json_extract(raw, '$.anchor') IS NOT NULL ORDER BY imported_at DESC LIMIT 1`).pluck().get(id) as number | null | undefined;
+  const file_page = typeof start === "number" ? start + 1 : (r.position.file_page ?? null);
+  return { book: r.book, position: { section: r.position.section, page_label: r.position.page_label, file_page } };
 }
 
 /** The Calibre book a work came from, by the UUID add_quote filed it under: corpus-mcp's record, newest first. */

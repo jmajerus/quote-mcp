@@ -81,9 +81,20 @@ new quotes landing in corpus-mcp soonest:
    `transcribed`, as planned.
    As built, on the contract agreed with corpus-mcp (2026-11-02):
 
-   - `add_quote(work, text, page?, comment?, tags?, request_id?)`. `work`
-     is any key: `zotero:<library>/<key>`, `quote:<id>`, a citekey, a
+   - `add_quote(work, text, page_label?, file_page?, comment?, tags?, request_id?)`.
+     `work` is any key: `zotero:<library>/<key>`, `quote:<id>`, a citekey, a
      Zotero item key, or a Calibre book id or UUID.
+   - Two kinds of page number, named as corpus-mcp names them (2026-11-14):
+     `file_page` is the 1-based position in the book's file, as `read_book`
+     shows it (not citable for EPUB and MOBI); `page_label` is the number
+     printed on the page, the one to cite. `file_page` is where verify starts
+     looking (sent as verify's `page`). Each one given is checked against
+     where the passage is found, and nothing is saved when one disagrees
+     (`page-mismatch`, naming what was given and what was found). A paper
+     book's quote keeps the `page_label` given as its locator. `page` is a
+     deprecated alias of `page_label`, kept for one release with its old
+     meaning: not checked, and its number is where verify starts looking
+     when there's no `file_page`.
    - A Zotero key or citekey that isn't in the mirror yet (a book filed
      since the last import) brings the mirror up to date and is tried
      once more: `POST /api/refresh` to holdings-mcp when
@@ -132,8 +143,9 @@ new quotes landing in corpus-mcp soonest:
    `zotero` or `citekey` is null. `pin_citekey` stays with corpus-mcp.
    For a quote checked against a Calibre book, `cite_quote` gives `quote`
    as stored text (paragraphs and intentional line breaks preserved; supersedes the copied `reflow` heuristic), `book` (verify's book)
-   and `position` (`section`, `page_label`), which the quote's origin
-   keeps. `add_quote`'s answer carries `book` too.
+   and `position` (`section`, `page_label`, `file_page`), which the quote's
+   origin keeps (`file_page` from the newest anchor). `add_quote`'s answer
+   carries `book` and, for a verified quote, `position` too.
 3. **Import corpus-mcp's five quotes**, origin `corpus`, status `verified`,
    tags exactly as written (`project:on-curiosity`, `test:standalone-article`
    are tags that aren't concepts). The Calibre books behind them may not be
@@ -199,13 +211,18 @@ routes serve it, on the LAN only (a 404 through Access), in `src/corpus-api.ts`:
   `anchor_lost`; `anchor` is the one kept with the quote's origin, which
   follows the anchor changes feed.
 - `POST /api/corpus/quotes` (`application/json`): `add_quote`'s arguments
-  (`work`, `text`, `page?` as a string or a number, `comment?`, `tags?`,
-  `request_id?`; `null` is the same as left out) plus `by?`,
+  (`work`, `text`, `file_page?` as a number or a string of one, the reader's
+  page, `page_label?`, `comment?`, `tags?`, `request_id?`; `null` is the
+  same as left out). `page` is a deprecated alias of `file_page` here (it
+  was always the reader's page), kept for one release; a `page` and
+  `file_page` that differ are refused. Plus `by?`,
   the person saving, recorded as `corpus-mcp:<by>`. Same verification, work
   and duplicate handling as `add_quote`; the answer is `add_quote`'s, `201`
   when saved and `200` when it already was. A miss is `422 { error:
   "no-match", message, closest, book }`, several books `422 { error:
-  "ambiguous", books }`, a bad body `400`, and corpus-mcp unreachable `502`.
+  "ambiguous", books }`, a page that isn't where the passage is `422 { error:
+  "page-mismatch", message, given, found, book }`, a bad body `400`, and
+  corpus-mcp unreachable `502`.
 
 ## 3. Concept sets to terminology-mcp (holdings phase 5)
 
