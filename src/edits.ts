@@ -164,7 +164,8 @@ export function proposeFix(db: DB, args: ProposeArgs, actor: string) {
     if (args.page_label !== undefined) {
       const l = parseLocator(args.page_label);
       if (!args.page_label.trim() || l.kind !== "page") throw new ToolError(`page_label is the number printed on the page ("211", "211-212"); ${JSON.stringify(args.page_label)} isn't one. For a chapter or a Kindle location, use locator.`);
-      const asLocator = args.locator === undefined ? null : parseLocator(args.locator);
+      // A null or blank locator is "none", the documented empty form: page_label stands in for it.
+      const asLocator = args.locator?.trim() ? parseLocator(args.locator) : null;
       if (asLocator && locatorText(asLocator.kind, asLocator.value) !== locatorText(l.kind, l.value)) {
         throw new ToolError(`locator is ${JSON.stringify(args.locator)} but page_label is ${JSON.stringify(args.page_label)}. Give one of them.`);
       }

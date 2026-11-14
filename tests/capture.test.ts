@@ -743,6 +743,23 @@ describe("file_page and page_label", () => {
     const r = await addQuote(db, { work: "main:42", text: TEXT, file_page: 40, page_label: "40" }, options());
     expect(r).toMatchObject({ saved: true, position: { page_label: "40", file_page: 40 } });
     expect(corpus.verified).toEqual([{ book: "main:42", text: TEXT, page: 40 }]);
+    // A retry answers with the stored position too, by request id or by the same words.
+    const position = { section: "Chapter 1", page_label: "40", file_page: 40 };
+    expect(await addQuote(db, { work: "main:42", text: TEXT, file_page: 40 }, options())).toMatchObject({ saved: false, position });
+  });
+
+  it("answers an idempotent retry with the position", async () => {
+    const position = { section: "Chapter 1", page_label: "40", file_page: 40 };
+    await addQuote(db, { work: "main:42", text: TEXT, request_id: "r-1" }, options());
+    expect(await addQuote(db, { work: "main:42", text: TEXT, request_id: "r-1" }, options())).toMatchObject({ saved: false, book: { book_id: "main:42" }, position });
+  });
+
+  it("refuses a file_page when the anchor doesn't say which file pages it spans", async () => {
+    corpus.verify = async (r) => ({ match: true, exact: true, text: r.text, locator: "p. 40", page_label: "40", section: null,
+      anchor: { calibre_uuid: mobbingBook.calibre_uuid, sha256: "abc", start_offset: 0, text: r.text }, book: mobbingBook });
+    const e = await mismatch(addQuote(db, { work: "main:42", text: TEXT, file_page: 40 }, options()));
+    expect(e.message).toMatch(/at an unknown file_page and page_label "40", but file_page 40 was given/);
+    expect(await addQuote(db, { work: "main:42", text: TEXT, page_label: "40" }, options())).toMatchObject({ saved: true });
   });
 
   it("refuses, naming both, when the page_label or file_page given isn't where the passage is", async () => {

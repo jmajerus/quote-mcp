@@ -437,19 +437,25 @@ async function addQuoteOnce(db: DB, args: AddQuoteArgs, o: AddQuoteOptions): Pro
     anchored = await postAnchor(db, o.corpus, id, plan.anchor, hintOf(args));
     if (!anchored) warnings.push("corpus-mcp didn't store the anchor; the quote is flagged anchor_missing and the next import posts it again.");
   }
-  if (takenOver) return { saved: false, taken_over: true, reason: "The work already had these words; corpus-mcp's quote was joined to it.", anchored, warnings, book: plan.book, quote: getQuote(db, id) };
+  if (takenOver) return { saved: false, taken_over: true, reason: "The work already had these words; corpus-mcp's quote was joined to it.", anchored, warnings, ...sourceOf(db, id), book: plan.book, quote: getQuote(db, id) };
   if (plan.status === "verified" && !plan.exact) warnings.push("The text is the book's wording, which differs from what was sent (quote marks, spacing, or case).");
   if (plan.status === "transcribed") warnings.push(plan.note);
   return { saved: true, status: plan.status, anchored, warnings, book: plan.book, ...(plan.position ? { position: plan.position } : {}), quote: getQuote(db, id) };
 }
 
+/** The Calibre book a saved quote was checked against, and its position there (both names), for add_quote's answer. */
+function sourceOf(db: DB, id: number): { book: Record<string, unknown> | null; position?: NonNullable<ReturnType<typeof calibreSource>>["position"] } {
+  const s = calibreSource(db, id);
+  return { book: s?.book ?? null, ...(s?.position ? { position: s.position } : {}) };
+}
+
 /** The quote this request id, or these words for this work, already saved, as add_quote returns it. */
 function alreadySaved(db: DB, origin: string, requestId: string, work?: number, text?: string): Record<string, unknown> | undefined {
   const byRequest = db.prepare("SELECT quote_id FROM quote_origins WHERE kind = ? AND ref = ?").pluck().get(origin, requestId) as number | undefined;
-  if (byRequest !== undefined) return { saved: false, reason: "This request_id already saved this quote.", book: calibreSource(db, byRequest)?.book ?? null, quote: getQuote(db, byRequest) };
+  if (byRequest !== undefined) return { saved: false, reason: "This request_id already saved this quote.", ...sourceOf(db, byRequest), quote: getQuote(db, byRequest) };
   if (work === undefined || text === undefined) return undefined;
   const byWords = db.prepare("SELECT id FROM quotes WHERE work_id = ? AND text_key = ? LIMIT 1").pluck().get(work, quoteKey(text)) as number | undefined;
-  return byWords !== undefined ? { saved: false, reason: "The work already has this quote.", book: calibreSource(db, byWords)?.book ?? null, quote: getQuote(db, byWords) } : undefined;
+  return byWords !== undefined ? { saved: false, reason: "The work already has this quote.", ...sourceOf(db, byWords), quote: getQuote(db, byWords) } : undefined;
 }
 
 /** Where corpus-mcp starts looking for a request's passage: its file_page, or the deprecated page's number. */
@@ -509,7 +515,8 @@ async function planQuote(db: DB, t: Target, text: string, pages: Pages, corpus: 
 function checkPages(pages: Pages, v: Extract<Verified, { match: true }>, files: { start: number; end: number } | null): void {
   const endLabel = typeof v.anchor.end_page_label === "string" ? v.anchor.end_page_label : null;
   const labelOk = !pages.checkLabel || (v.page_label !== null && sameLabel(pages.label!, v.page_label, endLabel));
-  const fileOk = !pages.checkFile || !files || (pages.hint! >= files.start && pages.hint! <= files.end);
+  // An anchor that doesn't say its file pages can't confirm the file_page given, so it's refused too.
+  const fileOk = !pages.checkFile || (files !== null && pages.hint! >= files.start && pages.hint! <= files.end);
   if (labelOk && fileOk) return;
   const span = (a: string | number, b: string | number) => (a === b ? `${a}` : `${a}–${b}`);
   const given = [pages.checkFile ? `file_page ${pages.hint}` : null, pages.checkLabel ? `page_label ${JSON.stringify(pages.label)}` : null].filter(Boolean).join(" and ");

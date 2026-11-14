@@ -66,6 +66,8 @@ describe("proposals", () => {
     expect(proposeFix(db, { id, page_label: "211-212", rationale: "my copy" }, "agent").proposal).toMatchObject({ change: { locator: "pp. 211-212" } });
     expect(proposeFix(db, { id, page_label: "7", locator: "p. 7", rationale: "the same page twice" }, "agent").proposal).toMatchObject({ change: { locator: "p. 7" } });
     fails(() => proposeFix(db, { id, page_label: "8", locator: "p. 7", rationale: "x" }, "agent"), /locator is "p. 7" but page_label is "8"/);
+    expect(proposeFix(db, { id, page_label: "9", locator: null, rationale: "null locator is left out" }, "agent").proposal).toMatchObject({ change: { locator: "p. 9" } });
+    expect(proposeFix(db, { id, page_label: "10", locator: " ", rationale: "blank locator is left out" }, "agent").proposal).toMatchObject({ change: { locator: "p. 10" } });
     fails(() => proposeFix(db, { id, page_label: "chap. 3", rationale: "x" }, "agent"), /page_label is the number printed on the page/);
     fails(() => proposeFix(db, { id, page_label: " ", rationale: "x" }, "agent"), /page_label is the number printed on the page/);
   });
