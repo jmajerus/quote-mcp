@@ -88,7 +88,7 @@ new quotes landing in corpus-mcp soonest:
      `file_page` is the 1-based position in the book's file, as `read_book`
      shows it (not citable for EPUB and MOBI); `page_label` is the number
      printed on the page, the one to cite. `file_page` is where verify starts
-     looking (sent as verify's `page`). Each one given is checked against
+     looking (sent to verify as `file_page`, which corpus-mcp accepts from #36). Each one given is checked against
      where the passage is found, and nothing is saved when one disagrees
      (`page-mismatch`, naming what was given and what was found). A paper
      book's quote keeps the `page_label` given as its locator. `page` is a

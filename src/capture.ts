@@ -49,7 +49,7 @@ export class CorpusError extends Error {
 
 export interface CorpusClient {
   baseUrl: string;
-  verify(request: { book: string; text: string; page?: number }): Promise<Verified>;
+  verify(request: { book: string; text: string; file_page?: number }): Promise<Verified>;
   anchor(quoteId: number, anchor: Record<string, unknown>): Promise<unknown>;
   dropAnchor(quoteId: number): Promise<void>;
   /** Changes to the anchors corpus-mcp keeps for quotes here, after change number `since` (GET /api/anchors/changes). */
@@ -476,7 +476,7 @@ async function planQuote(db: DB, t: Target, text: string, pages: Pages, corpus: 
   }
   let v: Verified;
   try {
-    v = await corpus.verify({ book: t.book, text, ...(pages.hint ? { page: pages.hint } : {}) });
+    v = await corpus.verify({ book: t.book, text, ...(pages.hint ? { file_page: pages.hint } : {}) });
   } catch (error) {
     if (!(error instanceof CorpusError)) throw error;
     if (error.code === "no-book") {
@@ -596,7 +596,7 @@ async function postAnchor(db: DB, corpus: CorpusClient, id: number, anchor: Reco
         reverified = true;
         const text = db.prepare("SELECT text FROM quotes WHERE id = ?").pluck().get(id) as string;
         try {
-          const v = await corpus.verify({ book: String(current.calibre_uuid), text, ...(hint ? { page: hint } : {}) });
+          const v = await corpus.verify({ book: String(current.calibre_uuid), text, ...(hint ? { file_page: hint } : {}) });
           if (!v.match) return false;
           current = v.anchor;
         } catch {
@@ -854,7 +854,7 @@ export async function fillPageLocators(db: DB, corpus: CorpusClient | null, o: {
     let source: PageFix["source"] = "anchor";
     if (corpus && a.calibre_uuid && a.text) {
       try {
-        const v = await corpus.verify({ book: a.calibre_uuid, text: a.text, ...(typeof a.start_page === "number" ? { page: a.start_page + 1 } : {}) });
+        const v = await corpus.verify({ book: a.calibre_uuid, text: a.text, ...(typeof a.start_page === "number" ? { file_page: a.start_page + 1 } : {}) });
         const now_ = v.match ? (v.anchor as { page_label?: string | null; end_page_label?: string | null }) : null;
         if (now_?.page_label) [to, source] = [pageSpan(now_.page_label, now_.end_page_label), "corpus"];
       } catch (error) {

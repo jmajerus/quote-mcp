@@ -32,12 +32,12 @@ class FakeCorpus implements CorpusClient {
     [unfiledBook.calibre_uuid, { book: unfiledBook, text: "Work is a story we tell ourselves." }],
   ]);
   anchors = new Map<number, Record<string, unknown>>();
-  verified: { book: string; text: string; page?: number }[] = [];
+  verified: { book: string; text: string; file_page?: number }[] = [];
   /** Errors the next anchor POSTs throw, in order. */
   anchorErrors: CorpusError[] = [];
   booksFeed?: CorpusClient["booksFeed"];
 
-  async verify(r: { book: string; text: string; page?: number }): Promise<Verified> {
+  async verify(r: { book: string; text: string; file_page?: number }): Promise<Verified> {
     this.verified.push(r);
     const entry = this.books.get(r.book);
     if (!entry) throw new CorpusError(404, "no-book", { error: "no-book" });
@@ -98,7 +98,7 @@ describe("add_quote", () => {
     expect(q).toMatchObject({ text: "It begins when an individual becomes the target", status: "verified", locator: "p. 40", flags: [] });
     expect(q.work?.title).toMatch(/^Mobbing/);
     expect(q.tags.map((t) => [t.tag, !!t.concept])).toEqual([["mobbing", true], ["project:on-curiosity", false]]);
-    expect(corpus.verified).toEqual([{ book: `zotero:${PRIMARY}/MOBB0001`, text: "It begins when an individual becomes the TARGET", page: 40 }]);
+    expect(corpus.verified).toEqual([{ book: `zotero:${PRIMARY}/MOBB0001`, text: "It begins when an individual becomes the TARGET", file_page: 40 }]);
     expect(corpus.anchors.get(q.id)).toMatchObject({ calibre_uuid: mobbingBook.calibre_uuid });
     expect((r.warnings as string[]).join(" ")).toMatch(/book's wording/);
     const history = db.prepare("SELECT kind, before, after FROM history WHERE quote_id = ?").get(q.id);
@@ -225,7 +225,7 @@ describe("add_quote", () => {
     const work = saved(await addQuote(db, { work: "main:7", text: "Work is a story" }, options())).work!.id;
     const again = await addQuote(db, { work: `quote:${work}`, text: "we tell ourselves", page: "12-13" }, options());
     expect(again).toMatchObject({ status: "verified", quote: { work: { id: work } } });
-    expect(corpus.verified.at(-1)).toEqual({ book: unfiledBook.calibre_uuid, text: "we tell ourselves", page: 12 });
+    expect(corpus.verified.at(-1)).toEqual({ book: unfiledBook.calibre_uuid, text: "we tell ourselves", file_page: 12 });
     const off = await addQuote(db, { work: unfiledBook.calibre_uuid, text: "Typed while corpus-mcp was off." }, { corpus: null, primary: PRIMARY });
     expect(off).toMatchObject({ status: "transcribed", quote: { work: { id: work } } });
     await rejects(addQuote(db, { work: "main:7", text: "Typed while corpus-mcp was off." }, { corpus: null, primary: PRIMARY }), /find_work/);
@@ -498,7 +498,7 @@ describe("the reader's routes for corpus-mcp", () => {
       expect((await post(s.base, { work: "main:42", text: "It begins when an individual becomes the target", request_id: "reader-1" })).status).toBe(200);
       const numbered = await post(s.base, { work: mobbingBook.calibre_uuid, text: "disrespectful behavior", page: 40, comment: null, tags: ["mobbing"], request_id: "reader-2", by: null });
       expect(numbered.status).toBe(201);
-      expect(corpus.verified.at(-1)).toMatchObject({ book: mobbingBook.calibre_uuid, page: 40 });
+      expect(corpus.verified.at(-1)).toMatchObject({ book: mobbingBook.calibre_uuid, file_page: 40 });
 
       db.prepare(`UPDATE quotes SET flags = '["anchor_lost"]' WHERE id = ?`).run(id);
       for (const key of [mobbingBook.calibre_uuid, "main:42"]) {
@@ -706,14 +706,14 @@ describe("printed pages", () => {
     const raw = JSON.parse(o.raw);
     db.prepare("UPDATE quote_origins SET raw = ? WHERE rowid = ?").run(JSON.stringify({ ...raw, anchor: { ...raw.anchor, page_label: "422", end_page_label: "422" } }), o.rowid);
     expect(await fillPageLocators(db, null)).toEqual([]);
-    const asked: { book: string; text: string; page?: number }[] = [];
+    const asked: { book: string; text: string; file_page?: number }[] = [];
     corpus.verify = async (r) => {
       asked.push(r);
       return { match: true, exact: true, text: r.text, locator: "p. 392", page_label: "392", section: null,
         anchor: { calibre_uuid: mobbingBook.calibre_uuid, text: r.text, page_label: "392", end_page_label: "392" }, book: mobbingBook };
     };
     expect(await fillPageLocators(db, corpus)).toEqual([{ id, from: "422", to: "392", edited: false, source: "corpus" }]);
-    expect(asked).toEqual([{ book: mobbingBook.calibre_uuid, text: raw.anchor.text, page: raw.anchor.start_page + 1 }]);
+    expect(asked).toEqual([{ book: mobbingBook.calibre_uuid, text: raw.anchor.text, file_page: raw.anchor.start_page + 1 }]);
     // corpus-mcp unreachable: the stored anchor, which agrees with the quote.
     corpus.verify = async () => { throw new CorpusError(0, "unreachable"); };
     expect(await fillPageLocators(db, corpus)).toEqual([]);
@@ -742,7 +742,7 @@ describe("file_page and page_label", () => {
   it("starts the search at file_page, and saves when file_page and page_label agree with the passage", async () => {
     const r = await addQuote(db, { work: "main:42", text: TEXT, file_page: 40, page_label: "40" }, options());
     expect(r).toMatchObject({ saved: true, position: { page_label: "40", file_page: 40 } });
-    expect(corpus.verified).toEqual([{ book: "main:42", text: TEXT, page: 40 }]);
+    expect(corpus.verified).toEqual([{ book: "main:42", text: TEXT, file_page: 40 }]);
     // A retry answers with the stored position too, by request id or by the same words.
     const position = { section: "Chapter 1", page_label: "40", file_page: 40 };
     expect(await addQuote(db, { work: "main:42", text: TEXT, file_page: 40 }, options())).toMatchObject({ saved: false, position });
@@ -818,7 +818,7 @@ describe("file_page and page_label", () => {
       const made = await post({ work: "main:42", text: TEXT, file_page: 40, page_label: "40" });
       expect(made.status).toBe(201);
       expect(await made.json()).toMatchObject({ position: { file_page: 40, page_label: "40" } });
-      expect(corpus.verified.at(-1)).toEqual({ book: "main:42", text: TEXT, page: 40 });
+      expect(corpus.verified.at(-1)).toEqual({ book: "main:42", text: TEXT, file_page: 40 });
       const off = await post({ work: "main:42", text: "disrespectful behavior", page_label: "392" });
       expect(off.status).toBe(422);
       expect(await off.json()).toMatchObject({ error: "page-mismatch", given: { page_label: "392" }, found: { file_page: 40, page_label: "40" }, message: expect.stringMatching(/Nothing was saved/) });
@@ -827,7 +827,7 @@ describe("file_page and page_label", () => {
       expect(await both.json()).toMatchObject({ error: "page-mismatch", message: expect.stringMatching(/page \(deprecated; it means file_page here\) is 40 but file_page is 41/) });
       expect((await post({ work: "main:42", text: "x", file_page: "forty" })).status).toBe(400);
       expect((await post({ work: "main:42", text: "disrespectful behavior", page: "40" })).status).toBe(201);
-      expect(corpus.verified.at(-1)).toEqual({ book: "main:42", text: "disrespectful behavior", page: 40 });
+      expect(corpus.verified.at(-1)).toEqual({ book: "main:42", text: "disrespectful behavior", file_page: 40 });
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
