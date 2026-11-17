@@ -442,3 +442,16 @@ describe("a reader's marks in a verified quote", () => {
     expect(fromBook("I flatter myself … curiosity", book)).toBe(true);
   });
 });
+
+describe("the admin quotes list", () => {
+  it("lists the newest first by default, and the oldest first when asked", () => {
+    reimport();
+    const ids = db.prepare("SELECT id FROM quotes WHERE status != 'unparsed' ORDER BY id").pluck().all() as number[];
+    expect(ids.length).toBeGreaterThan(1);
+    const order = (html: string) => [...html.matchAll(/<a href="\/admin\/quotes\/(\d+)">#/g)].map((m) => Number(m[1]));
+    const newest = renderAdmin(db, "/admin/quotes", new URLSearchParams())!;
+    expect(order(newest)).toEqual([...ids].reverse().slice(0, 25));
+    expect(newest).toContain('<option value="" selected>Newest first</option>');
+    expect(order(renderAdmin(db, "/admin/quotes", new URLSearchParams("order=oldest"))!)).toEqual(ids.slice(0, 25));
+  });
+});

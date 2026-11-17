@@ -114,14 +114,16 @@ function quotesPage(db: DB, p: URLSearchParams): string {
   const number = quoteNumber(p);
   const params = {
     q: number === null ? p.get("q") ?? "" : String(number), concept: p.get("concept") ?? "", tag: p.get("tag") ?? "", author: p.get("author") ?? "", work: p.get("work") ?? "",
-    status: p.get("status") ?? "", kind: p.get("kind") ?? "", include: includeValue(exact, include), offset: Number(p.get("offset") ?? 0),
+    status: p.get("status") ?? "", kind: p.get("kind") ?? "", include: includeValue(exact, include), order: p.get("order") ?? "", offset: Number(p.get("offset") ?? 0),
   };
+  // Newest first unless asked otherwise; the empty value keeps that default out of the URL.
+  const order = params.order === "oldest" || params.order === "match" ? params.order : "newest";
   let body: string;
   let add = "";
   try {
     const r = searchQuotes(db, {
       query: params.q || undefined, concept: params.concept || undefined, include, exact, tag: params.tag || undefined, author: params.author || undefined,
-      work: params.work || undefined, status: (params.status || undefined) as never, kind: (params.kind || undefined) as never, offset: params.offset, limit: 25,
+      work: params.work || undefined, status: (params.status || undefined) as never, kind: (params.kind || undefined) as never, order, offset: params.offset, limit: 25,
     });
     if (r.works?.length === 1) {
       const itemType = db.prepare("SELECT item_type FROM works WHERE id = ?").pluck().get(r.works[0]) as string | null;
@@ -140,6 +142,7 @@ function quotesPage(db: DB, p: URLSearchParams): string {
 <form class="filters" method="get">${input("q", JUMP_PLACEHOLDER)}${input("concept", "Concept")}${input("author", "Author")}${input("work", "Work")}
 <select name="status" aria-label="Status"><option value="">Ready to use</option>${["transcribed", "unparsed", "any"].map((s) => `<option${params.status === s ? " selected" : ""}>${s}</option>`).join("")}</select>
 <select name="kind" aria-label="Kind"><option value="">Quotes and notes</option>${[["quote", "Quotes"], ["note", "Notes"]].map(([v, label]) => `<option value="${v}"${params.kind === v ? " selected" : ""}>${label}</option>`).join("")}</select>
+<select name="order" aria-label="Order">${[["", "Newest first"], ["oldest", "Oldest first"], ["match", "Best match"]].map(([v, label]) => `<option value="${v}"${params.order === v ? " selected" : ""}>${label}</option>`).join("")}</select>
 <fieldset class="include"><legend>Include</legend><input type="hidden" name="include" id="include-value" value="${esc(params.include)}">${boxes}</fieldset>
 ${params.tag ? `<input type="hidden" name="tag" value="${esc(params.tag)}">` : ""}<button>Search</button></form>
 <script>

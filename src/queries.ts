@@ -218,6 +218,8 @@ export interface SearchArgs {
   flag?: string;
   status?: "transcribed" | "verified" | "unparsed" | "any";
   kind?: "quote" | "note" | "any";
+  /** newest or oldest by number, or the best match first (a query's default; without one, oldest). */
+  order?: "newest" | "oldest" | "match";
   limit?: number;
   offset?: number;
 }
@@ -288,6 +290,9 @@ export function searchQuotes(db: DB, args: SearchArgs) {
     where.push("q.status = @status");
     params.status = args.status;
   } else if (!args.status) where.push("q.status != 'unparsed'");
+
+  if (args.order === "newest") order = "q.id DESC";
+  else if (args.order === "oldest") order = "q.id";
 
   const limit = Math.min(Math.max(args.limit ?? 20, 1), 100);
   const offset = Math.max(args.offset ?? 0, 0);

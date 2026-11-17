@@ -17,7 +17,8 @@ works, and concepts, when the store was last imported, and the worklists with ho
 includes that concept. **Include** starts with **exact** on. Narrower, broader, related, and opposite
 stay off until checked, and **exact** can be turned off so the named concept drops out. Narrower and
 broader follow the whole chain. Related and opposite add the concepts one step away. A tag in the URL
-(`?tag=`) narrows to that tag. Each result shows its work (with a link that opens the item in Zotero), its
+(`?tag=`) narrows to that tag. **Order** lists the newest first (the highest number) by default; **Oldest first**
+and **Best match** (for a word search, the closest match first) are the others, and the choice carries across pages. Each result shows its work (with a link that opens the item in Zotero), its
 place, its tags (concepts as chips; tags that aren't concepts are dashed), and its flags. When the list is
 one work, **Add a quote** opens the [capture page](#capturing-a-quote) on that work. The wording follows the work's type: a journal article, a book, or a work when the type has no ordinary name.
 
