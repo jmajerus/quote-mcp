@@ -209,6 +209,19 @@ function level(): Level {
   return value;
 }
 
+/** The public holdings site's base URL, without a trailing slash, or null when it's unset; an error when it isn't an http(s) URL. */
+function holdingsBase(value: string): string | null {
+  if (!value) return null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    url = new URL("invalid:");
+  }
+  if (!["https:", "http:"].includes(url.protocol) || url.search || url.hash) throw new Error(`The holdings setting is "${value}"; it should be the holdings site's URL (QUOTE_PUBLIC_HOLDINGS, or holdings: in vocab/site.md).`);
+  return url.href.replace(/\/+$/, "");
+}
+
 /** The public snapshot's file: QUOTE_SNAPSHOT, or public.db beside the store. */
 const snapshotFile = () => process.env.QUOTE_SNAPSHOT || join(dirname(process.env.QUOTE_DB ?? "data/quotes.db"), "public.db");
 /** The replica's queue and what's been shipped to D1: replica.db beside the snapshot. */
@@ -226,7 +239,8 @@ function snapshotOptions(): SnapshotOptions | null {
   const notes = siteSetting("QUOTE_PUBLIC_NOTES", process.env, loadSiteSettings(intro));
   if (notes !== "none" && notes !== "all") throw new Error(`The notes setting is "${notes}"; it should be none or all (QUOTE_PUBLIC_NOTES, or notes: in vocab/site.md).`);
   return { level: public_, notes: notes === "all", intro: loadIntro(intro), collections: loadCollections(join(dirname(intro), "collections")),
-    sets: sets(), maps: readMapsFile(process.env.QUOTE_MAP_DIR || undefined), library: process.env.QUOTE_ZOTERO_LIBRARY || null };
+    sets: sets(), maps: readMapsFile(process.env.QUOTE_MAP_DIR || undefined), library: process.env.QUOTE_ZOTERO_LIBRARY || null,
+    holdings: holdingsBase(siteSetting("QUOTE_PUBLIC_HOLDINGS", process.env, loadSiteSettings(intro))) };
 }
 
 const snapshotLine = (s: ReturnType<typeof buildSnapshot>) =>

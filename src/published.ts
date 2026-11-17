@@ -73,11 +73,13 @@ export class Published {
     readonly notes: boolean,
     readonly builtAt: string,
     readonly hash: string,
+    /** The public holdings site, which a work's page links its title to; null when there's none. */
+    readonly holdings: string | null = null,
   ) {}
 
   static async open(store: SnapshotStore): Promise<Published> {
     const meta = new Map((await store.all<{ key: string; value: string }>("SELECT key, value FROM meta")).map((r) => [r.key, r.value]));
-    return new Published(store, meta.get("level") === "quotes" ? "quotes" : "catalogue", meta.get("notes") === "all", meta.get("built_at") ?? "", meta.get("hash") ?? "");
+    return new Published(store, meta.get("level") === "quotes" ? "quotes" : "catalogue", meta.get("notes") === "all", meta.get("built_at") ?? "", meta.get("hash") ?? "", meta.get("holdings") || null);
   }
 
   get quoting(): boolean {

@@ -13,6 +13,7 @@ and introduction:
 ---
 public: quotes
 notes: none
+holdings: https://holdings.majerus.us
 ---
 # A commonplace book
 
@@ -23,8 +24,9 @@ Passages from books, collected over years and kept in Zotero.
 |---|---|
 | `public:` | `none` (the default: no public site), `catalogue` (concepts, sets, maps, and works, with counts but no quoted text), or `quotes` (the catalogue, plus quote pages, search, and the quotes on each page) |
 | `notes:` | `none` (the default) or `all`: whether notes, and the comments on quotes, are public. Only at `quotes`. |
+| `holdings:` | The public holdings site (holdings-mcp). A work's page links to `<holdings>/?key=quote:<id>`, which lists that work's copies (Zotero, Calibre, and quotes). The link appears in the page's subtitle and on the title in each quote's source line, which would otherwise point back to the page itself. Unset, the title isn't linked. |
 
-`QUOTE_PUBLIC` and `QUOTE_PUBLIC_NOTES` override them on one machine. After the header, a `# Title` line and
+`QUOTE_PUBLIC`, `QUOTE_PUBLIC_NOTES`, and `QUOTE_PUBLIC_HOLDINGS` override them on one machine. After the header, a `# Title` line and
 paragraphs make the front page's introduction. Each collection's introduction is in
 `vocab/collections/<scheme>.md` (see [Concepts](concepts.md#collections)).
 

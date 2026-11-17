@@ -263,6 +263,19 @@ describe("the quotes level", () => {
     expect(front).toContain('action="/search"');
   });
 
+  it("links a work's title on its own page to its holdings, not back to the page", async () => {
+    const mobbing = workId("Mobbing");
+    const bare = (await renderSite(await quotes(), `/works/${mobbing}`))!;
+    expect(bare).not.toContain(`href="/works/${mobbing}"`);
+    expect(bare).toContain(", <cite>Mobbing: emotional abuse in the American workplace</cite> (1999)");
+    const held = (await renderSite(await quotes({ holdings: "https://holdings.example.org" }), `/works/${mobbing}`))!;
+    expect(held).not.toContain(`href="/works/${mobbing}"`);
+    expect(held).toContain(`href="https://holdings.example.org/?key=quote%3A${mobbing}"`);
+    expect(held).toContain(">Holdings</a>");
+    // Elsewhere the title still opens the work's page here.
+    expect((await renderSite(await quotes({ holdings: "https://holdings.example.org" }), "/concepts/abuse"))).toContain(`href="/works/${mobbing}"`);
+  });
+
   it("searches what quotes say, a page at a time", async () => {
     const html = (await renderSite(await quotes(), "/search", new URLSearchParams("q=assault")))!;
     expect(html).toContain("<mark>assault</mark>");

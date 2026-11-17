@@ -57,6 +57,8 @@ export interface SnapshotOptions extends Visibility {
   maps: MapEntry[];
   /** The library whose item wins when two mirrors share a citekey. */
   library?: string | null;
+  /** The public holdings site, which a work's page links its title to. */
+  holdings?: string | null;
 }
 
 export interface MapEntry { name: string; title?: string; description?: string; scheme?: string; set?: string; svg?: string }
@@ -197,6 +199,7 @@ function fill(store: DB, snap: Database.Database, o: SnapshotOptions): void {
   insert("meta", { key: "version", value: String(SNAPSHOT_VERSION) });
   insert("meta", { key: "level", value: o.level });
   insert("meta", { key: "notes", value: shareNotes ? "all" : "none" });
+  if (o.holdings) insert("meta", { key: "holdings", value: o.holdings });
 }
 
 /** A hash of everything in a snapshot but its meta, so an unchanged snapshot isn't sent again. */
@@ -207,7 +210,7 @@ function contentHash(snap: Database.Database): string {
     hash.update(`\u0001${t}`);
     for (const row of snap.prepare(`SELECT * FROM ${t} ORDER BY 1, 2`).iterate()) hash.update(JSON.stringify(row));
   }
-  for (const row of snap.prepare("SELECT key, value FROM meta WHERE key IN ('version', 'level', 'notes') ORDER BY key").iterate()) hash.update(JSON.stringify(row));
+  for (const row of snap.prepare("SELECT key, value FROM meta WHERE key IN ('version', 'level', 'notes', 'holdings') ORDER BY key").iterate()) hash.update(JSON.stringify(row));
   return hash.digest("hex");
 }
 

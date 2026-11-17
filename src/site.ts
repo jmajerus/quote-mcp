@@ -92,11 +92,21 @@ function offsetOf(params: URLSearchParams): number {
   return Number.isInteger(n) && n > 0 ? n : 0;
 }
 
+/** The work's page on the public holdings site, where its copies are, or null when the site has none. */
+const holdingsHref = (p: Published, id: number) => (p.holdings ? `${p.holdings}/?key=${encodeURIComponent(`quote:${id}`)}` : null);
+
+/** A work's title, linked to its page here or, on that page itself (`here`), to its holdings (unlinked without them). */
+function workTitle(w: { id: number; title: string }, here?: { id: number; href: string | null }): string {
+  const title = `<cite>${esc(w.title)}</cite>`;
+  const href = here?.id === w.id ? here.href : `/works/${w.id}`;
+  return href ? `<a href="${esc(href)}"${here?.id === w.id ? ' title="Where this work is held"' : ""}>${title}</a>` : title;
+}
+
 /** Where a record comes from: chapter author, authors, the work (linked), year, and place. */
-function source(r: PublicRecord): string {
+function source(r: PublicRecord, here?: { id: number; href: string | null }): string {
   const w = r.work;
   const who = w ? authorsOf(w.authors) : "";
-  return `<p class="source">${r.chapter_author ? `${esc(r.chapter_author)}, in ` : ""}${who ? `${esc(who)}, ` : ""}${w ? `<a href="/works/${w.id}"><cite>${esc(w.title)}</cite></a>` : ""}${w?.year ? ` (${esc(w.year)})` : ""}${r.locator ? `${w ? ", " : ""}${esc(r.locator)}` : ""}${r.attribution ? ` — ${esc(r.attribution)}` : ""}</p>`;
+  return `<p class="source">${r.chapter_author ? `${esc(r.chapter_author)}, in ` : ""}${who ? `${esc(who)}, ` : ""}${w ? workTitle(w, here) : ""}${w?.year ? ` (${esc(w.year)})` : ""}${r.locator ? `${w ? ", " : ""}${esc(r.locator)}` : ""}${r.attribution ? ` — ${esc(r.attribution)}` : ""}</p>`;
 }
 
 function conceptChips(r: PublicRecord): string {
@@ -108,18 +118,21 @@ function words(r: PublicRecord): string {
   return `<blockquote>${quoteHtml(r.text)}</blockquote>`;
 }
 
-function quoteItem(r: PublicRecord, full = false): string {
+function quoteItem(r: PublicRecord, full = false, here?: { id: number; href: string | null }): string {
   const text = !full && r.snippet ? `<p>${esc(r.snippet).replace(/«/g, "<mark>").replace(/»/g, "</mark>")}</p>` : words(r);
-  return `<li><a class="permalink" href="/quotes/${r.id}" title="This ${r.kind}'s page, with how to cite it">#${r.id}</a>${text}${source(r)}${conceptChips(r)}</li>`;
+  return `<li><a class="permalink" href="/quotes/${r.id}" title="This ${r.kind}'s page, with how to cite it">#${r.id}</a>${text}${source(r, here)}${conceptChips(r)}</li>`;
 }
 
-/** A page of records, with links to the pages before and after it. `full` prints each quote whole, rather than the search snippet. */
-function quoteList(p: Published, result: Awaited<ReturnType<Published["quotes"]>>, base: string, params: Record<string, unknown>, full = false): string {
+/**
+ * A page of records, with links to the pages before and after it. `full` prints each quote whole, rather
+ * than the search snippet; `here` is the work whose page this is, whose title links to its holdings.
+ */
+function quoteList(p: Published, result: Awaited<ReturnType<Published["quotes"]>>, base: string, params: Record<string, unknown>, full = false, here?: { id: number; href: string | null }): string {
   if (!result.total) return '<p class="note">None yet.</p>';
   const { total, offset, limit } = result;
   const prev = offset > 0 ? `<a href="${base}${qs({ ...params, offset: Math.max(0, offset - limit) })}">← Previous</a>` : "";
   const next = offset + limit < total ? `<a href="${base}${qs({ ...params, offset: offset + limit })}">Next →</a>` : "";
-  return `<ol class="quotes">${result.quotes.map((r) => quoteItem(r, full)).join("")}</ol>
+  return `<ol class="quotes">${result.quotes.map((r) => quoteItem(r, full, here)).join("")}</ol>
 <div class="pager">${prev}${next}<span class="note">${offset + 1}–${Math.min(total, offset + limit)} of ${records(p, total)}</span></div>`;
 }
 
@@ -336,9 +349,9 @@ async function worksPage(p: Published, params: URLSearchParams): Promise<string>
 async function workPage(p: Published, id: number, params: URLSearchParams): Promise<string> {
   const [w, quotes] = await Promise.all([p.work(id), p.quoting ? p.quotes({ work: id, limit: 50, offset: offsetOf(params) }) : null]);
   return page(p, w.title, "works", `<h1><cite>${esc(w.title)}</cite></h1>
-<p class="sub">${w.authors.length ? `${esc(authorsOf(w.authors))} · ` : ""}${w.year ? `${esc(w.year)} · ` : ""}${records(p, w.quotes)}</p>
+<p class="sub">${w.authors.length ? `${esc(authorsOf(w.authors))} · ` : ""}${w.year ? `${esc(w.year)} · ` : ""}${records(p, w.quotes)}${holdingsHref(p, id) ? ` · <a href="${esc(holdingsHref(p, id)!)}">Holdings</a>` : ""}</p>
 <h2>Concepts</h2>${w.concepts.length ? `<p>${w.concepts.map((c) => `<a class="chip" href="${conceptHref(c.slug)}">${esc(c.label)} <span class="count">${c.quotes}</span></a>`).join("")}</p>` : '<p class="note">None tagged.</p>'}
-${quotes ? `<h2>Quotes</h2>${quoteList(p, quotes, `/works/${id}`, {})}${w.citekey ? `<p class="meta">Cite as <code>[@${esc(w.citekey)}]</code>, with the page.</p>` : ""}` : ""}`);
+${quotes ? `<h2>Quotes</h2>${quoteList(p, quotes, `/works/${id}`, {}, false, { id, href: holdingsHref(p, id) })}${w.citekey ? `<p class="meta">Cite as <code>[@${esc(w.citekey)}]</code>, with the page.</p>` : ""}` : ""}`);
 }
 
 /** The paths the public site answers, so the server can route them. */

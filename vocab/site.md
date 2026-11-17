@@ -1,6 +1,7 @@
 ---
 public: quotes
 notes: none
+holdings: https://holdings.majerus.us
 ---
 # A commonplace book
 

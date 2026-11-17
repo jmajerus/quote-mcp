@@ -54,6 +54,7 @@ export const SETTINGS: Setting[] = [
   { name: "QUOTE_MAP_DIR", group: "Maps", about: "quote-atlas's built maps, served at /map/" },
   { name: "QUOTE_PUBLIC", group: "Public site", about: "none, catalogue (no quoted text), or quotes", fallback: "none", site: "public" },
   { name: "QUOTE_PUBLIC_NOTES", group: "Public site", about: "notes on the public site: none or all", fallback: "none", site: "notes" },
+  { name: "QUOTE_PUBLIC_HOLDINGS", group: "Public site", about: "the public holdings site (https://holdings.example.org); a work's page links its title there. Unset, the title isn't linked", site: "holdings" },
   { name: "QUOTE_INTRO", group: "Public site", about: "the front page's title, introduction, and settings", fallback: "vocab/site.md" },
   { name: "QUOTE_SNAPSHOT", group: "Public site", about: "the public snapshot", fallback: "public.db beside the store" },
   { name: "QUOTE_PUBLIC_PORT", group: "Public site", about: "a port serving only the public site, for a hostname with no login" },
