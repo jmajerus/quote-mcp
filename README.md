@@ -32,6 +32,7 @@ quote-mcp never changes Zotero. Its MCP tools save quotes and change tags and co
 | [The admin pages](docs/admin-ui.md) | The web interface at `/admin`, page by page, and the worklists |
 | [Importing quotes and notes](docs/importing.md) | The sources, the forms the parser reads, grades, flags, works, and margin notes |
 | [Concepts, collections, and concept sets](docs/concepts.md) | Concept schemes, collections on the public site, and the sets file |
+| [Provenance stamps](docs/provenance.md) | Who or what saved each quote, above all whether a generative agent did |
 | [The public site](docs/public-site.md) | What's public, `vocab/site.md`, the snapshot, the Worker and its D1 replica, the pages, and the maps' API |
 | [Operations](docs/operations.md) | Commands, settings, the server, deploying, and the status-bar items |
 | [Pandoc quote text](docs/dev-briefs/pandoc-quote-text.md) | Extraction ownership, preserved line breaks, and the migration handoff to corpus-mcp |

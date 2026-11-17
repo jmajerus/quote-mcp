@@ -13,6 +13,7 @@ import {
 import { type ConceptSet, captureSpaces } from "./sets.js";
 import { includeChoice, includeValue } from "./common.js";
 import { CSS, esc } from "./style.js";
+import { describeProvenance } from "./provenance.js";
 
 /**
  * The admin pages, rendered on the server: an overview, search over quotes and notes, a record's page, the concept
@@ -59,7 +60,7 @@ type Listed = ReturnType<typeof searchQuotes>["quotes"][number];
 function quoteCard(q: Listed): string {
   const words = q.kind === "note" ? q.note ?? "" : q.text;
   const text = q.snippet ? emphasisHtml(q.snippet).replace(/«/g, "<mark>").replace(/»/g, "</mark>") : emphasisHtml(words.length > 420 ? `${words.slice(0, 420)}…` : words);
-  return `<div class="result"><p class="text"><a href="/admin/quotes/${q.id}">#${q.id}</a> ${q.kind === "note" ? '<span class="kind">note</span>' : ""}${text}</p>
+  return `<div class="result"><p class="text"><a href="/admin/quotes/${q.id}"${q.generative ? ' title="Saved by a generative agent"' : ""}>${q.label}</a> ${q.kind === "note" ? '<span class="kind">note</span>' : ""}${text}</p>
 <div class="meta">${workLine(q.work, q.attribution)}${q.locator ? ` · ${esc(q.locator)}` : ""}${q.chapter_author ? ` · by ${esc(q.chapter_author)}` : ""}</div>
 <div>${tagChips(q.tags)}${q.flags.map((f) => `<span class="flag">${esc(f)}</span>`).join("")}</div></div>`;
 }
@@ -93,7 +94,7 @@ ${QUEUES.map((q) => `<tr><td><a href="/admin/worklists/${q}">${QUEUE_LABEL[q]}</
 
 /** A quote number typed alone in the Words box ("848" or "#848") with no concept, tag, author, or work: the number, else null. */
 function quoteNumber(p: URLSearchParams): number | null {
-  const m = /^\s*#?\s*(\d{1,9})\s*$/.exec(p.get("q") ?? "");
+  const m = /^\s*[#Gg]?\s*(\d{1,9})\s*$/.exec(p.get("q") ?? "");
   if (!m || ["concept", "tag", "author", "work"].some((name) => p.get(name))) return null;
   return Number(m[1]);
 }
@@ -106,7 +107,7 @@ export function adminRedirect(db: DB, path: string, params: URLSearchParams): st
   return `/admin/quotes/${id}`;
 }
 
-const JUMP_PLACEHOLDER = 'Words, "a phrase", or #848';
+const JUMP_PLACEHOLDER = 'Words, "a phrase", or #848 / G848';
 
 function quotesPage(db: DB, p: URLSearchParams): string {
   const { exact, include } = includeChoice(p.has("include") ? p.getAll("include") : null);
@@ -173,7 +174,7 @@ function quotePage(db: DB, id: number): string {
   const c = citeQuote(db, id);
   const rows = (pairs: [string, string][]) => pairs.filter(([, v]) => v).map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join("");
   const note = q.kind === "note";
-  const name = `${note ? "Note" : "Quote"} ${id}`;
+  const name = `${note ? "Note" : "Quote"} ${q.label}`;
   const another = q.work ? ` · <a href="/admin/capture?work=${q.work.id}">Add a quote</a>` : "";
   return page(name, "quotes", `<h1>${name}</h1><p class="sub">${note ? "your own words, no quoted text" : `${esc(q.status)} · grade ${esc(q.grade)}`}${q.edited ? " · edited" : ""} · <a href="/admin/quotes/${id}/edit">Edit</a>${another}</p>
 ${note ? (q.note ? `<div class="words">${esc(q.note)}</div>` : '<p class="note">Tags only.</p>') : `<blockquote>${emphasisHtml(q.text)}</blockquote>`}
@@ -186,6 +187,7 @@ ${note ? (q.note ? `<div class="words">${esc(q.note)}</div>` : '<p class="note">
     ["Key words", (q.kwic as { phrase: string; tag: string }[]).map((k) => `“${esc(k.phrase)}” → ${esc(k.tag)}`).join("<br>")],
     ["Suspect words", suspectWords(id, q.suspect_words as { token: string; reason: string; suggestion?: string }[])],
     ["Came from", (q.origins as { kind: string; ref: string }[]).map((o) => `${esc(o.kind)} ${esc(o.ref)}`).join("<br>")],
+    ["Provenance", esc(describeProvenance(q.provenance))],
   ])}</table></div>
 ${(q.proposals as Proposal[]).length ? `<h2>Proposed changes</h2>${(q.proposals as Proposal[]).map(proposalBlock).join("")}` : ""}
 <h2>Citation</h2>${c.pandoc ? `<p><code>${esc(c.pandoc)}</code></p>` : ""}${c.warnings.map((w) => `<p class="note">${esc(w)}</p>`).join("")}
@@ -257,7 +259,7 @@ function editPage(db: DB, id: number, error?: string, sent?: URLSearchParams, se
   const note = q.kind === "note";
   const locked = q.status === "verified";
   const value = (name: string, now: string | null) => esc(sent?.get(name) ?? now ?? "");
-  const name = `Edit ${note ? "note" : "quote"} ${id}`;
+  const name = `Edit ${note ? "note" : "quote"} ${q.label}`;
   return page(name, "quotes", `<h1>${name}</h1><p class="sub"><a href="/admin/quotes/${id}">Back to the ${note ? "note" : "quote"}</a> · ${workLine(q.work, q.attribution)}</p>
 ${error ? `<p class="error">${esc(error)}</p>` : ""}
 <form class="edit" method="post" action="/admin/quotes/${id}/edit">

@@ -6,6 +6,7 @@ import type { DB } from "./db.js";
 import { deleteQuote, proposeFix, updateQuote } from "./edits.js";
 import { QUEUES, ToolError, citeQuote, getConcept, getQuote, listConcepts, overview, searchQuotes, worklist } from "./queries.js";
 import { type ConceptSet, listSets, setConcepts } from "./sets.js";
+import type { ClientSeen } from "./provenance.js";
 
 export const VERSION = "0.3.0";
 
@@ -52,7 +53,21 @@ export interface Capture extends Omit<AddQuoteOptions, "actor"> {
 const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false } as const;
 const quoteId = z.number().int().min(1).describe("Quote id from search_quotes");
 
-export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture): McpServer {
+/**
+ * What the call presented about its client, for a quote's provenance stamp: the name and version from the
+ * request's _meta (a stateless server sees no initialize), else from initialize on a stdio connection, and the
+ * HTTP user agent. Observed, not attested; through the Authoring Portal it can be the portal's.
+ */
+function clientSeen(server: McpServer, extra: { _meta?: Record<string, unknown>; requestInfo?: { headers?: Record<string, string | string[] | undefined> } }): ClientSeen {
+  const meta = extra._meta?.["io.modelcontextprotocol/clientInfo"] as { name?: unknown; version?: unknown } | undefined;
+  const info = meta ?? server.server.getClientVersion();
+  const ua = extra.requestInfo?.headers?.["user-agent"];
+  const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 200) : undefined);
+  return { name: text(info?.name), version: text(info?.version), user_agent: text(Array.isArray(ua) ? ua[0] : ua) };
+}
+
+/** `caller.by` is the signed-in person behind an HTTP request (or "lan"), for the provenance of quotes it saves. */
+export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture, caller: { by?: string | null } = {}): McpServer {
   const within = (set: string | undefined) => (set ? setConcepts(db, sets, set) : undefined);
   const server = new McpServer({ name: "quote-mcp", version: VERSION }, { instructions: INSTRUCTIONS });
 
@@ -142,7 +157,9 @@ export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture)
         request_id: z.string().max(200).optional().describe("Any id unique to this quote, so a retry doesn't save it twice"),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-    }, (args) => runAsync(() => addQuote(capture.writer(), args, { corpus: capture.corpus, primary: capture.primary, refreshZotero: capture.refreshZotero })));
+    }, (args, extra) => runAsync(() => addQuote(capture.writer(), args, {
+      corpus: capture.corpus, primary: capture.primary, refreshZotero: capture.refreshZotero, caller: { by: caller.by ?? null, client: clientSeen(server, extra) },
+    })));
 
     server.registerTool("update_quote", {
       title: "Change a quote's tags or comment",

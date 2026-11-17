@@ -3,6 +3,7 @@ import { citedKey, citekeyOf, cslType, zoteroToCsl } from "./csl.js";
 import type { DB } from "./db.js";
 import { RELATION_LABEL, RELATION_TYPE, SEARCH_RELATIONS, ToolError, ftsQuery, relatedIds, type SearchRelation } from "./common.js";
 import type { ApiItem } from "./zotero.js";
+import { quoteLabel, readProvenance } from "./provenance.js";
 
 export { RELATION_LABEL, SEARCH_RELATIONS, ToolError, ftsQuery, type SearchRelation };
 
@@ -327,6 +328,10 @@ function present(db: DB, q: Record<string, unknown>, snippet: string | null = nu
     status: q.status as string,
     grade: (q.grade as string) ?? null,
     flags: json<string[]>(q.flags as string, []),
+    /** Whether a generative agent saved it (true), a person (false), or nothing says (null): its provenance stamp's. */
+    generative: readProvenance(q.provenance)?.generative ?? null,
+    /** The number as shown: G874 for a quote a generative agent saved, #827 otherwise. */
+    label: quoteLabel(q.id as number, readProvenance(q.provenance)?.generative),
   };
 }
 
@@ -342,6 +347,7 @@ export function getQuote(db: DB, id: number) {
     origins: db.prepare("SELECT kind, ref, version, imported_at FROM quote_origins WHERE quote_id = ? ORDER BY kind, ref").all(id),
     edited: Boolean(q.edited),
     created_at: q.created_at, updated_at: q.updated_at,
+    provenance: readProvenance(q.provenance),
     history: db.prepare("SELECT at, kind, actor, reason FROM history WHERE quote_id = ? ORDER BY id").all(id),
     proposals: (db.prepare("SELECT id FROM proposals WHERE quote_id = ? AND status = 'pending' ORDER BY id").pluck().all(id) as number[]).map((p) => proposal(db, p)),
   };

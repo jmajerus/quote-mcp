@@ -1,6 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
+import { backfillProvenance } from "./provenance.js";
 
 /**
  * The quote store: primary data, never rebuilt (back it up). Quotes are the records people edit; their
@@ -16,7 +17,7 @@ import Database from "better-sqlite3";
 
 export type DB = Database.Database;
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 /**
  * The quotes table. A locator is a printed page, a Kindle location, or (for an EPUB, which has no pages) a
@@ -31,10 +32,12 @@ const QUOTES_TABLE = `CREATE TABLE IF NOT EXISTS quotes (
   suspects TEXT NOT NULL DEFAULT '[]',
   -- Set once a person changes the quote: re-imports then leave it alone.
   edited INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL, created_by TEXT, updated_at TEXT NOT NULL, updated_by TEXT
+  created_at TEXT NOT NULL, created_by TEXT, updated_at TEXT NOT NULL, updated_by TEXT,
+  -- Who or what saved it (src/provenance.ts): JSON, written once and never changed.
+  provenance TEXT
 );`;
 
-const QUOTE_COLUMNS = "id, kind, work_id, text, text_key, locator_kind, locator, chapter_author, comment, attribution, source_url, status, grade, flags, suspects, edited, created_at, created_by, updated_at, updated_by";
+const QUOTE_COLUMNS = "id, kind, work_id, text, text_key, locator_kind, locator, chapter_author, comment, attribution, source_url, status, grade, flags, suspects, edited, created_at, created_by, updated_at, updated_by, provenance";
 
 /** One Calibre book from corpus-mcp's books feed, kept for the works add_quote made for books not in Zotero. */
 const CALIBRE_BOOKS = `CREATE TABLE IF NOT EXISTS calibre_books (
@@ -187,7 +190,11 @@ function migrate(db: DB): void {
   // SQLite can't change a CHECK in place, so the quotes table is copied into one that allows the chapter kind.
   db.exec(CALIBRE_BOOKS);
   const quotesSql = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'quotes'").pluck().get() as string;
+  // 8: a provenance stamp on each quote, added first since the copy below takes it; those saved before are
+  // stamped from their origins, marked inferred.
+  if (!columns("quotes").has("provenance")) db.exec("ALTER TABLE quotes ADD COLUMN provenance TEXT");
   if (!quotesSql.includes("'chapter'")) rebuildQuotes(db);
+  backfillProvenance(db);
 }
 
 /**

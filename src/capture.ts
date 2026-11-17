@@ -5,6 +5,7 @@ import { type DB, NEXT_QUOTE_ID, getMeta, now, setMeta } from "./db.js";
 import { creators } from "./import.js";
 import { citedKey, citekeyOf } from "./csl.js";
 import { calibreSource, chapterLocator, currentAnchor, getQuote } from "./queries.js";
+import { type ClientSeen, corpusGenerative, stamp as provenanceStamp } from "./provenance.js";
 import { quoteKey, yearOf } from "./text.js";
 import { syncLibrary } from "./sync.js";
 import { type ApiItem, ZoteroClient, needsKey, zoteroConfig } from "./zotero.js";
@@ -280,6 +281,8 @@ export interface AddQuoteOptions {
   origin?: "agent" | "corpus" | "capture";
   /** Kept with the origin, beside the request: corpus-mcp's record of a quote taken over. */
   source?: Record<string, unknown>;
+  /** Who's behind the request, for the quote's provenance stamp: the signed-in person, and what an MCP client presented. */
+  caller?: { by?: string | null; client?: ClientSeen };
   /**
    * Brings the Zotero mirror up to date, for a work filed in Zotero since the last import (zoteroRefresher).
    * Resolves to a note when part of it failed, which add_quote adds to a work still missing.
@@ -427,7 +430,7 @@ async function addQuoteOnce(db: DB, args: AddQuoteArgs, o: AddQuoteOptions): Pro
   const spoken = origin === "capture";
   const plan = await planQuote(db, t, text, pagesOf(args), spoken ? null : o.corpus, spoken);
 
-  const saving = save(db, args, plan, requestId, o.actor ?? origin, origin, o.source);
+  const saving = save(db, args, plan, requestId, o.actor ?? origin, origin, o.source, o.caller);
   if (typeof saving !== "number" && !("takenOver" in saving)) return saving;
   const takenOver = typeof saving !== "number";
   const id = typeof saving === "number" ? saving : (saving.takenOver as number);
@@ -532,8 +535,12 @@ function checkPages(pages: Pages, v: Extract<Verified, { match: true }>, files: 
  * of corpus-mcp's quotes whose words the work already has is taken over instead: the quote gains the corpus
  * origin and its tags, keeps its own text, and is flagged anchor_missing until the new anchor is posted.
  */
-function save(db: DB, args: AddQuoteArgs, plan: Plan, requestId: string, actor: string, origin: string, source?: Record<string, unknown>): number | Record<string, unknown> {
+function save(db: DB, args: AddQuoteArgs, plan: Plan, requestId: string, actor: string, origin: string, source?: Record<string, unknown>, caller?: AddQuoteOptions["caller"]): number | Record<string, unknown> {
   const stamp = now();
+  // An agent's add_quote is generative whether or not its client could be named; the capture page is a person's.
+  const provenance = JSON.stringify(origin === "capture" ? provenanceStamp("capture", false, stamp, caller?.by ?? actor)
+    : origin === "corpus" ? provenanceStamp("corpus-mcp", corpusGenerative(source), stamp, (source?.created_by as string | null) ?? null)
+    : provenanceStamp("mcp", true, stamp, caller?.by ?? null, caller?.client));
   const flags = [...(plan.locator ? [] : ["no_locator"]), ...(plan.anchor ? [ANCHOR_MISSING] : [])];
   // A chapter of an EPUB has no page: its section is the place, kept in the comment.
   const comment = [plan.section ? `Section: ${plan.section}` : null, args.comment?.trim() || null].filter(Boolean).join("\n\n") || null;
@@ -546,9 +553,9 @@ function save(db: DB, args: AddQuoteArgs, plan: Plan, requestId: string, actor: 
     }
     const earlier = alreadySaved(db, origin, requestId, plan.work, plan.text);
     if (earlier) return earlier;
-    const id = db.prepare(`INSERT INTO quotes (id, kind, work_id, text, text_key, locator_kind, locator, comment, status, grade, flags, created_at, created_by, updated_at, updated_by)
-      VALUES (${NEXT_QUOTE_ID}, 'quote', ?, ?, ?, ?, ?, ?, ?, 'A', ?, ?, ?, ?, ?) RETURNING id`).pluck()
-      .get(plan.work, plan.text, quoteKey(plan.text), plan.locator ? plan.locatorKind : "none", plan.locator, comment, plan.status, JSON.stringify(flags), stamp, actor, stamp, actor) as number;
+    const id = db.prepare(`INSERT INTO quotes (id, kind, work_id, text, text_key, locator_kind, locator, comment, status, grade, flags, created_at, created_by, updated_at, updated_by, provenance)
+      VALUES (${NEXT_QUOTE_ID}, 'quote', ?, ?, ?, ?, ?, ?, ?, 'A', ?, ?, ?, ?, ?, ?) RETURNING id`).pluck()
+      .get(plan.work, plan.text, quoteKey(plan.text), plan.locator ? plan.locatorKind : "none", plan.locator, comment, plan.status, JSON.stringify(flags), stamp, actor, stamp, actor, provenance) as number;
     db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, version, raw, imported_at) VALUES (?, ?, ?, NULL, ?, ?)").run(origin, requestId, id, raw, stamp);
     if (plan.book) keepCalibreBook(db, plan.book, stamp);
     const tags = [...new Set((args.tags ?? []).map((t) => t.trim()).filter(Boolean))];
