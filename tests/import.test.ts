@@ -368,6 +368,53 @@ describe("schema", () => {
     }
   });
 
+  it("stamps a schema 7 store's quotes from their origins when it migrates, and leaves stamps alone after", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "quote-mcp-v7-"));
+    try {
+      const file = path.join(dir, "quotes.db");
+      const v7 = openDb(file);
+      // As schema 7 made it: no provenance column, so no quote has a stamp.
+      v7.exec("ALTER TABLE quotes DROP COLUMN provenance");
+      const add = v7.prepare("INSERT INTO quotes (id, text, text_key, status, created_at, created_by, updated_at) VALUES (?, ?, ?, 'transcribed', '2026-10-01T00:00:00Z', ?, 'then')");
+      const origin = v7.prepare("INSERT INTO quote_origins (kind, ref, quote_id, raw, imported_at) VALUES (?, ?, ?, ?, ?)");
+      add.run(1, "From the old site", "old", "import");
+      origin.run("drupal-quote", "q1", 1, "<p>From the old site</p>", "2026-10-01");
+      origin.run("zotero-note", "users/1:N1", 1, "<p>From the old site</p>", "2026-09-01");
+      add.run(2, "An agent's", "agent", "agent");
+      origin.run("agent", "req-2", 2, "{}", "2026-11-10");
+      add.run(3, "From corpus-mcp's admin page", "corpus", "corpus-mcp");
+      origin.run("corpus", "7", 3, JSON.stringify({ source: { source: "admin" } }), "2026-11-10");
+      add.run(4, "A Zotero note", "note", "import");
+      origin.run("zotero-note", "users/1:N4", 4, "<p>A Zotero note</p>", "2026-11-12");
+      add.run(5, "No origin at all", "none", null);
+      v7.pragma("user_version = 7");
+      v7.close();
+
+      const db8 = openDb(file);
+      expect(db8.pragma("user_version", { simple: true })).toBe(8);
+      const stamps = () => Object.fromEntries((db8.prepare("SELECT id, provenance FROM quotes ORDER BY id").all() as { id: number; provenance: string }[])
+        .map((r) => [r.id, JSON.parse(r.provenance)]));
+      expect(stamps()).toMatchObject({
+        1: { generative: false, channel: "drupal", inferred: true, at: "2026-10-01T00:00:00Z", by: "import", detail: null },
+        2: { generative: true, channel: "mcp", inferred: true, by: "agent" },
+        3: { generative: false, channel: "corpus-mcp", inferred: true },
+        4: { generative: null, channel: "zotero", inferred: true },
+        5: { generative: null, channel: "unknown", inferred: true, by: null },
+      });
+      // A stamp, once there, is never redone: opening the store again leaves every one as it was.
+      db8.prepare("UPDATE quotes SET provenance = json_set(provenance, '$.by', 'someone') WHERE id = 4").run();
+      const before = stamps();
+      db8.close();
+      const again = openDb(file);
+      expect(Object.fromEntries((again.prepare("SELECT id, provenance FROM quotes ORDER BY id").all() as { id: number; provenance: string }[])
+        .map((r) => [r.id, JSON.parse(r.provenance)]))).toEqual(before);
+      expect(before[4].by).toBe("someone");
+      again.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("leaves a store alone for a dry run: it won't create one or migrate one", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "quote-mcp-existing-"));
     try {
