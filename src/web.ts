@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { pathSegment, queryString } from "./urls.js";
 import type { DB } from "./db.js";
 import { type AddQuoteOptions, workFromMirror } from "./capture.js";
 import { workLabel } from "./csl.js";
@@ -22,12 +23,7 @@ type Section = "overview" | "quotes" | "capture" | "concepts" | "worklists";
 
 
 
-function qs(params: Record<string, unknown>): string {
-  const p = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== "") p.set(k, String(v));
-  const s = p.toString();
-  return s ? `?${s}` : "";
-}
+const qs = (params: Record<string, unknown>) => queryString(params);
 
 function page(title: string, section: Section, body: string): string {
   const nav: [Section, string, string][] = [["overview", "Overview", "/admin"], ["quotes", "Quotes", "/admin/quotes"], ["capture", "Capture", "/admin/capture"], ["concepts", "Concepts", "/admin/concepts"], ["worklists", "Worklists", "/admin/worklists"]];
@@ -54,7 +50,7 @@ function workLine(w: WorkSummary | null, attribution: string | null): string {
 
 function tagChips(tags: { tag: string; concept: string | null }[]): string {
   return tags.map((t) => (t.concept
-    ? `<a class="chip" href="/admin/concepts/${encodeURIComponent(t.concept)}">${esc(t.tag)}</a>`
+    ? `<a class="chip" href="/admin/concepts/${pathSegment(t.concept)}">${esc(t.tag)}</a>`
     : `<a class="chip plain" href="/admin/quotes${qs({ tag: t.tag })}" title="Not a concept">${esc(t.tag)}</a>`)).join("");
 }
 
@@ -210,19 +206,19 @@ function conceptsPage(db: DB, p: URLSearchParams): string {
   return page("Concepts", "concepts", `<h1>Concepts</h1><p class="sub">The human side of work (<code>human-work</code>): ${list.length} concepts${query ? ` matching “${esc(query)}”` : ""}.</p>
 <form class="filters" method="get"><input name="q" placeholder="Find a concept" value="${esc(query)}" aria-label="Find a concept"><button>Find</button></form>
 <div class="scroll"><table><tr><th>Concept</th><th>Quotes</th><th>Definition</th></tr>
-${list.map((c) => `<tr><td><a href="/admin/concepts/${encodeURIComponent(c.slug)}">${esc(c.label)}</a></td><td>${c.quotes}</td><td class="note">${esc(c.definition)}</td></tr>`).join("")}</table></div>`);
+${list.map((c) => `<tr><td><a href="/admin/concepts/${pathSegment(c.slug)}">${esc(c.label)}</a></td><td>${c.quotes}</td><td class="note">${esc(c.definition)}</td></tr>`).join("")}</table></div>`);
 }
 
 function conceptPage(db: DB, slug: string, p: URLSearchParams): string {
   const c = getConcept(db, slug);
   const offset = Number(p.get("offset") ?? 0);
   const quotes = searchQuotes(db, { concept: c.slug, limit: 25, offset });
-  const relations = Object.entries(c.relations).map(([type, list]) => `<tr><th>${esc(type)}</th><td>${list.map((r) => `<a class="chip" href="/admin/concepts/${encodeURIComponent(r.slug)}">${esc(r.label)}</a>`).join("")}</td></tr>`).join("");
+  const relations = Object.entries(c.relations).map(([type, list]) => `<tr><th>${esc(type)}</th><td>${list.map((r) => `<a class="chip" href="/admin/concepts/${pathSegment(r.slug)}">${esc(r.label)}</a>`).join("")}</td></tr>`).join("");
   return page(c.label, "concepts", `<h1>${esc(c.label)}</h1><p class="sub"><code>${esc(c.scheme)}:${esc(c.slug)}</code> · ${c.quotes} quotes, ${c.quotes_with_narrower} with narrower concepts</p>
 ${c.definition ? `<p>${esc(c.definition)}</p>` : ""}
 <div class="scroll"><table>${c.alt_labels.length ? `<tr><th>Also</th><td>${c.alt_labels.map(esc).join(", ")}</td></tr>` : ""}${relations}
 ${c.wordnet ? `<tr><th>WordNet</th><td><a href="${esc(c.wordnet)}">${esc(c.wordnet.replace(/^.*synset-/, "").replace(/\.rdf$/, ""))}</a></td></tr>` : ""}</table></div>
-<h2>Quotes, with narrower concepts</h2>${quotes.quotes.map(quoteCard).join("")}${pager(`/admin/concepts/${encodeURIComponent(c.slug)}`, {}, quotes.total, quotes.offset, quotes.limit)}`);
+<h2>Quotes, with narrower concepts</h2>${quotes.quotes.map(quoteCard).join("")}${pager(`/admin/concepts/${pathSegment(c.slug)}`, {}, quotes.total, quotes.offset, quotes.limit)}`);
 }
 
 /** A word for a POSIX shell, in single quotes, so a tag copied from the worklist runs nothing. */

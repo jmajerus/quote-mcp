@@ -1,4 +1,5 @@
 import type { Collection, PublicRecord, Published } from "./published.js";
+import { pathSegment, queryString, queryValue } from "./urls.js";
 import { quoteHtml } from "./public.js";
 import { SEARCH_RELATIONS, ToolError, includeChoice, includeValue } from "./common.js";
 import { CSS, esc } from "./style.js";
@@ -62,7 +63,7 @@ ${nav.map(([k, label, href]) => `<a href="${href}"${k === section ? ' aria-curre
 }
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString("en")} ${n === 1 ? one : many}`;
-const conceptHref = (slug: string) => `/concepts/${encodeURIComponent(slug)}`;
+const conceptHref = (slug: string) => `/concepts/${pathSegment(slug)}`;
 const records = (p: Published, n: number) => (p.quoting && p.notes ? plural(n, "quote or note", "quotes and notes") : plural(n, "quote"));
 
 function authorsOf(authors: string[]): string {
@@ -80,12 +81,7 @@ function card(href: string, title: string, text: string | null | undefined): str
 
 // --- Quotes, at the quotes level -------------------------------------------------------------------
 
-function qs(params: Record<string, unknown>): string {
-  const q = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null && v !== "" && v !== 0) q.set(k, String(v));
-  const s = q.toString();
-  return s ? `?${s}` : "";
-}
+const qs = (params: Record<string, unknown>) => queryString(params, (v) => v === 0);
 
 function offsetOf(params: URLSearchParams): number {
   const n = Number(params.get("offset") ?? 0);
@@ -93,7 +89,7 @@ function offsetOf(params: URLSearchParams): number {
 }
 
 /** The work's page on the public holdings site, where its copies are, or null when the site has none. */
-const holdingsHref = (p: Published, id: number) => (p.holdings ? `${p.holdings}/?key=${encodeURIComponent(`quote:${id}`)}` : null);
+const holdingsHref = (p: Published, id: number) => (p.holdings ? `${p.holdings}/?key=${queryValue(`quote:${id}`)}` : null);
 
 /** A work's title, linked to its page here or, on that page itself (`here`), to its holdings (unlinked without them). */
 function workTitle(w: { id: number; title: string }, here?: { id: number; href: string | null }): string {
@@ -241,7 +237,7 @@ ${sets.length ? `<h2>Starting points</h2><div class="grid">${sets.map((s) => car
 }
 
 function browse(n: { works: number; concepts: number }, scheme: string | null): string {
-  const q = scheme ? `?collection=${encodeURIComponent(scheme)}` : "";
+  const q = scheme ? `?collection=${queryValue(scheme)}` : "";
   return `<h2>Browse</h2><div class="grid">${card(`/concepts${q}`, "Concepts", `${plural(n.concepts, "concept")}, A to Z`)}${card(`/works${q}`, "Works", `${plural(n.works, "work")}, by author`)}</div>`;
 }
 
@@ -261,7 +257,7 @@ async function frontPage(p: Published): Promise<string> {
   }
   const loose = await p.untagged();
   return page(p, null, "home", `${head}
-<h2>Collections</h2><div class="grid">${all.map((c) => `<a class="card" href="/collections/${encodeURIComponent(c.scheme)}"><h3>${esc(c.intro.title)}</h3>
+<h2>Collections</h2><div class="grid">${all.map((c) => `<a class="card" href="/collections/${pathSegment(c.scheme)}"><h3>${esc(c.intro.title)}</h3>
 ${c.intro.summary ? `<p>${esc(c.intro.summary)}</p>` : ""}<p class="count">${records(p, c.quotes)} · ${plural(c.works, "work")} · ${plural(c.concepts, "concept")}</p></a>`).join("")}</div>
 ${loose ? `<p class="note">${records(p, loose)} not yet tagged with a concept, so in no collection; they're under Works.</p>` : ""}
 ${ways}${browse(n, null)}${recent}`);
@@ -287,7 +283,7 @@ async function chosen(p: Published, params: URLSearchParams): Promise<Collection
 
 /** "in <collection>", linked, when there's more than one collection to tell apart. */
 async function within(p: Published, c: Collection | null): Promise<string> {
-  return c && (await p.collections()).length > 1 ? ` in <a href="/collections/${encodeURIComponent(c.scheme)}">${esc(c.intro.title)}</a> · <a href="?">all collections</a>` : "";
+  return c && (await p.collections()).length > 1 ? ` in <a href="/collections/${pathSegment(c.scheme)}">${esc(c.intro.title)}</a> · <a href="?">all collections</a>` : "";
 }
 
 async function conceptsPage(p: Published, params: URLSearchParams): Promise<string> {
@@ -318,7 +314,7 @@ async function conceptPage(p: Published, slug: string, params: URLSearchParams):
   const maps = allMaps.filter((m) => m.scheme === c.scheme && !m.set);
   const home = all.length > 1 ? all.find((x) => x.scheme === c.scheme) : undefined;
   return page(p, c.label, "concepts", `<h1>${esc(c.label)}</h1>
-<p class="sub">${home ? `<a href="/collections/${encodeURIComponent(home.scheme)}">${esc(home.intro.title)}</a> · ` : ""}${records(p, c.quotes_with_narrower)}${ids.length > 1 ? ", with its narrower concepts" : ""}${maps.map((m) => ` · <a href="/map/${m.name}/#/concept/${encodeURIComponent(c.slug)}">on the map</a>`).join("")}</p>
+<p class="sub">${home ? `<a href="/collections/${pathSegment(home.scheme)}">${esc(home.intro.title)}</a> · ` : ""}${records(p, c.quotes_with_narrower)}${ids.length > 1 ? ", with its narrower concepts" : ""}${maps.map((m) => ` · <a href="/map/${m.name}/#/concept/${pathSegment(c.slug)}">on the map</a>`).join("")}</p>
 ${c.definition ? `<p>${esc(c.definition)}</p>` : ""}
 ${c.alt_labels.length || relations ? `<div class="scroll"><table>${c.alt_labels.length ? `<tr><th>Also</th><td>${c.alt_labels.map(esc).join(", ")}</td></tr>` : ""}${relations}</table></div>` : ""}
 ${inSets.length ? `<p class="meta">In ${inSets.map((s) => `<a href="/sets/${s.slug}">${esc(s.label)}</a>`).join(", ")}</p>` : ""}

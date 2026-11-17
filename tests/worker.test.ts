@@ -146,6 +146,8 @@ describe("the Worker", () => {
     expect(graph.concepts.find((c) => c.slug === "mobbing")!.quotes).toBe(1);
     const quotes = await (await get(env, "/api/concepts/human-work%3Aabuse/quotes?limit=1")).json() as { total: number; quotes: { text: string }[] };
     expect(quotes).toMatchObject({ total: 2, limit: 1 });
+    // A readable key answers as its encoded form does.
+    expect(await (await get(env, "/api/concepts/human-work:abuse/quotes?limit=1")).json()).toEqual(quotes);
     expect((await get(env, "/api/concepts/abuse/quotes?limit=many")).status).toBe(400);
     expect((await get(env, "/api/concepts/nothing")).status).toBe(404);
     expect((await get(env, "/api/sets/harm")).status).toBe(200);

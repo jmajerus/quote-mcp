@@ -270,7 +270,7 @@ describe("the quotes level", () => {
     expect(bare).toContain(", <cite>Mobbing: emotional abuse in the American workplace</cite> (1999)");
     const held = (await renderSite(await quotes({ holdings: "https://holdings.example.org" }), `/works/${mobbing}`))!;
     expect(held).not.toContain(`href="/works/${mobbing}"`);
-    expect(held).toContain(`href="https://holdings.example.org/?key=quote%3A${mobbing}"`);
+    expect(held).toContain(`href="https://holdings.example.org/?key=quote:${mobbing}"`);
     expect(held).toContain(">Holdings</a>");
     // Elsewhere the title still opens the work's page here.
     expect((await renderSite(await quotes({ holdings: "https://holdings.example.org" }), "/concepts/abuse"))).toContain(`href="/works/${mobbing}"`);
