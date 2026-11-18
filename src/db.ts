@@ -17,7 +17,7 @@ import { backfillProvenance } from "./provenance.js";
 
 export type DB = Database.Database;
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 /**
  * The quotes table. A locator is a printed page, a Kindle location, or (for an EPUB, which has no pages) a
@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS schemes (
 );
 CREATE TABLE IF NOT EXISTS concepts (
   id INTEGER PRIMARY KEY, scheme_id INTEGER NOT NULL REFERENCES schemes(id), slug TEXT NOT NULL, label TEXT NOT NULL,
-  alt_labels TEXT NOT NULL DEFAULT '[]', definition TEXT, close_match TEXT,
+  alt_labels TEXT NOT NULL DEFAULT '[]', definition TEXT, close_match TEXT, synset TEXT,
   status TEXT NOT NULL DEFAULT 'confirmed' CHECK (status IN ('provisional', 'confirmed', 'retired')),
   source TEXT, term_id TEXT, former_slugs TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (scheme_id, slug)
 );
@@ -195,6 +195,8 @@ function migrate(db: DB): void {
   if (!columns("quotes").has("provenance")) db.exec("ALTER TABLE quotes ADD COLUMN provenance TEXT");
   if (!quotesSql.includes("'chapter'")) rebuildQuotes(db);
   backfillProvenance(db);
+  // 9: each concept's WordNet synset, as the WordNet server describes its link (src/wordnet.ts); the term sync fills it.
+  if (!columns("concepts").has("synset")) db.exec("ALTER TABLE concepts ADD COLUMN synset TEXT");
 }
 
 /**

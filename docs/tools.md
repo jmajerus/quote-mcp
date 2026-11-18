@@ -10,7 +10,7 @@ read-only for now: nothing an agent does changes the store. Editing comes with p
 | `get_quote` | Get a quote | One record in full: text, locator, work, tags, comment, suspect words, origins, [provenance](provenance.md), history |
 | `cite_quote` | Cite a quote | A CSL JSON item for the work, the locator, the citekey, and a Pandoc citation |
 | `list_concepts` | List concepts | The concepts, with definitions, alternative labels, and quote counts |
-| `get_concept` | Get a concept | One concept, its relations, and its quote counts |
+| `get_concept` | Get a concept | One concept, its relations, its WordNet link and [synset](wordnet.md), and its quote counts |
 | `list_sets` | List concept sets | The named concept sets, with how many concepts each has |
 | `worklist` | Quote worklist | What needs a person: unparsed quotes, unmatched works, tags that aren't concepts, flags |
 

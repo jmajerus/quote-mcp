@@ -125,7 +125,7 @@ export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture,
 
   server.registerTool("get_concept", {
     title: "Get a concept",
-    description: "One concept: definition, alternative labels, WordNet link, its broader, narrower, related, and opposite concepts, and how many quotes it has (with and without narrower concepts).",
+    description: "One concept: definition, alternative labels, WordNet link and synset (its words, definition, and broader synsets, from Open English WordNet), its broader, narrower, related, and opposite concepts, and how many quotes it has (with and without narrower concepts).",
     inputSchema: { concept: z.string().describe('Name, slug, or scheme:slug, e.g. "mobbing" or "human-work:false-self"') },
     annotations: readOnly,
   }, ({ concept }) => run(() => getConcept(db, concept)));

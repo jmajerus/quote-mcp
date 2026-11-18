@@ -42,6 +42,8 @@ export const SETTINGS: Setting[] = [
   { name: "QUOTE_SETS", group: "Service", about: "the concept sets, used only while the store has none from terminology-mcp", fallback: "vocab/sets.json" },
   { name: "QUOTE_TERMS_SYNC", group: "Concepts from terminology-mcp", about: "on: the server follows terminology-mcp's human-work scheme every minute", fallback: "off" },
   { name: "TERMINOLOGY_BASE", group: "Concepts from terminology-mcp", about: "terminology-mcp on the LAN, where progress reports name the caller; off turns following off", fallback: "http://terminology-mcp.localdomain:8000" },
+  { name: "WORDNET_SPARQL", group: "Concepts from terminology-mcp", about: "the WordNet Oxigraph server that each concept's WordNet link is looked up on, after each terms pass (docs/wordnet.md); off turns lookups off", fallback: "http://wordnet.localdomain:7878" },
+  { name: "WORDNET_GRAPH", group: "Concepts from terminology-mcp", about: "the Open English WordNet edition's graph on that server; a new one looks every link up again", fallback: "urn:wordnet:graph:oewn-2025" },
   { name: "CORPUS_BASE", group: "Saving quotes", about: "corpus-mcp on the LAN, which checks add_quote's words against a Calibre book; off saves every quote transcribed, by work key", fallback: "http://corpus-mcp.localdomain:8000" },
   { name: "QUOTE_TRANSCRIBE", group: "Saving quotes", about: "a command that prints the words of a 16 kHz mono wav; {wav} is the file. Unset, QUOTE_WHISPER_URL is used, then Home Assistant, then PocketSphinx" },
   { name: "QUOTE_POCKETSPHINX_MODEL", group: "Saving quotes", about: "PocketSphinx's US English model directory, used when no other transcriber is set", fallback: "/usr/share/pocketsphinx/model/en-us" },

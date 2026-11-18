@@ -14,6 +14,7 @@ import { type ConceptSet, captureSpaces } from "./sets.js";
 import { includeChoice, includeValue } from "./common.js";
 import { CSS, esc } from "./style.js";
 import { describeProvenance } from "./provenance.js";
+import { type Synset, senseKey } from "./wordnet.js";
 
 /**
  * The admin pages, rendered on the server: an overview, search over quotes and notes, a record's page, the concept
@@ -215,12 +216,19 @@ ${list.map((c) => `<tr><td><a href="/admin/concepts/${pathSegment(c.slug)}">${es
 }
 
 /**
- * The WordNet row for a concept. The old site linked Princeton WordNet 3.0 synsets by their purl.org RDF URIs,
- * which no longer resolve (the last redirect's host has an expired certificate), so the row links the word in
- * Open English WordNet, WordNet's maintained successor, and keeps the synset (part of speech and sense number)
- * as the text. A value that isn't a synset URI ("NA", from the old site) shows nothing.
+ * The WordNet rows for a concept. With its synset from the WordNet server (src/wordnet.ts): the synset's words,
+ * linked to that exact meaning in Open English WordNet, its part of speech and definition, and its broader
+ * synsets. Before the synset has been fetched, the link's word in Open English WordNet: the old site's purl.org
+ * links no longer resolve. A value that isn't a WordNet link ("NA", from the old site) shows nothing.
  */
-export function wordnetRow(uri: string | null): string {
+export function wordnetRow(uri: string | null, synset: Synset | null = null): string {
+  const view = (id: string) => `https://en-word.net/id/${encodeURIComponent(id)}`;
+  if (synset && synset.uri === uri) {
+    if (!synset.id) return `<tr><th>WordNet</th><td title="${esc(uri)}">Not found in WordNet (${esc(senseKey(uri) ?? uri)})</td></tr>`;
+    const broader = (synset.broader ?? []).map((b) => `<a href="${view(b.id)}">${esc(b.words.join(", "))}</a>`).join("; ");
+    return `<tr><th>WordNet</th><td><a href="${view(synset.id)}" title="${esc(uri)}">${esc((synset.words ?? []).join(", "))}</a>${synset.pos ? ` (${esc(synset.pos)})` : ""}${synset.definition ? `: ${esc(synset.definition)}` : ""}</td></tr>
+${broader ? `<tr><th>WordNet broader</th><td>${broader}</td></tr>` : ""}`;
+  }
   const m = uri?.match(/synset-(.+)-(noun|verb|adjective|adjectivesatellite|adverb)-(\d+)\.rdf$/);
   if (!m) return "";
   const [, lemma, pos, sense] = m;
@@ -236,7 +244,7 @@ function conceptPage(db: DB, slug: string, p: URLSearchParams): string {
   return page(c.label, "concepts", `<h1>${esc(c.label)}</h1><p class="sub"><code>${esc(c.scheme)}:${esc(c.slug)}</code> · ${c.quotes} quotes, ${c.quotes_with_narrower} with narrower concepts</p>
 ${c.definition ? `<p>${esc(c.definition)}</p>` : ""}
 <div class="scroll"><table>${c.alt_labels.length ? `<tr><th>Also</th><td>${c.alt_labels.map(esc).join(", ")}</td></tr>` : ""}${relations}
-${wordnetRow(c.wordnet)}</table></div>
+${wordnetRow(c.wordnet, c.synset)}</table></div>
 <h2>Quotes, with narrower concepts</h2>${quotes.quotes.map(quoteCard).join("")}${pager(`/admin/concepts/${pathSegment(c.slug)}`, {}, quotes.total, quotes.offset, quotes.limit)}`);
 }
 

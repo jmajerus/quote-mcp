@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { type DB, getMeta, now, setMeta } from "./db.js";
 import { SCHEME } from "./import.js";
 import { type ConceptSet, storedSets } from "./sets.js";
+import { type WordnetLookup, refreshSynsets, wordnetConfig, wordnetLookup } from "./wordnet.js";
 
 /**
  * Follows terminology-mcp's `human-work` scheme, which is the master of its concepts, labels, slugs,
@@ -110,8 +111,8 @@ export function terminologyClient({ baseUrl, timeoutMs = 10_000, fetchImpl = fet
 
 const STATUS: Record<string, string> = { provisional: "provisional", active: "confirmed", retired: "retired" };
 const RELATION: Record<string, string> = { related: "related", opposite: "inverse" };
-/** close_match holds the WordNet synset the old site linked; other close matches stay in terminology-mcp. */
-const WORDNET = /wordnet|\/wn\d+\//i;
+/** close_match holds the concept's WordNet link (the old site's, or an Open English WordNet synset); other close matches stay in terminology-mcp. */
+const WORDNET = /wordnet|\/wn\d+\/|^https:\/\/en-word\.net\//i;
 
 interface Local { id: number; slug: string; label: string; alt_labels: string; definition: string | null; close_match: string | null; status: string; term_id: string | null }
 
@@ -547,11 +548,14 @@ export const termSyncEnabled = (env: NodeJS.ProcessEnv = process.env) => env.QUO
  * Follows the scheme every minute while the server is up, when QUOTE_TERMS_SYNC=on, through its own
  * writable connection to the store (the server's other one is read-only). Reports when the cursor or the
  * hold changes, and every five minutes besides, so terminology-mcp's lastSeen means alive. `onApplied`
- * runs after a pass that changed the store (the public snapshot is rebuilt then). Returns its status for
+ * runs after a pass that changed the store (the public snapshot is rebuilt then). After each pass, concepts
+ * whose WordNet link is new or changed get their synset from the WordNet server (src/wordnet.ts; WORDNET_SPARQL),
+ * which never holds up the terms: a failed lookup is logged and tried again next pass. Returns its status for
  * /health.
  */
-export function startTermSync({ file, sets, env = process.env, onApplied, client, intervalMs = TERMS_INTERVAL_MS }: {
+export function startTermSync({ file, sets, env = process.env, onApplied, client, intervalMs = TERMS_INTERVAL_MS, wordnet }: {
   file: string; sets: ConceptSet[]; env?: NodeJS.ProcessEnv; onApplied?: () => void; client?: TerminologyClient; intervalMs?: number;
+  wordnet?: { lookup: WordnetLookup; graph: string } | null;
 }): () => TermSyncStatus {
   const status: TermSyncStatus = { phase: "off", through: null, head: null, blocked: null, error: null, at: null };
   const config = terminologyConfig(env);
@@ -567,6 +571,20 @@ export function startTermSync({ file, sets, env = process.env, onApplied, client
   const say = (message: string) => {
     if (status.error !== message) console.error(message);
   };
+  const wn = wordnet !== undefined ? wordnet : ((c) => (c ? { lookup: wordnetLookup(c), graph: c.graph } : null))(wordnetConfig(env));
+  let wordnetError: string | null = null;
+  const synsets = async () => {
+    if (!wn) return;
+    try {
+      const n = await refreshSynsets(db, wn.lookup, wn.graph);
+      if (n) console.error(`WordNet synsets: ${n} concept${n === 1 ? "" : "s"} updated`);
+      wordnetError = null;
+    } catch (error) {
+      const message = `WordNet synsets failed (retrying next pass): ${(error as Error).message}`;
+      if (wordnetError !== message) console.error(message);
+      wordnetError = message;
+    }
+  };
   const run = async () => {
     if (running) return;
     running = true;
@@ -578,6 +596,7 @@ export function startTermSync({ file, sets, env = process.env, onApplied, client
       Object.assign(status, { phase: result.outcome === "held" ? "held" : "ok", through: result.through, head: result.head ?? null, blocked: result.blocked ?? null,
         error: result.outcome === "held" ? `${result.blocked!.code}: ${result.blocked!.reason}` : null });
       if (result.outcome === "applied" || result.outcome === "bootstrapped" || (result.outcome === "held" && result.lines.length)) onApplied?.();
+      await synsets();
       if (result.outcome === "rebuilt") return;
       const key = JSON.stringify([result.log, result.through, result.blocked ?? null]);
       if (key !== lastReport || Date.now() - lastReportAt >= HEARTBEAT_MS) {

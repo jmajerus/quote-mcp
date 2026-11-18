@@ -1,3 +1,4 @@
+import { readSynset } from "./wordnet.js";
 import Database from "better-sqlite3";
 import { citedKey, citekeyOf, cslType, zoteroToCsl } from "./csl.js";
 import type { DB } from "./db.js";
@@ -186,7 +187,7 @@ export function conceptGraph(db: DB) {
 
 export function getConcept(db: DB, name: string) {
   const c = findConcept(db, name);
-  const row = db.prepare("SELECT definition, alt_labels, close_match, status, source FROM concepts WHERE id = ?").get(c.id) as Record<string, string | null>;
+  const row = db.prepare("SELECT definition, alt_labels, close_match, synset, status, source FROM concepts WHERE id = ?").get(c.id) as Record<string, string | null>;
   const relations = db.prepare(`SELECT r.type, o.slug, o.label FROM concept_relations r JOIN concepts o ON o.id = r.to_id WHERE r.from_id = ? ORDER BY r.type, o.label`)
     .all(c.id) as { type: string; slug: string; label: string }[];
   const grouped: Record<string, { slug: string; label: string }[]> = {};
@@ -194,7 +195,7 @@ export function getConcept(db: DB, name: string) {
   const count = (ids: number[]) => (db.prepare(`SELECT COUNT(DISTINCT t.quote_id) FROM quote_tags t JOIN quotes q ON q.id = t.quote_id
     WHERE q.status != 'unparsed' AND t.concept_id IN (${ids.map(() => "?").join(",")})`).pluck().get(...ids) as number);
   return {
-    ...c, definition: row.definition, alt_labels: json<string[]>(row.alt_labels, []), wordnet: row.close_match, status: row.status, source: row.source,
+    ...c, definition: row.definition, alt_labels: json<string[]>(row.alt_labels, []), wordnet: row.close_match, synset: readSynset(row.synset), status: row.status, source: row.source,
     relations: grouped, quotes: count([c.id]), quotes_with_narrower: count(withNarrower(db, c.id)),
   };
 }

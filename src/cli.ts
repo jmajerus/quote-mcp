@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { refreshSynsets, wordnetConfig, wordnetLookup } from "./wordnet.js";
 import Database from "better-sqlite3";
 import { userInfo } from "node:os";
 import { dirname, join } from "node:path";
@@ -75,7 +76,8 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *                                       the next pass would apply and where it would stop. --apply applies it and reports
  *                                       progress (the server does this every minute when QUOTE_TERMS_SYNC=on);
  *                                       --accept <n> [--repoint <slug>] marks held change n as handled by hand;
- *                                       --rebootstrap forgets the cursor; --status shows it.
+ *                                       --rebootstrap forgets the cursor; --status shows it. --apply also fetches the
+ *                                       WordNet synset of each concept whose link is new or changed (WORDNET_SPARQL).
  *   quote-mcp propose <tag> [--quote <id>] [--label …] [--broader <slug>] [--note …] [--alt a,b] [--send]
  *                                       Proposes a tag that isn't a concept to terminology-mcp, with a quote as evidence;
  *                                       without --send it prints the proposal.
@@ -377,6 +379,8 @@ async function termsCommand() {
     const publish = snapshotOptions();
     if (publish) console.log(snapshotLine(buildSnapshot(db, publish, snapshotFile())));
   }
+  const wordnet = wordnetConfig();
+  if (apply && wordnet) console.log(`WordNet synsets from ${wordnet.baseUrl}: ${await refreshSynsets(db, wordnetLookup(wordnet), wordnet.graph)} concepts updated.`);
 }
 
 /** Proposes a tag that isn't a concept to terminology-mcp, with a quote as evidence. */

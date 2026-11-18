@@ -101,7 +101,8 @@ names a local command instead. A page is read by Tesseract, or by `QUOTE_OCR` (s
 
 `/admin/concepts`: every concept with its quote count and definition, and a box to find one.
 `/admin/concepts/<slug>`: one concept, its alternative labels, its broader, narrower, related, and
-opposite concepts, its WordNet link, and its quotes, narrower concepts included.
+opposite concepts, its WordNet synset (its words, part of speech, definition, and broader synsets, linked to
+that meaning in Open English WordNet; see [wordnet.md](wordnet.md)), and its quotes, narrower concepts included.
 
 ## Worklists
 
