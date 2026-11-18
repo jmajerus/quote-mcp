@@ -380,7 +380,14 @@ async function termsCommand() {
     if (publish) console.log(snapshotLine(buildSnapshot(db, publish, snapshotFile())));
   }
   const wordnet = wordnetConfig();
-  if (apply && wordnet) console.log(`WordNet synsets from ${wordnet.baseUrl}: ${await refreshSynsets(db, wordnetLookup(wordnet), wordnet.graph)} concepts updated.`);
+  // The synsets are extra: a WordNet outage is reported, never a failed terms pass, and the next run retries.
+  if (apply && wordnet) {
+    try {
+      console.log(`WordNet synsets from ${wordnet.baseUrl}: ${await refreshSynsets(db, wordnetLookup(wordnet), wordnet.graph)} concepts updated.`);
+    } catch (error) {
+      console.error(`WordNet synsets not updated (the next run retries): ${(error as Error).message}`);
+    }
+  }
 }
 
 /** Proposes a tag that isn't a concept to terminology-mcp, with a quote as evidence. */

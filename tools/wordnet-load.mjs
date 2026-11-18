@@ -23,6 +23,8 @@ import path from "node:path";
 const args = process.argv.slice(2);
 const opt = (name, fallback) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : fallback; };
 const edition = opt("--edition", "2025");
+// The edition names files and a graph in a shell script run as root on the server: a year, nothing else.
+if (!/^\d{4}$/.test(edition)) throw new Error(`--edition takes a year, such as 2025; got ${JSON.stringify(edition)}`);
 const host = opt("--host", "root@wordnet.localdomain");
 const base = (process.env.WORDNET_SPARQL || "http://wordnet.localdomain:7878").replace(/\/+$/, "");
 const OEWN = `urn:wordnet:graph:oewn-${edition}`;
@@ -58,13 +60,15 @@ async function loadOewn() {
   const file = `english-wordnet-${edition}.ttl.gz`;
   const url = `https://github.com/globalwordnet/english-wordnet/releases/download/${edition}-edition/${file}`;
   console.log(`Loading ${file} into ${OEWN} on ${host}`);
+  const q = (s) => `'${s.replaceAll("'", `'\\''`)}'`;
+  const ttl = `english-wordnet-${edition}.ttl`;
   ssh(`set -e
-cd /var/tmp && curl -sfL -o ${file} ${url}
-gunzip -f ${file}
+cd /var/tmp && curl -sfL -o ${q(file)} ${q(url)}
+gunzip -f ${q(file)}
 systemctl stop oxigraph
 trap 'systemctl start oxigraph' EXIT
-oxigraph load --location /var/lib/oxigraph --file english-wordnet-${edition}.ttl --graph '${OEWN}'
-rm -f english-wordnet-${edition}.ttl`);
+oxigraph load --location /var/lib/oxigraph --file ${q(ttl)} --graph ${q(OEWN)}
+rm -f ${q(ttl)}`);
   for (let i = 0; i < 60; i++) {
     try { if (await ask(OEWN)) return; } catch { /* still starting */ }
     await new Promise((r) => setTimeout(r, 2000));
