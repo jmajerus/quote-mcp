@@ -53,6 +53,8 @@ Only `QUOTE_ZOTERO_LIBRARY` and `QUOTE_ZOTERO_API_KEY` are needed, and the key o
 | `QUOTE_MAP_DIR` | none | quote-atlas's built maps, served at `/map/`. |
 | `QUOTE_TERMS_SYNC` | `off` | `on`: the server follows terminology-mcp's `human-work` scheme every minute. Set it in `/etc/quote-mcp/env` only; a second follower would fight the server's cursor. |
 | `TERMINOLOGY_BASE` | `http://terminology-mcp.localdomain:8000` | terminology-mcp on the LAN, where progress reports name the caller; `off` turns following off. |
+| `WORDNET_SPARQL` | `http://wordnet.localdomain:7878` | The WordNet Oxigraph server each concept's WordNet link is looked up on, after each terms pass ([wordnet.md](wordnet.md)); `off` turns lookups off. |
+| `WORDNET_GRAPH` | `urn:wordnet:graph:oewn-2025` | The Open English WordNet edition's graph on that server; a new one looks every link up again. |
 | `CORPUS_BASE` | `http://corpus-mcp.localdomain:8000` | corpus-mcp on the LAN, which checks `add_quote`'s words against a Calibre book; `off` saves every quote transcribed (a Calibre book id then needs the work's key from `find_work` instead). |
 | `QUOTE_WHISPER_URL` | none | The faster-whisper server, such as `http://whisper.localdomain:8000`. The [capture page](admin-ui.md#capturing-a-quote) sends a recording there. That server keeps nothing. |
 | `QUOTE_HA_URL`, `QUOTE_HA_TOKEN` | none | Home Assistant and a long-lived access token, used when `QUOTE_WHISPER_URL` is unset. The capture page sends a recording to one of its speech engines. |

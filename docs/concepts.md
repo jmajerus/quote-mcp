@@ -3,7 +3,7 @@
 ## Concept schemes
 
 Concepts belong to named schemes. `human-work` (the human side of work) is the old site's vocabulary: 221
-concepts with definitions, alternative labels, WordNet links, and broader, narrower, related, and opposite
+concepts with definitions, alternative labels, WordNet links ([synsets](wordnet.md)), and broader, narrower, related, and opposite
 relations. A quote's concepts come from its tags. Searching by a concept includes its narrower concepts
 unless asked not to. The quotes page starts with the concept named, and narrower, broader, related,
 and opposite stay off until checked.

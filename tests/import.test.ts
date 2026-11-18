@@ -375,6 +375,7 @@ describe("schema", () => {
       const v7 = openDb(file);
       // As schema 7 made it: no provenance column, so no quote has a stamp.
       v7.exec("ALTER TABLE quotes DROP COLUMN provenance");
+      v7.exec("ALTER TABLE concepts DROP COLUMN synset");
       const add = v7.prepare("INSERT INTO quotes (id, text, text_key, status, created_at, created_by, updated_at) VALUES (?, ?, ?, 'transcribed', '2026-10-01T00:00:00Z', ?, 'then')");
       const origin = v7.prepare("INSERT INTO quote_origins (kind, ref, quote_id, raw, imported_at) VALUES (?, ?, ?, ?, ?)");
       add.run(1, "From the old site", "old", "import");
@@ -391,7 +392,8 @@ describe("schema", () => {
       v7.close();
 
       const db8 = openDb(file);
-      expect(db8.pragma("user_version", { simple: true })).toBe(8);
+      expect(db8.pragma("user_version", { simple: true })).toBe(SCHEMA_VERSION);
+      expect((db8.prepare("PRAGMA table_info(concepts)").all() as { name: string }[]).map((c) => c.name)).toContain("synset");
       const stamps = () => Object.fromEntries((db8.prepare("SELECT id, provenance FROM quotes ORDER BY id").all() as { id: number; provenance: string }[])
         .map((r) => [r.id, JSON.parse(r.provenance)]));
       expect(stamps()).toMatchObject({
