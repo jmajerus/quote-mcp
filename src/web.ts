@@ -214,6 +214,20 @@ function conceptsPage(db: DB, p: URLSearchParams): string {
 ${list.map((c) => `<tr><td><a href="/admin/concepts/${pathSegment(c.slug)}">${esc(c.label)}</a></td><td>${c.quotes}</td><td class="note">${esc(c.definition)}</td></tr>`).join("")}</table></div>`);
 }
 
+/**
+ * The WordNet row for a concept. The old site linked Princeton WordNet 3.0 synsets by their purl.org RDF URIs,
+ * which no longer resolve (the last redirect's host has an expired certificate), so the row links the word in
+ * Open English WordNet, WordNet's maintained successor, and keeps the synset (part of speech and sense number)
+ * as the text. A value that isn't a synset URI ("NA", from the old site) shows nothing.
+ */
+export function wordnetRow(uri: string | null): string {
+  const m = uri?.match(/synset-(.+)-(noun|verb|adjective|adjectivesatellite|adverb)-(\d+)\.rdf$/);
+  if (!m) return "";
+  const [, lemma, pos, sense] = m;
+  const word = lemma.replace(/_/g, " ");
+  return `<tr><th>WordNet</th><td><a href="https://en-word.net/lemma/${encodeURIComponent(word)}" title="WordNet 3.0 synset ${esc(uri!)}">${esc(word)}</a> (${esc(pos.replace("adjectivesatellite", "adjective"))}, sense ${sense})</td></tr>`;
+}
+
 function conceptPage(db: DB, slug: string, p: URLSearchParams): string {
   const c = getConcept(db, slug);
   const offset = Number(p.get("offset") ?? 0);
@@ -222,7 +236,7 @@ function conceptPage(db: DB, slug: string, p: URLSearchParams): string {
   return page(c.label, "concepts", `<h1>${esc(c.label)}</h1><p class="sub"><code>${esc(c.scheme)}:${esc(c.slug)}</code> · ${c.quotes} quotes, ${c.quotes_with_narrower} with narrower concepts</p>
 ${c.definition ? `<p>${esc(c.definition)}</p>` : ""}
 <div class="scroll"><table>${c.alt_labels.length ? `<tr><th>Also</th><td>${c.alt_labels.map(esc).join(", ")}</td></tr>` : ""}${relations}
-${c.wordnet ? `<tr><th>WordNet</th><td><a href="${esc(c.wordnet)}">${esc(c.wordnet.replace(/^.*synset-/, "").replace(/\.rdf$/, ""))}</a></td></tr>` : ""}</table></div>
+${wordnetRow(c.wordnet)}</table></div>
 <h2>Quotes, with narrower concepts</h2>${quotes.quotes.map(quoteCard).join("")}${pager(`/admin/concepts/${pathSegment(c.slug)}`, {}, quotes.total, quotes.offset, quotes.limit)}`);
 }
 
