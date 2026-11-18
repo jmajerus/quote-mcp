@@ -7,6 +7,7 @@ import { readMargin } from "./margin.js";
 import { type ParsedNote, noteText, parseNote, readLocator } from "./parse.js";
 import { fullTitle, normalizedTitle, quoteKey, shareAuthor, slugify, yearOf } from "./text.js";
 import type { ApiItem } from "./zotero.js";
+import { stamp as provenanceStamp } from "./provenance.js";
 
 /**
  * The import: the old site's concepts, works, and quotes, then the quote notes in the Zotero mirror,
@@ -168,9 +169,9 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
     const addHistory = db.prepare("INSERT INTO history (quote_id, at, kind, before, after, actor, reason) VALUES (?, ?, ?, ?, ?, ?, ?)");
     const insertQuote = db.prepare(`
       INSERT INTO quotes (id, kind, work_id, text, text_key, locator_kind, locator, chapter_author, comment, attribution, source_url, status, grade, flags,
-        created_at, created_by, updated_at, updated_by)
+        created_at, created_by, updated_at, updated_by, provenance)
       VALUES (${NEXT_QUOTE_ID}, @kind, @work_id, @text, @text_key, @locator_kind, @locator, @chapter_author, @comment, @attribution, @source_url, @status, @grade, @flags,
-        @stamp, @actor, @stamp, @actor) RETURNING id`);
+        @stamp, @actor, @stamp, @actor, @provenance) RETURNING id`);
     const updateQuote = db.prepare(`
       UPDATE quotes SET kind = @kind, work_id = @work_id, text = @text, text_key = @text_key, locator_kind = @locator_kind, locator = @locator,
         chapter_author = @chapter_author, comment = @comment, attribution = @attribution, source_url = @source_url, status = @status,
@@ -235,7 +236,9 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
         stats.quotes.merged++;
         return;
       }
-      const { id } = insertQuote.get(fields) as { id: number };
+      // The old site predates agents; a Zotero note doesn't say who wrote it (an agent can, through Zotero's API).
+      const provenance = JSON.stringify(q.kind.startsWith("drupal") ? provenanceStamp("drupal", false, stamp, actor) : provenanceStamp("zotero", null, stamp, actor));
+      const { id } = insertQuote.get({ ...fields, provenance }) as { id: number };
       addOrigin.run(q.kind, q.ref, id, q.version, q.raw, stamp);
       addHistory.run(id, stamp, "imported", null, q.raw, actor, `from ${q.kind} ${q.ref}`);
       tagAndMark(id, q);

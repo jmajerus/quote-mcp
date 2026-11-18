@@ -315,7 +315,7 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
         }));
         return;
       }
-      const mcp = createServer(db, options.sets, options.capture);
+      const mcp = createServer(db, options.sets, options.capture, { by: via === "access" ? (auth.email ?? auth.subject ?? "access") : "lan" });
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
       res.on("close", () => {
         void transport.close();

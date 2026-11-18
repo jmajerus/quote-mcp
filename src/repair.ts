@@ -104,8 +104,8 @@ export function repairQuotes(db: DB, { dryRun, only, actor = "repair" }: { dryRu
           list("more words before the marks than inside them");
           continue;
         }
-        const row = db.prepare("SELECT status, flags, chapter_author, locator_kind, work_id, attribution, source_url, created_at, created_by FROM quotes WHERE id = ?").get(r.id) as
-          { status: string; flags: string; chapter_author: string | null; locator_kind: "page" | "kindle" | "none"; work_id: number | null; attribution: string | null; source_url: string | null; created_at: string; created_by: string | null };
+        const row = db.prepare("SELECT status, flags, chapter_author, locator_kind, work_id, attribution, source_url, created_at, created_by, provenance FROM quotes WHERE id = ?").get(r.id) as
+          { status: string; flags: string; chapter_author: string | null; locator_kind: "page" | "kindle" | "none"; work_id: number | null; attribution: string | null; source_url: string | null; created_at: string; created_by: string | null; provenance: string | null };
         // One source can give the words and another the place: a place isn't taken away, or changed in kind, because this source has
         // none, unless it's the page of another passage in the note.
         const locator = first.locator ?? (parts.length === 1 && r.stored.locator && row.locator_kind !== "none" && !r.otherPage ? { kind: row.locator_kind, value: r.stored.locator, raw: "" } : undefined);
@@ -138,9 +138,9 @@ export function repairQuotes(db: DB, { dryRun, only, actor = "repair" }: { dryRu
             history.run(existing, stamp, "split_from", JSON.stringify(repair.before), JSON.stringify(after[i]), actor, `passage ${i + 1} of quote ${r.id}, which already had this quote`);
             continue;
           }
-          const { id } = db.prepare(`INSERT INTO quotes (id, kind, work_id, text, text_key, locator_kind, locator, chapter_author, comment, attribution, source_url, status, grade, flags, created_at, created_by, updated_at, updated_by)
-            VALUES (${NEXT_QUOTE_ID}, 'quote', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`).get(row.work_id, after[i].text, quoteKey(after[i].text), part.locator?.kind ?? "none", part.locator?.value ?? null,
-            part.chapterAuthor ?? null, after[i].comment, row.attribution, row.source_url, after[i].status, part.grade ?? null, JSON.stringify(part.flags), row.created_at, row.created_by, stamp, actor) as { id: number };
+          const { id } = db.prepare(`INSERT INTO quotes (id, kind, work_id, text, text_key, locator_kind, locator, chapter_author, comment, attribution, source_url, status, grade, flags, created_at, created_by, updated_at, updated_by, provenance)
+            VALUES (${NEXT_QUOTE_ID}, 'quote', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`).get(row.work_id, after[i].text, quoteKey(after[i].text), part.locator?.kind ?? "none", part.locator?.value ?? null,
+            part.chapterAuthor ?? null, after[i].comment, row.attribution, row.source_url, after[i].status, part.grade ?? null, JSON.stringify(part.flags), row.created_at, row.created_by, stamp, actor, row.provenance) as { id: number };
           repair.newIds.push(id);
           carryOver(db, r.id, id, parts, i);
           // Back to the record it came from, and to the note's passage, so a later change to the note finds it.

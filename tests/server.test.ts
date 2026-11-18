@@ -341,7 +341,7 @@ describe("admin pages", () => {
 
   it("goes to a quote by its number", async () => {
     const id = quoteId("emotional assault");
-    for (const q of [String(id), `#${id}`, ` # ${id} `]) {
+    for (const q of [String(id), `#${id}`, ` # ${id} `, `G${id}`, `g${id}`]) {
       const res = await fetch(`${base}/admin/quotes?q=${encodeURIComponent(q)}&status=&kind=&include=exact`, { redirect: "manual" });
       expect(res.status).toBe(303);
       expect(res.headers.get("location")).toBe(`/admin/quotes/${id}`);
@@ -355,7 +355,7 @@ describe("admin pages", () => {
     const html = await missing.text();
     expect(html).toContain("No quote or note 99999.");
     expect(html).toContain('value="99999"');
-    expect(html).toContain('placeholder="Words, &quot;a phrase&quot;, or #848"');
+    expect(html).toContain('placeholder="Words, &quot;a phrase&quot;, or #848 / G848"');
     const home = await (await fetch(`${base}/admin`)).text();
     expect(home).toContain('action="/admin/quotes"');
   });
