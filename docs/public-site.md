@@ -144,6 +144,21 @@ On the LAN (port 8000), `/api` answers from the store, with everything. On the p
 snapshot: counts of public records, quotes as public records (`id`, `kind`, `text`, `locator`,
 `chapter_author`, `attribution`, `work`, `concepts`), and 403 for quotes below the `quotes` level.
 
+## Linking with other public sites
+
+Two documents let another public site (corpus-mcp's library) link its pages to this one's. It fetches them when
+it publishes, so a book page there links to "quotes from this book". Both are read from the snapshot, and the
+Worker, the LAN server, and the public port all serve them.
+
+| Route | What it is |
+|---|---|
+| `GET /site.json` | `{version: 1, name, kind: "quotes", url, level, citekeys: "/api/public/citekeys"}`. `name` is the introduction's title; `url` is the address the request came in on (behind a proxy, from `X-Forwarded-Proto` and `X-Forwarded-Host`). |
+| `GET /api/public/citekeys` | `{citekeys, zotero_keys}`: each work's citekey, and its Zotero item keys (`users/<id>/<key>` or `groups/<id>/<key>`), to the path of its page (`/works/<id>`). |
+
+Only works with something public are listed. A work whose quotes are all held back for a person to choose (see
+[Chosen by a person](#chosen-by-a-person)) has no page with anything on it yet, so the other site doesn't link
+to it until one of its quotes is promoted.
+
 ## The maps
 
 The maps' own files are quote-atlas's. On the LAN, quote-mcp serves them at `/map/` from `QUOTE_MAP_DIR`. On

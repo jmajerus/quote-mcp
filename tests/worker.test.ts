@@ -5,6 +5,7 @@ import Database from "better-sqlite3";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { DB } from "../src/db.js";
 import { readIntro } from "../src/intro.js";
+import { stamp } from "../src/provenance.js";
 import { openSnapshot } from "../src/published-sqlite.js";
 import { remove, replicaScript, snapshotRows, upsert } from "../src/replica.js";
 import { renderSite } from "../src/site.js";
@@ -89,6 +90,30 @@ describe("the replica", () => {
 });
 
 describe("the Worker", () => {
+  it("serves site.json and the key list corpus-mcp links by, leaving out a work with nothing public", async () => {
+    const { env } = publish();
+    const site = await get(env, "/site.json");
+    expect(site.status).toBe(200);
+    expect(site.headers.get("content-type")).toMatch(/application\/json/);
+    expect(site.headers.get("etag")).toBeTruthy();
+    expect(await site.json()).toEqual({ version: 1, name: "Work quotes", kind: "quotes", url: "https://quotes.example", level: "quotes", citekeys: "/api/public/citekeys" });
+    const keys = await (await get(env, "/api/public/citekeys")).json() as { citekeys: Record<string, string>; zotero_keys: Record<string, string> };
+    const mobbing = store.prepare("SELECT id FROM works WHERE title LIKE 'Mobbing%'").pluck().get() as number;
+    expect(keys).toEqual({ citekeys: { davenport1999mobbing: `/works/${mobbing}` }, zotero_keys: { "users/1/MOBB0001": `/works/${mobbing}` } });
+    expect((await get(env, "/site.json", { method: "POST" })).status).toBe(405);
+
+    // An agent's quotes alone, held back until a person promotes them, give a work no page to link to.
+    const agent = JSON.stringify(stamp("mcp", true, "2026-11-22T00:00:00.000Z", null));
+    const before = store.prepare("SELECT id, provenance FROM quotes WHERE work_id = ?").all(mobbing) as { id: number; provenance: string | null }[];
+    store.prepare("UPDATE quotes SET provenance = ? WHERE work_id = ?").run(agent, mobbing);
+    try {
+      const held = await (await get(publish().env, "/api/public/citekeys")).json();
+      expect(held).toEqual({ citekeys: {}, zotero_keys: {} });
+    } finally {
+      for (const q of before) store.prepare("UPDATE quotes SET provenance = ? WHERE id = ?").run(q.provenance, q.id);
+    }
+  });
+
   it("renders the same pages from D1 as the LAN preview does from the snapshot", async () => {
     const { file, env } = publish();
     const local = await openSnapshot(file);

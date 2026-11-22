@@ -70,5 +70,20 @@ export function publishedRoutes(p: Published): Routes {
   };
 }
 
+/**
+ * The two documents other public sites link by, a convention shared with corpus-mcp (PLAN.md, "Linking with
+ * corpus-mcp"): /site.json describes this site, and the key list it names maps citekeys and Zotero item keys to
+ * work pages. Both are read from the snapshot; `origin` is the site's public URL as the request reached it.
+ */
+export const LINKING = /^\/(site\.json|api\/public\/citekeys)$/;
+
+export async function answerLinking(p: Published, method: string, pathname: string, origin: string): Promise<ApiAnswer> {
+  if (method !== "GET" && method !== "HEAD") return { status: 405, body: { error: "Method not allowed: the API is read-only." }, headers: { allow: "GET, HEAD" } };
+  if (pathname === "/site.json") {
+    return { status: 200, body: { version: 1, name: (await p.site()).title, kind: "quotes", url: origin, level: p.level, citekeys: "/api/public/citekeys" }, headers: {} };
+  }
+  return { status: 200, body: await p.linkKeys(), headers: {} };
+}
+
 /** The public API routes, for a listener that serves only the public site. */
 export const PUBLIC_API = /^\/api\/(graph|sets|sets\/[^/]+|concepts\/[^/]+(\/quotes)?)$/;
