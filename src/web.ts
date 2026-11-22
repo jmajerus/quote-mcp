@@ -14,6 +14,7 @@ import { type ConceptSet, captureSpaces } from "./sets.js";
 import { includeChoice, includeValue } from "./common.js";
 import { CSS, esc } from "./style.js";
 import { describeProvenance } from "./provenance.js";
+import { type PublicChoice, promote } from "./selection.js";
 import { type Synset, senseKey } from "./wordnet.js";
 
 /**
@@ -189,12 +190,37 @@ ${note ? (q.note ? `<div class="words">${esc(q.note)}</div>` : '<p class="note">
     ["Suspect words", suspectWords(id, q.suspect_words as { token: string; reason: string; suggestion?: string }[])],
     ["Came from", (q.origins as { kind: string; ref: string }[]).map((o) => `${esc(o.kind)} ${esc(o.ref)}`).join("<br>")],
     ["Provenance", esc(describeProvenance(q.provenance))],
+    ["Public site", publicRow(id, q.public)],
   ])}</table></div>
 ${(q.proposals as Proposal[]).length ? `<h2>Proposed changes</h2>${(q.proposals as Proposal[]).map(proposalBlock).join("")}` : ""}
 <h2>Citation</h2>${c.pandoc ? `<p><code>${esc(c.pandoc)}</code></p>` : ""}${c.warnings.map((w) => `<p class="note">${esc(w)}</p>`).join("")}
 <details><summary>CSL JSON</summary><pre>${esc(JSON.stringify(c.csl, null, 2))}</pre></details>
 <h2>History</h2><div class="scroll"><table><tr><th>When</th><th>What</th><th>Why</th></tr>
 ${(q.history as { at: string; kind: string; reason: string }[]).map((h) => `<tr><td>${esc(h.at.slice(0, 16).replace("T", " "))}</td><td>${esc(h.kind)}</td><td>${esc(h.reason)}</td></tr>`).join("")}</table></div>`);
+}
+
+/**
+ * Whether the public site shows the record, why, and the button a person uses to promote it (or take that back).
+ * Promoting is a person's choice, so it's here and in the CLI, and no MCP tool does it.
+ */
+function publicRow(id: number, p: PublicChoice): string {
+  const button = (undo: boolean, label: string) => `<form class="accept" method="post" action="/admin/quotes/${id}/promote">${undo ? '<input type="hidden" name="undo" value="1">' : ""}<button>${label}</button></form>`;
+  const action = p.promoted ? button(true, "Take back") : p.shown ? "" : button(false, "Promote");
+  return `${p.shown ? "Shown" : "Not shown"}: ${esc(p.reason)}${p.promoted ? ` (${esc(p.promoted.at.slice(0, 10))})` : ""} ${action}`;
+}
+
+/** Saves a promotion posted from the quote page, by the person signed in: a redirect back. The next import republishes. */
+export function savePromotion(writer: DB, path: string, form: URLSearchParams, editor: string): { redirect: string } | { status: number; html: string } | null {
+  const m = /^\/admin\/quotes\/(\d+)\/promote$/.exec(path);
+  if (!m) return null;
+  const id = Number(m[1]);
+  try {
+    promote(writer, id, editor, { undo: form.get("undo") === "1" });
+    return { redirect: `/admin/quotes/${id}` };
+  } catch (error) {
+    if (!(error instanceof ToolError)) throw error;
+    return { status: 400, html: page("Quote", "quotes", `<h1>Quote ${id}</h1><p class="error">${esc(error.message)}</p><p><a href="/admin/quotes/${id}">Back to the quote</a></p>`) };
+  }
 }
 
 /** One suspect word, and for an unknown word a button that accepts it as real. */

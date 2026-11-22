@@ -853,3 +853,79 @@ describe("file_page and page_label", () => {
     }
   });
 });
+
+describe("one book, one work, before and after it's filed", () => {
+  const filed: Book = { ...unfiledBook, citekey: "roe2020unfiled", zotero: { library: PRIMARY, key: "UNFD0001" } };
+  const fileIt = () => {
+    db.prepare("INSERT INTO zotero_items (library, key, version, item_type, parent_key, deleted, data) VALUES (?, 'UNFD0001', 1, 'book', NULL, 0, ?)").run(PRIMARY, JSON.stringify({
+      itemType: "book", title: "An Unfiled Ebook", date: "2020", extra: "Citation Key: roe2020unfiled", creators: [{ creatorType: "author", lastName: "Roe", firstName: "Richard" }],
+    }));
+  };
+  const workOf = (id: number) => db.prepare("SELECT work_id FROM quotes WHERE id = ?").pluck().get(id) as number;
+
+  it("moves the quotes saved before filing to the filed work when add_quote next sees the match", async () => {
+    const early = saved(await addQuote(db, { work: "main:7", text: "Work is a story" }, options())).id;
+    const before = workOf(early);
+    expect(db.prepare("SELECT match FROM works WHERE id = ?").pluck().get(before)).toBe("unmatched");
+
+    // Filed and pinned: corpus-mcp now names the Zotero item with the book.
+    fileIt();
+    for (const key of ["main:7", unfiledBook.calibre_uuid]) corpus.books.set(key, { book: filed, text: "Work is a story we tell ourselves." });
+    const late = saved(await addQuote(db, { work: "main:7", text: "we tell ourselves" }, options())).id;
+    const after = workOf(late);
+    expect(after).not.toBe(before);
+    expect(workOf(early)).toBe(after);
+    expect(db.prepare("SELECT COUNT(*) FROM works WHERE id = ?").pluck().get(before)).toBe(0);
+    expect(db.prepare("SELECT kind, actor FROM history WHERE quote_id = ? ORDER BY id DESC LIMIT 1").get(early)).toEqual({ kind: "work_matched", actor: "add_quote" });
+    // Cited from Zotero now, and the old key still names the work.
+    const c = citeQuote(db, early);
+    expect(c).toMatchObject({ citekey: "roe2020unfiled" });
+    expect(c.warnings.join(" ")).not.toMatch(/isn't filed/);
+    expect(saved(await addQuote(db, { work: `quote:${before}`, text: "Work is a story we tell" }, options())).work?.id).toBe(after);
+  });
+
+  it("moves them after an import once corpus-mcp's feed shows the match, waiting for the mirror to have the item", async () => {
+    const early = saved(await addQuote(db, { work: "main:7", text: "Work is a story" }, options())).id;
+    const before = workOf(early);
+    corpus.booksFeed = async () => ({ etag: '"f1"', books: [filed] });
+    // corpus-mcp has matched it, but the mirror hasn't synced the item: nothing moves yet.
+    expect(await refreshCalibreBooks(db, corpus)).toMatchObject({ updated: 1, folded: [] });
+    expect(workOf(early)).toBe(before);
+    fileIt();
+    corpus.booksFeed = async () => null;
+    const r = await refreshCalibreBooks(db, corpus);
+    expect(r.folded).toEqual([expect.objectContaining({ work: before, from: "unmatched", to: "zotero UNFD0001", quotes: 1 })]);
+    expect(workOf(early)).toBe(r.folded[0]!.into);
+    expect(db.prepare("SELECT work_id FROM work_origins WHERE kind = 'work' AND ref = ?").pluck().get(String(before))).toBe(r.folded[0]!.into);
+  });
+});
+
+describe("add_quote's other fields and retries", () => {
+  it("saves a chapter author for a chapter in an edited volume", async () => {
+    const q = saved(await addQuote(db, { work: "main:7", text: "Work is a story", chapter_author: " Dewandre, Nicole " }, options()));
+    expect(getQuote(db, q.id).chapter_author).toBe("Dewandre, Nicole");
+    expect(citeQuote(db, q.id).note).toMatch(/by Dewandre, Nicole/);
+  });
+
+  it("tries verify once more when corpus-mcp doesn't answer, and not when it answers with an error", async () => {
+    const { corpusClient } = await import("../src/capture.js");
+    const calls: string[] = [];
+    let failures = 1;
+    const fetchImpl = (async (url: string) => {
+      calls.push(String(url));
+      if (failures-- > 0) throw new Error("The operation was aborted due to timeout");
+      return new Response(JSON.stringify({ match: false, closest: [], book: unfiledBook }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const client = corpusClient({ baseUrl: "http://corpus.test", retryDelayMs: 1, fetchImpl });
+    expect(await client.verify({ book: "main:7", text: "x" })).toMatchObject({ match: false });
+    expect(calls).toHaveLength(2);
+
+    const answered = corpusClient({ baseUrl: "http://corpus.test", retryDelayMs: 1, fetchImpl: (async () => {
+      calls.push("error");
+      return new Response(JSON.stringify({ error: "no-book" }), { status: 404 });
+    }) as unknown as typeof fetch });
+    calls.length = 0;
+    await expect(answered.verify({ book: "main:9", text: "x" })).rejects.toThrow(/404/);
+    expect(calls).toEqual(["error"]);
+  });
+});

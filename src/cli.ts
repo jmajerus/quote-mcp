@@ -24,6 +24,7 @@ import { replicaScript } from "./replica.js";
 import { type ConceptSet, listSets, loadSets } from "./sets.js";
 import { configReport, siteSetting } from "./settings.js";
 import { rematchWorks } from "./rematch.js";
+import { promote, publicChooser } from "./selection.js";
 import { repairQuotes, repairReport } from "./repair.js";
 import { AUDIT_KINDS, type AuditKind, auditOf, auditStore } from "./audit.js";
 import { type SnapshotOptions, buildSnapshot, readMapsFile } from "./snapshot.js";
@@ -61,6 +62,11 @@ import { ZoteroClient, zoteroConfig } from "./zotero.js";
  *                                       Agents' proposed changes to a quote's text, locator, or chapter author:
  *                                       the pending ones, or accept or reject one (accepting applies it as your
  *                                       edit, recorded under your login).
+ *   quote-mcp promote [<id>,…] [--undo] [--reason "…"]
+ *                                       Records the public site holds back until a person chooses them: those a generative
+ *                                       agent saved, and parts of sentences no person saved (docs/public-site.md). Without
+ *                                       ids it lists them; with ids it promotes them, under your login, and republishes;
+ *                                       --undo takes a promotion back.
  *   quote-mcp backup [--dir data/backups] [--keep 14]
  *   quote-mcp stats
  *   quote-mcp config                    Each setting, where it came from, and what each feature still needs.
@@ -141,6 +147,7 @@ async function importCommand() {
     try {
       const b = await refreshCalibreBooks(db, corpusClient(corpus));
       if (b.updated) console.log(`Calibre books from corpus-mcp's feed: ${b.updated} of ${b.books} changed (citekeys and Zotero matches cite_quote uses).`);
+      for (const f of b.folded) console.log(`Work ${f.work} (${f.title}) is filed in Zotero now: its ${f.quotes} quote${f.quotes === 1 ? "" : "s"} moved to work ${f.into} (${f.to}), and quote:${f.work} still resolves.`);
     } catch (error) {
       say(`Calibre books not refreshed: ${(error as Error).message}\n`);
     }
@@ -645,9 +652,39 @@ function proposalsCommand() {
   }
 }
 
+/** Lists what the public site holds back, or promotes records by hand (a person's act; no MCP tool does it). */
+function promoteCommand() {
+  onlyFlags("promote", ["--undo", "--reason"]);
+  const ids = argv.filter((a, i) => !a.startsWith("-") && argv[i - 1] !== "--reason").flatMap((a) => a.split(",")).filter(Boolean);
+  for (const id of ids) if (!/^[1-9]\d*$/.test(id)) throw new Error(`promote takes quote numbers, not ${id}. Nothing was done.`);
+  const db = openDb();
+  try {
+    if (!ids.length) {
+      const chosen = publicChooser(db);
+      const held = (db.prepare("SELECT id, kind, text, comment, provenance FROM quotes WHERE status != 'unparsed' ORDER BY id").all() as { id: number; kind: string; text: string; comment: string | null; provenance: unknown }[])
+        .map((q) => ({ q, c: chosen(q) })).filter(({ c }) => !c.shown);
+      if (!held.length) return console.log("Nothing is held back from the public site.");
+      for (const { q, c } of held) console.log(`${q.id}. ${(q.kind === "note" ? q.comment ?? "" : q.text).slice(0, 80).replace(/\s+/g, " ")}\n   ${c.reason}`);
+      console.log(`\n${held.length} held back. quote-mcp promote <id>,… [--reason "…"] shows one on the public site.`);
+      return;
+    }
+    const actor = process.env.SUDO_USER || userInfo().username;
+    for (const id of ids.map(Number)) {
+      const c = promote(db, id, actor, { undo: flag("--undo"), reason: option("--reason") });
+      console.log(`${id}: ${c.shown ? "shown" : "not shown"}. ${c.reason}`);
+    }
+    publishFrom(db);
+  } catch (error) {
+    if (error instanceof ToolError) throw new Error(error.message);
+    throw error;
+  } finally {
+    db.close();
+  }
+}
+
 const commands: Record<string, () => unknown> = {
   import: importCommand, migrate: migrateCommand, export: exportCommand, backup: backupCommand, stats: statsCommand, sets: setsCommand, publish: publishCommand, config: configCommand, serve: serveCommand,
-  terms: termsCommand, propose: proposeCommand, "take-corpus-quotes": takeCorpusQuotesCommand, rematch: rematchCommand, locators: locatorsCommand, audit: auditCommand, repair: repairCommand, citekeys: citekeysCommand, authors: authorsCommand, proposals: proposalsCommand,
+  terms: termsCommand, propose: proposeCommand, "take-corpus-quotes": takeCorpusQuotesCommand, rematch: rematchCommand, locators: locatorsCommand, audit: auditCommand, repair: repairCommand, citekeys: citekeysCommand, authors: authorsCommand, proposals: proposalsCommand, promote: promoteCommand,
   stdio: () => serveStdio(openReadOnly(), sets(), capture()),
 };
 const command = commands[process.argv[2] ?? ""];

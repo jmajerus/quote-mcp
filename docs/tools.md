@@ -7,7 +7,7 @@ read-only for now: nothing an agent does changes the store. Editing comes with p
 | Tool | Title | What it does |
 |---|---|---|
 | `search_quotes` | Search quotes | Searches quotes and notes by words, concept, tag, author, work, flag, status, kind, or concept set |
-| `get_quote` | Get a quote | One record in full: text, locator, work, tags, comment, suspect words, origins, [provenance](provenance.md), history |
+| `get_quote` | Get a quote | One record in full: text, locator, work, tags, comment, suspect words, origins, [provenance](provenance.md), whether the public site shows it (`public`, see [the public site](public-site.md#chosen-by-a-person)), history |
 | `cite_quote` | Cite a quote | A CSL JSON item for the work, the locator, the citekey, and a Pandoc citation |
 | `list_concepts` | List concepts | The concepts, with definitions, alternative labels, and quote counts |
 | `get_concept` | Get a concept | One concept, its relations, its WordNet link and [synset](wordnet.md), and its quote counts |

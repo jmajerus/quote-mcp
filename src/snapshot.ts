@@ -7,6 +7,7 @@ import { type CslItem, citationRenderer } from "./citations.js";
 import { citekeyOf, zoteroToCsl } from "./csl.js";
 import { type Visibility, bibtex, plainText, visible } from "./public.js";
 import { citeQuote, locatorText, workSummary } from "./queries.js";
+import { publicChooser } from "./selection.js";
 import { type ConceptSet, currentSets, definitionOf, resolveSet } from "./sets.js";
 import type { Intro } from "./intro.js";
 
@@ -132,15 +133,22 @@ function fill(store: DB, snap: Database.Database, o: SnapshotOptions): void {
     if (kept.has(r.from_id as number) && kept.has(r.to_id as number)) insert("relations", r);
   }
 
-  // Public records, with words only at the quotes level, and the works they come from.
-  const records = store.prepare(`SELECT q.* FROM quotes q WHERE ${visible(o)}`).all() as Row[];
+  // Public records, with words only at the quotes level, and the works they come from. An agent's quote, or part of a
+  // sentence no person saved, waits for a person to promote it (src/selection.ts).
+  const chosen = publicChooser(store);
+  const records = (store.prepare(`SELECT q.* FROM quotes q WHERE ${visible(o)} ORDER BY q.id`).all() as Row[])
+    .filter((q) => chosen(q as { id: number; kind: string; text: string; provenance: unknown }).shown);
+  const firstOfWork = new Map<number, number>();
   const tags = store.prepare("SELECT DISTINCT concept_id FROM quote_tags WHERE quote_id = ? AND concept_id IS NOT NULL");
   const works = new Set<number>();
   for (const q of records) {
     const note = q.kind === "note";
     const comment = typeof q.comment === "string" && q.comment.trim() ? q.comment.trim() : null;
     const work = (q.work_id as number) ?? null;
-    if (work !== null) works.add(work);
+    if (work !== null) {
+      works.add(work);
+      if (!firstOfWork.has(work)) firstOfWork.set(work, q.id as number);
+    }
     const text = words && !note ? show(q.text as string) : "";
     const noteWords = words && note && comment ? show(comment) : null;
     const shownComment = shareNotes && !note && comment ? show(comment) : null;
@@ -158,13 +166,12 @@ function fill(store: DB, snap: Database.Database, o: SnapshotOptions): void {
       if (kept.has(t.concept_id)) insert("record_concepts", { record_id: q.id, concept_id: t.concept_id });
     }
   }
-  const first = store.prepare("SELECT id FROM quotes q WHERE q.work_id = ? AND " + visible(o) + " LIMIT 1").pluck();
   for (const id of works) {
     const w = workSummary(store, id)!;
     const row = store.prepare("SELECT zotero_library, zotero_key, candidates FROM works WHERE id = ?").get(id) as Row;
     const keys = [row.zotero_key ? `${row.zotero_library}/${row.zotero_key}` : null, ...json<string[]>(row.candidates, []).map((k) => `${row.zotero_library ?? ""}/${k}`)]
       .filter((k): k is string => !!k && !k.startsWith("/"));
-    const c = citeQuote(store, first.get(id) as number);
+    const c = citeQuote(store, firstOfWork.get(id)!);
     const key = c.citekey ?? (c.csl?.id as string | undefined) ?? null;
     insert("works", {
       id, title: w.title, authors: JSON.stringify(w.authors), year: w.year, citekey: w.citekey, zotero_keys: JSON.stringify(keys),

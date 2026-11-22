@@ -27,6 +27,27 @@ export interface RematchResult {
 
 const ROLLBACK = new Error("dry run");
 
+/**
+ * Moves every quote of work `from` to work `into`, keeping their ids and history, with a work_matched entry for each,
+ * and removes `from`. Its origins go with its quotes (a Calibre book's UUID now finds `into`), and its old id becomes
+ * an origin of `into`, so quote:<from> (holdings-mcp's key, a draft's provenance) still resolves. Returns how many
+ * quotes moved. The caller holds the transaction.
+ */
+export function absorbWork(db: DB, from: number, into: number, o: { stamp: string; actor: string; was: string; is: string; reason: string }): number {
+  if (from === into) return 0;
+  const history = db.prepare("INSERT INTO history (quote_id, at, kind, before, after, actor, reason) VALUES (?, ?, 'work_matched', ?, ?, ?, ?)");
+  const moveQuote = db.prepare("UPDATE quotes SET work_id = ?, updated_at = ?, updated_by = ? WHERE id = ?");
+  const quotes = db.prepare("SELECT id FROM quotes WHERE work_id = ?").pluck().all(from) as number[];
+  for (const q of quotes) {
+    moveQuote.run(into, o.stamp, o.actor, q);
+    history.run(q, o.stamp, JSON.stringify({ work: from, match: o.was }), JSON.stringify({ work: into, match: o.is }), o.actor, o.reason);
+  }
+  db.prepare("UPDATE work_origins SET work_id = ? WHERE work_id = ?").run(into, from);
+  db.prepare(`INSERT INTO work_origins (kind, ref, work_id) VALUES ('work', ?, ?) ON CONFLICT (kind, ref) DO UPDATE SET work_id = excluded.work_id`).run(String(from), into);
+  db.prepare("DELETE FROM works WHERE id = ?").run(from);
+  return quotes.length;
+}
+
 /** Runs `work` in a transaction, and with dryRun puts everything back afterwards. */
 function transact(db: DB, dryRun: boolean | undefined, work: () => void): void {
   try {
@@ -43,7 +64,7 @@ export function rematchWorks(db: DB, { primary, dryRun, actor = "rematch" }: { p
   const result: RematchResult = { checked: 0, changes: [], updated: false, authorMismatches: [], works: {} };
   const stamp = now();
   transact(db, dryRun, () => {
-    const { primaryByKey, candidates, zoteroWork, setOrigin } = workMatcher(db, primary, stamp);
+    const { primaryByKey, candidates, zoteroWork } = workMatcher(db, primary, stamp);
     // An empty mirror would read as every item gone, so it stops here.
     if (!primaryByKey.size) throw new Error(`The Zotero mirror has no items for ${primary}, so there's nothing to match against. Run an import first.`);
     // Gone means the mirror says so, in the work's own library: an item it has never seen isn't taken for a deleted one. A work
@@ -52,8 +73,6 @@ export function rematchWorks(db: DB, { primary, dryRun, actor = "rematch" }: { p
       FROM works w WHERE EXISTS (SELECT 1 FROM quotes WHERE work_id = w.id)
         AND (w.match != 'zotero' OR EXISTS (SELECT 1 FROM zotero_items z WHERE z.library = w.zotero_library AND z.key = w.zotero_key AND z.deleted = 1))
       ORDER BY w.id`).all() as Row[];
-    const history = db.prepare("INSERT INTO history (quote_id, at, kind, before, after, actor, reason) VALUES (?, ?, 'work_matched', ?, ?, ?, ?)");
-    const moveQuotes = db.prepare("UPDATE quotes SET work_id = ?, updated_at = ?, updated_by = ? WHERE id = ?");
     for (const w of rows) {
       result.checked++;
       const was = w.match === "zotero" ? `zotero ${w.zotero_key}` : w.match;
@@ -66,14 +85,7 @@ export function rematchWorks(db: DB, { primary, dryRun, actor = "rematch" }: { p
         const made = creators(data);
         if (authors.length && !shareAuthor(authors, made)) result.authorMismatches.push({ title: w.title, authors, zotero: key, creators: made });
         const id = zoteroWork(primary, key, data);
-        const reason = `matched by rematch: ${was} became ${is}`;
-        for (const q of db.prepare("SELECT id FROM quotes WHERE work_id = ?").pluck().all(w.id) as number[]) {
-          moveQuotes.run(id, stamp, actor, q);
-          history.run(q, stamp, JSON.stringify({ work: w.id, match: was }), JSON.stringify({ work: id, match: is }), actor, reason);
-        }
-        db.prepare("UPDATE work_origins SET work_id = ? WHERE work_id = ?").run(id, w.id);
-        setOrigin.run("work", String(w.id), id);
-        db.prepare("DELETE FROM works WHERE id = ?").run(w.id);
+        absorbWork(db, w.id, id, { stamp, actor, was, is, reason: `matched by rematch: ${was} became ${is}` });
       } else {
         is = hits.length ? "ambiguous" : "unmatched";
         const list = hits.length ? JSON.stringify(hits.map((h) => h.key)) : null;

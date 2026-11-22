@@ -38,6 +38,34 @@ paragraphs make the front page's introduction. Each collection's introduction is
   private even then.
 - **Never:** unparsed quotes, flags, suspect words, plain tags, origins, history, the worklists, `/admin`, and
   `/mcp`.
+- **Only once a person promotes it:** a record a generative agent saved, and part of a sentence no person saved
+  (below).
+
+### Chosen by a person
+
+A quote saved because a piece cites it is a citation; one you chose to keep is a collected passage. An agent writing an
+article saves the exact words it quotes, often part of a sentence, and those shouldn't appear beside the passages you chose.
+So, unless a person has promoted it, the snapshot leaves out:
+
+- **a record a generative agent saved** (its [provenance stamp](provenance.md) says `generative: true`, shown as G875),
+  whole sentence or not. Which passages the collection shows is your judgement, not an agent's.
+- **part of a sentence**, unless a person saved it (on the capture page, or on the old site): saving it by hand was the
+  choice. One whose saver isn't recorded, such as a Zotero note, is left out.
+
+Whether the words are a whole sentence is read from the book where there is one. A quote checked against a Calibre book keeps
+corpus-mcp's anchor, with the book's text just before and after it, so the store knows whether the words begin after a
+sentence's end and end at one: "collaboration consists in generating possibility." is a whole clause but begins
+mid-sentence, and a capital after a comma is a name, not a sentence's start. Where the anchor has no text on a side (the
+passage begins a page), or there's no anchor (a paper book's quote), the words' shape decides that side: a capital or number
+first, a stop last, no ellipsis.
+
+To promote a record, use the **Promote** button beside **Public site** on its admin page, or
+`quote-mcp promote <id>,…`. Either records a `promoted` history entry under your login; **Take back** (or `--undo`)
+records `unpromoted`, and the record follows the rules above again. No MCP tool promotes. `quote-mcp promote` with no ids
+lists what's held back, and why. `get_quote` returns the decision as `public`: `shown`, `reason`, `promoted`, and `sentence`
+(`starts`, `ends`, and `judged_by`: `source` or `shape`). Nothing is deleted: a held-back quote keeps its id, its citation,
+and every draft marker that names it. An admin promotion appears on the public site at the next import (within 30 minutes);
+the CLI republishes at once.
 
 The old site's markup is tidied for display: a leftover `[bib]Key[/bib]` marker is shown as a Pandoc citekey
 (`[@Key]`), and `*emphasis*` is shown as emphasis. Drupal is retired. `quote-mcp citekeys` is the one-time
