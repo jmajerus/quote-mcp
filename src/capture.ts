@@ -176,7 +176,8 @@ function knownZoteroWork(db: DB, library: string, key: string): number | undefin
 
 /** The store's work for a Calibre book not in Zotero, if add_quote made one. */
 function knownCalibreWork(db: DB, uuid: string): number | undefined {
-  return db.prepare("SELECT work_id FROM work_origins WHERE kind = 'calibre' AND ref = ?").pluck().get(uuid) as number | undefined;
+  // Whatever case either side spells the UUID in; an exact spelling first, should two origins differ only in case.
+  return db.prepare("SELECT work_id FROM work_origins WHERE kind = 'calibre' AND ref = ? COLLATE NOCASE ORDER BY ref = ? DESC LIMIT 1").pluck().get(uuid, uuid) as number | undefined;
 }
 
 /** The work for a Zotero item the capture page chose, made from the mirror when the store has none yet. */
@@ -219,7 +220,7 @@ function calibreWork(db: DB, book: Book): number {
 function bookWork(db: DB, book: Book): number {
   if (!book.zotero) return calibreWork(db, book);
   const id = zoteroWork(db, book.zotero.library, book.zotero.key);
-  const earlier = book.calibre_uuid ? knownCalibreWork(db, book.calibre_uuid) ?? knownCalibreWork(db, book.calibre_uuid.toLowerCase()) : undefined;
+  const earlier = book.calibre_uuid ? knownCalibreWork(db, book.calibre_uuid) : undefined;
   if (earlier !== undefined && earlier !== id) foldInto(db, earlier, id, book.zotero.library, book.zotero.key, "add_quote");
   return id;
 }
@@ -297,7 +298,7 @@ function target(db: DB, key: string, primary: string | null): Target {
   if (it) return { work: () => zoteroWork(db, it.library, it.key), known: knownZoteroWork(db, it.library, it.key), book: bookKey(db, it.library, it.key, primary), label: k };
   // A Calibre book's UUID names the work add_quote made for it, if any; otherwise, and for a book id, corpus-mcp says which work it is.
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(k)) {
-    const known = knownCalibreWork(db, k.toLowerCase()) ?? knownCalibreWork(db, k);
+    const known = knownCalibreWork(db, k);
     return { ...(known !== undefined ? { work: () => known, known } : {}), book: k, label: k };
   }
   if (/^[\w-]+:\d+$/.test(k)) return { book: k, label: k };

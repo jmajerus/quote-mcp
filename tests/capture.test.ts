@@ -884,6 +884,17 @@ describe("one book, one work, before and after it's filed", () => {
     expect(saved(await addQuote(db, { work: `quote:${before}`, text: "Work is a story we tell" }, options())).work?.id).toBe(after);
   });
 
+  it("finds the earlier work whatever case either side spells the Calibre UUID in", async () => {
+    const early = saved(await addQuote(db, { work: "main:7", text: "Work is a story" }, options())).id;
+    const before = workOf(early);
+    db.prepare("UPDATE work_origins SET ref = upper(ref) WHERE kind = 'calibre'").run();
+    fileIt();
+    corpus.books.set("main:7", { book: { ...filed, calibre_uuid: unfiledBook.calibre_uuid.toLowerCase() }, text: "Work is a story we tell ourselves." });
+    const late = saved(await addQuote(db, { work: "main:7", text: "we tell ourselves" }, options())).id;
+    expect(workOf(early)).toBe(workOf(late));
+    expect(db.prepare("SELECT COUNT(*) FROM works WHERE id = ?").pluck().get(before)).toBe(0);
+  });
+
   it("moves them after an import once corpus-mcp's feed shows the match, waiting for the mirror to have the item", async () => {
     const early = saved(await addQuote(db, { work: "main:7", text: "Work is a story" }, options())).id;
     const before = workOf(early);
