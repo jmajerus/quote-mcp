@@ -36,8 +36,15 @@ export interface Book {
   zotero: { library: string; key: string } | null; [field: string]: unknown;
 }
 export type Verified =
-  | { match: true; exact: boolean; text: string; locator: string | null; page_label: string | null; section: string | null; anchor: Record<string, unknown>; book: Book }
+  | { match: true; exact: boolean; text: string; locator: string | null; page_label: string | null; section: string | null; anchor: Record<string, unknown>; book: Book; restored?: Restored }
   | { match: false; closest: Record<string, unknown>[]; book: Book };
+
+/**
+ * Set when corpus-mcp's verify gives the printed reading with letters its extracted text lost put back (a PDF that
+ * drops the "Th" ligature: "Tis" for "This"). `text` is then that reading, and the anchor's text stays the stored
+ * wording, which `stored_text` repeats.
+ */
+export interface Restored { kind: string; letters?: unknown; stored_text?: string }
 
 export class CorpusError extends Error {
   /** 0 when corpus-mcp couldn't be reached. */
@@ -447,6 +454,8 @@ function filePages(anchor: Record<string, unknown>): { start: number; end: numbe
 interface Plan {
   status: "verified" | "transcribed"; work: number; text: string; locatorKind: "page" | "chapter"; locator: string | null; section: string | null;
   position: { section: string | null; page_label: string | null; file_page: number | null } | null; anchor: Record<string, unknown> | null; book: Book | null; exact: boolean; note: string;
+  /** corpus-mcp's restoration of lost letters, kept with the origin beside the reading it gave (src/edits.ts bookText). */
+  restored?: Restored;
 }
 
 /**
@@ -571,7 +580,8 @@ async function planQuote(db: DB, t: Target, text: string, pages: Pages, corpus: 
   const page_ = v.page_label ? v.locator?.replace(/^pp?\.\s*/, "") ?? v.page_label : null;
   const chapter = page_ ? null : chapterLocator(v.section);
   return { status: "verified", work, text: v.text, locatorKind: chapter ? "chapter" : "page", locator: page_ ?? chapter, section: v.locator ? null : v.section,
-    position: { section: v.section, page_label: v.page_label, file_page: files?.start ?? null }, anchor: v.anchor, book: v.book, exact: v.exact, note: "" };
+    position: { section: v.section, page_label: v.page_label, file_page: files?.start ?? null }, anchor: v.anchor, book: v.book, exact: v.exact, note: "",
+    ...(v.restored ? { restored: v.restored } : {}) };
 }
 
 /**
@@ -608,7 +618,8 @@ function save(db: DB, args: AddQuoteArgs, plan: Plan, requestId: string, actor: 
   // A chapter of an EPUB has no page: its section is the place, kept in the comment.
   const comment = [plan.section ? `Section: ${plan.section}` : null, args.comment?.trim() || null].filter(Boolean).join("\n\n") || null;
   const raw = JSON.stringify({ request: { ...args, request_id: requestId }, ...(source ? { source } : {}), ...(plan.book ? { book: plan.book } : {}),
-    ...(plan.position ? { position: plan.position } : {}), ...(plan.anchor ? { anchor: plan.anchor } : {}) });
+    ...(plan.position ? { position: plan.position } : {}), ...(plan.anchor ? { anchor: plan.anchor } : {}),
+    ...(plan.restored ? { restored: { ...plan.restored, text: plan.text } } : {}) });
   return db.transaction((): number | Record<string, unknown> => {
     if (origin === "corpus") {
       const has = db.prepare("SELECT id FROM quotes WHERE work_id = ? AND text_key = ? LIMIT 1").pluck().get(plan.work, quoteKey(plan.text)) as number | undefined;
@@ -742,13 +753,14 @@ export interface AnchorChanges { log: string; changes: AnchorChange[]; last: num
  * reading from the start, which is safe, since applying a change twice changes nothing. An orphaned anchor
  * (the book's new file no longer has the words) keeps the quote verified, since it was checked, and flags it
  * anchor_lost for a person; found again, or stored again, clears the flag. Each anchor corpus-mcp now has
- * replaces the one kept with the quote's origin, except an orphaned one's. A deleted anchor changes nothing here. Changes for quotes
+ * replaces the one kept with the quote's origin, except an orphaned one's; one on another printed page moves the quote's
+ * page too (relabel). A deleted anchor changes nothing here. Changes for quotes
  * this store doesn't have are passed over.
  */
-export async function followAnchors(db: DB, corpus: CorpusClient): Promise<{ read: number; lost: number; found: number; updated: number; from: number; to: number }> {
+export async function followAnchors(db: DB, corpus: CorpusClient): Promise<{ read: number; lost: number; found: number; updated: number; relabelled: number; from: number; to: number }> {
   let log = getMeta(db, "corpus_anchor_log");
   let since = Number(getMeta(db, "corpus_anchor_seq") ?? 0);
-  const counts = { read: 0, lost: 0, found: 0, updated: 0, from: since, to: since };
+  const counts = { read: 0, lost: 0, found: 0, updated: 0, relabelled: 0, from: since, to: since };
   const flagged = (id: number, flag: string) =>
     db.prepare("SELECT 1 FROM quotes q WHERE id = ? AND EXISTS (SELECT 1 FROM json_each(q.flags) WHERE value = ?)").pluck().get(id, flag) !== undefined;
   const setFlag = (id: number, flag: string, on: boolean, stamp: string) => {
@@ -780,6 +792,7 @@ export async function followAnchors(db: DB, corpus: CorpusClient): Promise<{ rea
           if (JSON.stringify(raw.anchor) !== JSON.stringify(c.anchor)) {
             db.prepare("UPDATE quote_origins SET raw = ? WHERE rowid = ?").run(JSON.stringify({ ...raw, anchor: c.anchor }), origin.rowid);
             counts.updated++;
+            if (relabel(db, c, raw.anchor as AnchorLabels | undefined, stamp)) counts.relabelled++;
           }
         }
         if (c.kind === "orphaned") {
@@ -898,14 +911,36 @@ export function fillChapterLocators(db: DB, o: { apply?: boolean; ids?: number[]
   return fills;
 }
 
+interface AnchorLabels { page_label?: string | null; end_page_label?: string | null }
+
+/**
+ * A new anchor whose printed page differs from the old one's (corpus-mcp's pages were labelled or relabelled, as
+ * pin_page_labels does for a PDF whose printed numbers are offset from its file pages): the quote's page follows,
+ * with a history entry, when it is still the page the old anchor gave. A page set to anything else (a person's
+ * correction) is left alone; `quote-mcp locators` lists those.
+ */
+function relabel(db: DB, c: AnchorChange, before: AnchorLabels | undefined, stamp: string): boolean {
+  const after = c.anchor as AnchorLabels;
+  if (!before?.page_label || !after.page_label) return false;
+  const [from, to] = [pageSpan(before.page_label, before.end_page_label), pageSpan(after.page_label, after.end_page_label)];
+  if (from === to) return false;
+  const q = db.prepare("SELECT locator FROM quotes WHERE id = ? AND locator_kind = 'page'").get(c.quote_id) as { locator: string | null } | undefined;
+  if (!q?.locator || q.locator.replace(/-/g, "–") !== from) return false;
+  db.prepare("UPDATE quotes SET locator = ?, updated_at = ?, updated_by = 'corpus-mcp' WHERE id = ?").run(to, stamp, c.quote_id);
+  db.prepare("INSERT INTO history (quote_id, at, kind, before, after, actor, reason) VALUES (?, ?, 'locator', ?, ?, 'corpus-mcp', ?)")
+    .run(c.quote_id, stamp, JSON.stringify({ locator: `p. ${q.locator}` }), JSON.stringify({ locator: `p. ${to}` }),
+      `corpus-mcp change ${c.seq}: the book's pages were relabelled, and the passage is on printed page ${to}`);
+  return true;
+}
+
 export interface PageFix { id: number; from: string; to: string; edited: boolean; source: "corpus" | "anchor" }
 
 const pageSpan = (label: string, end?: string | null) => (end && end !== label ? `${label}–${end}` : label);
 
 /**
  * Verified quotes whose page isn't the book's printed page now: saved before corpus-mcp labelled the book's
- * pages, or relabelled since (a re-index changes labels without re-anchoring, and followAnchors keeps a new
- * anchor, not the locator). With corpus-mcp, each passage is looked up again (its anchor's text, from its page)
+ * pages, or relabelled since without a new anchor (a re-index changes labels without re-anchoring; a reanchored change
+ * that relabels moves the page itself, in followAnchors), or edited by a person. With corpus-mcp, each passage is looked up again (its anchor's text, from its page)
  * for the label it has now; without, or when it isn't found, the newest anchor's label is used. Each gets the
  * printed page ("392", "392–393"), with a history entry; a locator a person edited is listed and left alone.
  * Dry run unless apply.

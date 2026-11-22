@@ -3,7 +3,7 @@ import { type AnchorChange, type Book, type CorpusClient, CorpusError, type Corp
 import http from "node:http";
 import { ToolError } from "../src/common.js";
 import { bookQuotes, handleCorpusQuotes } from "../src/corpus-api.js";
-import { deleteQuote } from "../src/edits.js";
+import { deleteQuote, editQuote } from "../src/edits.js";
 import type { DB } from "../src/db.js";
 import { holdingsCounts } from "../src/holdings.js";
 import { runImport } from "../src/import.js";
@@ -938,5 +938,42 @@ describe("add_quote's other fields and retries", () => {
     calls.length = 0;
     await expect(answered.verify({ book: "main:9", text: "x" })).rejects.toThrow(/404/);
     expect(calls).toEqual(["error"]);
+  });
+});
+
+describe("pages relabelled and letters restored in corpus-mcp", () => {
+  const anchorChange = (seq: number, quote_id: number, anchor: Record<string, unknown>): AnchorChange => ({ seq, quote_id, kind: "reanchored", status: "verified", anchor, at: "2026-11-22T00:00:00Z" });
+  const atFilePage = (label: string) => {
+    corpus.verify = async (r) => ({ match: true, exact: true, text: r.text, locator: `p. ${label}`, page_label: label, section: null,
+      anchor: { calibre_uuid: unfiledBook.calibre_uuid, sha256: "abc", start_page: 16, start_offset: 0, page_label: label, end_page_label: label, text: r.text, prefix: "", suffix: "" }, book: unfiledBook });
+  };
+  const anchorOf = (id: number) => JSON.parse(db.prepare("SELECT raw FROM quote_origins WHERE quote_id = ?").pluck().get(id) as string).anchor;
+
+  it("moves a quote to the printed page when corpus-mcp relabels its anchor, unless a person set another page", async () => {
+    atFilePage("17");
+    const id = saved(await addQuote(db, { work: "main:7", text: "Work is a story" }, options())).id;
+    const other = saved(await addQuote(db, { work: "main:7", text: "we tell ourselves" }, options())).id;
+    db.prepare("UPDATE quotes SET locator = '99', edited = 1 WHERE id = ?").run(other);
+    corpus.changes = [anchorChange(1, id, { ...anchorOf(id), page_label: "16", end_page_label: "16" }), anchorChange(2, other, { ...anchorOf(other), page_label: "16", end_page_label: "16" })];
+    expect(await followAnchors(db, corpus)).toMatchObject({ read: 2, updated: 2, relabelled: 1 });
+    expect(citeQuote(db, id)).toMatchObject({ locator_text: "p. 16" });
+    expect(db.prepare("SELECT kind, before, after, actor FROM history WHERE quote_id = ? ORDER BY id DESC LIMIT 1").get(id))
+      .toEqual({ kind: "locator", before: '{"locator":"p. 17"}', after: '{"locator":"p. 16"}', actor: "corpus-mcp" });
+    expect(citeQuote(db, other).locator_text).toBe("p. 99");
+    // A change that keeps the label moves nothing.
+    corpus.changes.push(anchorChange(3, id, { ...anchorOf(id), sha256: "def" }));
+    expect(await followAnchors(db, corpus)).toMatchObject({ read: 1, updated: 1, relabelled: 0 });
+  });
+
+  it("lets a person edit a quote whose dropped ligatures corpus-mcp restored, against either reading", async () => {
+    const stored = "Tis non-tangible thing is the subject.";
+    const printed = "This non-tangible thing is the subject.";
+    corpus.verify = async () => ({ match: true, exact: false, text: printed, locator: "p. 16", page_label: "16", section: null,
+      anchor: { calibre_uuid: unfiledBook.calibre_uuid, sha256: "abc", start_page: 16, start_offset: 0, text: stored }, book: unfiledBook,
+      restored: { kind: "dropped-ligatures", letters: ["h"], stored_text: stored } });
+    const id = saved(await addQuote(db, { work: "main:7", text: printed }, options())).id;
+    expect(getQuote(db, id).text).toBe(printed);
+    expect(editQuote(db, { id, text: "This non-tangible thing [the work] is the subject." }, "jo@example.org").changed).toEqual(["text"]);
+    expect(() => editQuote(db, { id, text: "This tangible thing is the subject." }, "jo@example.org")).toThrow();
   });
 });

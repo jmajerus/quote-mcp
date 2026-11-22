@@ -336,15 +336,20 @@ export function fromBook(text: string, book: string): boolean {
 
 /**
  * A verified quote's text as the book has it: the passage kept with its newest anchor (the one followAnchors keeps
- * current), so an edit is checked against the book, not against an earlier edit that left words out.
+ * current), so an edit is checked against the book, not against an earlier edit that left words out. Where corpus-mcp
+ * put back letters its text lost (dropped ligatures: "Tis" stored, "This" printed), the printed reading it gave is the
+ * book's too, so either reading passes.
  */
-function bookText(db: DB, id: number, current: string): string {
+function bookTexts(db: DB, id: number, current: string): string[] {
   const raw = db.prepare(`SELECT raw FROM quote_origins WHERE quote_id = ? AND kind IN ('agent', 'corpus')
     AND json_extract(raw, '$.anchor.text') IS NOT NULL ORDER BY imported_at DESC, rowid DESC LIMIT 1`).pluck().get(id) as string | undefined;
-  const anchored = raw ? (JSON.parse(raw) as { anchor: { text: string } }).anchor.text : undefined;
-  if (anchored) return anchored;
+  if (raw) {
+    const r = JSON.parse(raw) as { anchor: { text: string }; restored?: { text?: unknown } };
+    const restored = typeof r.restored?.text === "string" && r.restored.text ? [r.restored.text] : [];
+    if (r.anchor.text) return [r.anchor.text, ...restored];
+  }
   const added = db.prepare("SELECT after FROM history WHERE quote_id = ? AND kind = 'added' ORDER BY id LIMIT 1").pluck().get(id) as string | null | undefined;
-  return added ?? current;
+  return [added ?? current];
 }
 
 export interface EditArgs { id: number; text?: string; locator?: string | null; chapter_author?: string | null; comment?: string | null; reason?: string; updated_at?: string; accept?: string[]; concepts?: string[] }
@@ -369,7 +374,7 @@ export function editQuote(db: DB, args: EditArgs, editor: string) {
       if (!text) throw new ToolError("The text can't be empty.");
       if (text.length > MAX_TEXT) throw new ToolError(`The text is ${text.length} characters; the limit is ${MAX_TEXT}.`);
       if (text !== now_.text) {
-        if (q.status === "verified" && !fromBook(text, bookText(db, args.id, now_.text))) {
+        if (q.status === "verified" && !bookTexts(db, args.id, now_.text).some((book) => fromBook(text, book))) {
           throw new ToolError(`Quote ${args.id} was checked against its Calibre book, so its words are the book's. Your own marks can be added: [brackets], *emphasis*, and … for words left out; spacing and line breaks can change. Anything else that changes the words is refused.`);
         }
         change.text = text;

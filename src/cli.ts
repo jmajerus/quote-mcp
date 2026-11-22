@@ -140,7 +140,7 @@ async function importCommand() {
       const a = await retryAnchors(db, client);
       if (a.tried) console.log(`Anchors posted again to corpus-mcp: ${a.stored} of ${a.tried}.`);
       const f = await followAnchors(db, client);
-      if (f.read) console.log(`Anchor changes from corpus-mcp: ${f.read} (changes ${f.from}–${f.to}); ${f.lost} no longer found, ${f.found} found again, ${f.updated} anchors updated.`);
+      if (f.read) console.log(`Anchor changes from corpus-mcp: ${f.read} (changes ${f.from}–${f.to}); ${f.lost} no longer found, ${f.found} found again, ${f.updated} anchors updated, ${f.relabelled} pages relabelled.`);
     } catch (error) {
       say(`Anchors not followed: ${(error as Error).message}\n`);
     }
