@@ -1,5 +1,5 @@
 import type http from "node:http";
-import { type Routes, answerApi, publishedRoutes } from "./api-routes.js";
+import { type ApiAnswer, type Routes, answerApi, answerLinking, publishedRoutes } from "./api-routes.js";
 import type { DB } from "./db.js";
 import type { Published } from "./published.js";
 import { conceptGraph, findConcept, getConcept, searchQuotes } from "./queries.js";
@@ -24,9 +24,12 @@ import { type ConceptSet, listSets, setGraph } from "./sets.js";
  * public records, and 403 for quotes below the quotes level.
  */
 
-async function send(res: http.ServerResponse, routes: Routes, req: http.IncomingMessage, url: URL): Promise<void> {
-  const a = await answerApi(routes, req.method ?? "GET", url);
+function write(res: http.ServerResponse, a: ApiAnswer): void {
   res.writeHead(a.status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...a.headers }).end(JSON.stringify(a.body));
+}
+
+async function send(res: http.ServerResponse, routes: Routes, req: http.IncomingMessage, url: URL): Promise<void> {
+  write(res, await answerApi(routes, req.method ?? "GET", url));
 }
 
 /** Answers an /api request from the store. */
@@ -46,4 +49,14 @@ export function handleApi(db: DB, req: http.IncomingMessage, res: http.ServerRes
 /** Answers an /api request from the public snapshot. */
 export function handlePublishedApi(p: Published, req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
   return send(res, publishedRoutes(p), req, url);
+}
+
+/**
+ * Answers /site.json or /api/public/citekeys from the public snapshot. The site's URL is the one the request came in
+ * on, as a proxy in front reports it.
+ */
+export async function handleLinking(p: Published, req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
+  const proto = String(req.headers["x-forwarded-proto"] ?? "http").split(",")[0].trim();
+  const host = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "localhost").split(",")[0].trim();
+  write(res, await answerLinking(p, req.method ?? "GET", url.pathname, `${proto}://${host}`));
 }

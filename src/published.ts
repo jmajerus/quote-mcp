@@ -105,6 +105,23 @@ export class Published {
     return (await this.intros()).get("site") ?? { title: "Quotes", html: "", summary: null };
   }
 
+  /**
+   * The key list other public sites link by (/api/public/citekeys): each work's citekey, and its Zotero item keys
+   * (users/<id>/<key> or groups/<id>/<key>), to the path of its page. Only works with something public are in the
+   * snapshot, so a work whose quotes are all held back isn't listed and no link leads to an empty page.
+   */
+  async linkKeys(): Promise<{ citekeys: Record<string, string>; zotero_keys: Record<string, string> }> {
+    // Without a prototype, so a citekey such as "constructor" is an ordinary key.
+    const citekeys: Record<string, string> = Object.create(null);
+    const zotero: Record<string, string> = Object.create(null);
+    for (const w of await this.store.all<{ id: number; citekey: string | null; zotero_keys: string }>("SELECT id, citekey, zotero_keys FROM works ORDER BY id")) {
+      const href = `/works/${w.id}`;
+      if (w.citekey) citekeys[w.citekey] ??= href;
+      for (const k of json<string[]>(w.zotero_keys, [])) zotero[k] ??= href;
+    }
+    return { citekeys, zotero_keys: zotero };
+  }
+
   /** Whether a collection has an introduction of its own, rather than the scheme's label and description. */
   async hasIntro(scheme: string): Promise<boolean> {
     return (await this.intros()).has(`collection:${scheme}`);

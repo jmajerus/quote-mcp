@@ -9,8 +9,8 @@ import https from "node:https";
 import path from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { handleApi, handlePublishedApi } from "./api.js";
-import { PUBLIC_API } from "./api-routes.js";
+import { handleApi, handleLinking, handlePublishedApi } from "./api.js";
+import { LINKING, PUBLIC_API } from "./api-routes.js";
 import type { DB } from "./db.js";
 import { faviconBytes } from "./favicon.js";
 import { serveMap } from "./map.js";
@@ -76,6 +76,15 @@ function favicon(req: http.IncomingMessage, res: http.ServerResponse, url: URL):
 }
 
 const NO_SNAPSHOT = "There's no public snapshot yet. Build one with `quote-mcp publish --dry-run`; an import also builds it.";
+
+/** Answers /site.json or the key list from the snapshot, or false when the path isn't one or nothing is public. */
+async function linkingDoc(options: ServeOptions, req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
+  if (!options.snapshot || !LINKING.test(url.pathname)) return false;
+  const published = await options.snapshot();
+  if (published) await handleLinking(published, req, res, url);
+  else res.writeHead(503, { "content-type": "application/json" }).end(JSON.stringify({ error: NO_SNAPSHOT }));
+  return true;
+}
 
 /** Answers a site page from the snapshot, or false when the path isn't one. */
 async function sitePage(options: ServeOptions, req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
@@ -244,6 +253,7 @@ export function serveHttp(db: DB, options: ServeOptions): Promise<http.Server> {
       }
       if (favicon(req, res, url)) return;
       if (await sitePage(options, req, res, url)) return;
+      if (await linkingDoc(options, req, res, url)) return;
       if (url.pathname === "/") {
         res.writeHead(302, { location: "/admin" }).end();
         return;
@@ -356,6 +366,7 @@ export function servePublic(options: ServeOptions): Promise<http.Server> {
     try {
       if (favicon(req, res, url)) return;
       if (await sitePage(options, req, res, url)) return;
+      if (await linkingDoc(options, req, res, url)) return;
       if (PUBLIC_API.test(url.pathname)) {
         const published = await snapshot();
         if (published) await handlePublishedApi(published, req, res, url);
@@ -372,7 +383,7 @@ export function servePublic(options: ServeOptions): Promise<http.Server> {
       if (!res.headersSent) res.writeHead(500).end();
     }
   });
-  return listen(server, options.port, options.host, `public, from the snapshot: /${options.mapDir ? ", /map/" : ""}, /api/graph, /api/concepts, /api/sets`);
+  return listen(server, options.port, options.host, `public, from the snapshot: /${options.mapDir ? ", /map/" : ""}, /api/graph, /api/concepts, /api/sets, /site.json`);
 }
 
 export async function serveStdio(db: DB, sets: ConceptSet[] = [], capture?: Capture): Promise<void> {

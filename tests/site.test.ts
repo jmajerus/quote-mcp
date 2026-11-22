@@ -209,6 +209,17 @@ describe("serving the public site", () => {
     expect((await fetch(`${lan}/admin`)).status).toBe(200);
   });
 
+  it("serves site.json and the key list on the LAN and the public port", async () => {
+    const { lan, pub } = await start({});
+    for (const base of [lan, pub]) {
+      const site = await (await fetch(`${base}/site.json`)).json();
+      expect(site).toEqual({ version: 1, name: "Work quotes", kind: "quotes", url: base, level: "catalogue", citekeys: "/api/public/citekeys" });
+      expect(await (await fetch(`${base}/api/public/citekeys`)).json()).toEqual({ citekeys: { davenport1999mobbing: `/works/${workId("Mobbing")}` }, zotero_keys: { "users/1/MOBB0001": `/works/${workId("Mobbing")}` } });
+    }
+    const proxied = await (await fetch(`${pub}/site.json`, { headers: { "x-forwarded-proto": "https", "x-forwarded-host": "quotes.example.org" } })).json();
+    expect(proxied.url).toBe("https://quotes.example.org");
+  });
+
   it("redirects / to /admin with no public site, and refuses a public port", async () => {
     const { lan } = await start(null, false);
     const res = await fetch(`${lan}/`, { redirect: "manual" });
