@@ -7,6 +7,7 @@ import { citedKey, citekeyOf } from "./csl.js";
 import { calibreSource, chapterLocator, currentAnchor, getQuote } from "./queries.js";
 import { type ClientSeen, corpusGenerative, stamp as provenanceStamp } from "./provenance.js";
 import { quoteKey, yearOf } from "./text.js";
+import { absorbWork } from "./rematch.js";
 import { syncLibrary } from "./sync.js";
 import { type ApiItem, ZoteroClient, needsKey, zoteroConfig } from "./zotero.js";
 
@@ -67,7 +68,11 @@ export function corpusConfig(env: NodeJS.ProcessEnv = process.env): { baseUrl: s
   return base.toLowerCase() === "off" ? null : { baseUrl: base.replace(/\/+$/, "") };
 }
 
-export function corpusClient({ baseUrl, timeoutMs = 20_000, fetchImpl = fetch }: { baseUrl: string; timeoutMs?: number; fetchImpl?: typeof fetch }): CorpusClient {
+/**
+ * corpus-mcp's API. verify, which changes nothing there, is tried once more after `retryDelayMs` when corpus-mcp can't
+ * be reached or doesn't answer in time, so a short outage doesn't fail add_quote; an answer, even an error, isn't retried.
+ */
+export function corpusClient({ baseUrl, timeoutMs = 20_000, retryDelayMs = 3_000, fetchImpl = fetch }: { baseUrl: string; timeoutMs?: number; retryDelayMs?: number; fetchImpl?: typeof fetch }): CorpusClient {
   const request = async (method: string, path: string, payload?: unknown) => {
     let res: Response;
     try {
@@ -99,7 +104,15 @@ export function corpusClient({ baseUrl, timeoutMs = 20_000, fetchImpl = fetch }:
       if (!res.ok || !Array.isArray(body?.books)) throw new CorpusError(res.status, `corpus-mcp GET /api/holdings/books answered ${res.status}`, body as Record<string, unknown> | null);
       return { etag: res.headers.get("etag"), books: body.books };
     },
-    verify: (r) => request("POST", "/api/verify", r),
+    verify: async (r) => {
+      try {
+        return await request("POST", "/api/verify", r);
+      } catch (error) {
+        if (!(error instanceof CorpusError) || error.status !== 0) throw error;
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+        return request("POST", "/api/verify", r);
+      }
+    },
     anchor: (quoteId, anchor) => request("POST", "/api/anchors", { quote_id: quoteId, anchor }),
     anchorChanges: (since) => request("GET", `/api/anchors/changes?since=${since}`),
     // corpus-mcp gives at most 200 a page; read on until total.
@@ -163,7 +176,8 @@ function knownZoteroWork(db: DB, library: string, key: string): number | undefin
 
 /** The store's work for a Calibre book not in Zotero, if add_quote made one. */
 function knownCalibreWork(db: DB, uuid: string): number | undefined {
-  return db.prepare("SELECT work_id FROM work_origins WHERE kind = 'calibre' AND ref = ?").pluck().get(uuid) as number | undefined;
+  // Whatever case either side spells the UUID in; an exact spelling first, should two origins differ only in case.
+  return db.prepare("SELECT work_id FROM work_origins WHERE kind = 'calibre' AND ref = ? COLLATE NOCASE ORDER BY ref = ? DESC LIMIT 1").pluck().get(uuid, uuid) as number | undefined;
 }
 
 /** The work for a Zotero item the capture page chose, made from the mirror when the store has none yet. */
@@ -198,8 +212,55 @@ function calibreWork(db: DB, book: Book): number {
   return work;
 }
 
+/**
+ * The work for the Calibre book corpus-mcp checked against. Once corpus-mcp matches the book to a Zotero item (it was
+ * filed, and its citekey pinned), that item's work; a work made for the book before then is folded into it, so one
+ * book's quotes stay on one work.
+ */
 function bookWork(db: DB, book: Book): number {
-  return book.zotero ? zoteroWork(db, book.zotero.library, book.zotero.key) : calibreWork(db, book);
+  if (!book.zotero) return calibreWork(db, book);
+  const id = zoteroWork(db, book.zotero.library, book.zotero.key);
+  const earlier = book.calibre_uuid ? knownCalibreWork(db, book.calibre_uuid) : undefined;
+  if (earlier !== undefined && earlier !== id) foldInto(db, earlier, id, book.zotero.library, book.zotero.key, "add_quote");
+  return id;
+}
+
+/** Folds a Calibre book's unmatched (or ambiguous) work into the Zotero item's work corpus-mcp matched the book to. */
+function foldInto(db: DB, from: number, into: number, library: string, key: string, actor: string): { title: string; was: string; quotes: number } | null {
+  const w = db.prepare("SELECT title, match FROM works WHERE id = ?").get(from) as { title: string; match: string } | undefined;
+  if (!w || w.match === "zotero") return null;
+  const is = `zotero ${key}`;
+  const quotes = db.transaction(() => absorbWork(db, from, into, {
+    stamp: now(), actor, was: w.match, is, reason: `matched through corpus-mcp: its Calibre book is filed in Zotero as ${library}/${key}`,
+  }))();
+  return { title: w.title, was: w.match, quotes };
+}
+
+export interface CalibreFold { work: number; into: number; title: string; from: string; to: string; quotes: number }
+
+/**
+ * Folds each work made for a Calibre book not in Zotero into the work for the Zotero item corpus-mcp now matches that
+ * book to (its books feed, kept in calibre_books), so quotes saved before the book was filed join those saved after,
+ * and cite_quote cites them from Zotero. The old work's id keeps resolving (absorbWork). An item the mirror hasn't
+ * synced yet waits for the next run.
+ */
+export function followCalibreMatches(db: DB, actor = "import"): CalibreFold[] {
+  const rows = db.prepare(`SELECT w.id, json_extract(c.data, '$.zotero.library') AS library, json_extract(c.data, '$.zotero.key') AS key
+    FROM works w JOIN work_origins o ON o.work_id = w.id AND o.kind = 'calibre' JOIN calibre_books c ON c.calibre_uuid = o.ref
+    WHERE w.match != 'zotero' AND json_extract(c.data, '$.zotero.key') IS NOT NULL ORDER BY w.id`).all() as { id: number; library: string; key: string }[];
+  const folds: CalibreFold[] = [];
+  for (const r of rows) {
+    let into: number;
+    try {
+      into = zoteroWork(db, r.library, r.key);
+    } catch (error) {
+      if (error instanceof MirrorMiss) continue;
+      throw error;
+    }
+    const f = foldInto(db, r.id, into, r.library, r.key, actor);
+    if (f) folds.push({ work: r.id, into, title: f.title, from: f.was, to: `zotero ${r.key}`, quotes: f.quotes });
+  }
+  return folds;
 }
 
 /**
@@ -237,7 +298,7 @@ function target(db: DB, key: string, primary: string | null): Target {
   if (it) return { work: () => zoteroWork(db, it.library, it.key), known: knownZoteroWork(db, it.library, it.key), book: bookKey(db, it.library, it.key, primary), label: k };
   // A Calibre book's UUID names the work add_quote made for it, if any; otherwise, and for a book id, corpus-mcp says which work it is.
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(k)) {
-    const known = knownCalibreWork(db, k.toLowerCase()) ?? knownCalibreWork(db, k);
+    const known = knownCalibreWork(db, k);
     return { ...(known !== undefined ? { work: () => known, known } : {}), book: k, label: k };
   }
   if (/^[\w-]+:\d+$/.test(k)) return { book: k, label: k };
@@ -265,6 +326,8 @@ export interface AddQuoteArgs {
    * looking when file_page isn't given, and not checked against the passage found.
    */
   page?: string;
+  /** For a chapter in an edited volume, the chapter's author ("Dewandre, Nicole"), cited beside the volume's editors. */
+  chapter_author?: string;
   comment?: string;
   tags?: string[];
   /** Makes a retry return the quote the first call saved. */
@@ -553,9 +616,9 @@ function save(db: DB, args: AddQuoteArgs, plan: Plan, requestId: string, actor: 
     }
     const earlier = alreadySaved(db, origin, requestId, plan.work, plan.text);
     if (earlier) return earlier;
-    const id = db.prepare(`INSERT INTO quotes (id, kind, work_id, text, text_key, locator_kind, locator, comment, status, grade, flags, created_at, created_by, updated_at, updated_by, provenance)
-      VALUES (${NEXT_QUOTE_ID}, 'quote', ?, ?, ?, ?, ?, ?, ?, 'A', ?, ?, ?, ?, ?, ?) RETURNING id`).pluck()
-      .get(plan.work, plan.text, quoteKey(plan.text), plan.locator ? plan.locatorKind : "none", plan.locator, comment, plan.status, JSON.stringify(flags), stamp, actor, stamp, actor, provenance) as number;
+    const id = db.prepare(`INSERT INTO quotes (id, kind, work_id, text, text_key, locator_kind, locator, chapter_author, comment, status, grade, flags, created_at, created_by, updated_at, updated_by, provenance)
+      VALUES (${NEXT_QUOTE_ID}, 'quote', ?, ?, ?, ?, ?, ?, ?, ?, 'A', ?, ?, ?, ?, ?, ?) RETURNING id`).pluck()
+      .get(plan.work, plan.text, quoteKey(plan.text), plan.locator ? plan.locatorKind : "none", plan.locator, args.chapter_author?.trim() || null, comment, plan.status, JSON.stringify(flags), stamp, actor, stamp, actor, provenance) as number;
     db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, version, raw, imported_at) VALUES (?, ?, ?, NULL, ?, ?)").run(origin, requestId, id, raw, stamp);
     if (plan.book) keepCalibreBook(db, plan.book, stamp);
     const tags = [...new Set((args.tags ?? []).map((t) => t.trim()).filter(Boolean))];
@@ -763,12 +826,13 @@ function keepCalibreBook(db: DB, book: Book, stamp = now(), uuid = book.calibre_
  * citekey pinned since, or a Zotero item matched, is what cite_quote cites the work by until the work is filed.
  * Run after each import; the feed's ETag is kept, so an unchanged feed is one short request.
  */
-export async function refreshCalibreBooks(db: DB, corpus: CorpusClient): Promise<{ books: number; updated: number; unchanged: boolean }> {
+export async function refreshCalibreBooks(db: DB, corpus: CorpusClient): Promise<{ books: number; updated: number; unchanged: boolean; folded: CalibreFold[] }> {
   const uuids = db.prepare("SELECT DISTINCT ref FROM work_origins WHERE kind = 'calibre'").pluck().all() as string[];
-  if (!uuids.length || !corpus.booksFeed) return { books: uuids.length, updated: 0, unchanged: true };
+  // Folded whether or not the feed changed: the Zotero item may reach the mirror a sync after corpus-mcp matched it.
+  if (!uuids.length || !corpus.booksFeed) return { books: uuids.length, updated: 0, unchanged: true, folded: followCalibreMatches(db) };
   const etag = getMeta(db, "corpus_books_etag");
   const feed = await corpus.booksFeed(etag);
-  if (!feed) return { books: uuids.length, updated: 0, unchanged: true };
+  if (!feed) return { books: uuids.length, updated: 0, unchanged: true, folded: followCalibreMatches(db) };
   const wanted = new Map(uuids.map((u) => [u.toLowerCase(), u]));
   let updated = 0;
   const stamp = now();
@@ -783,7 +847,7 @@ export async function refreshCalibreBooks(db: DB, corpus: CorpusClient): Promise
     }
     if (feed.etag) setMeta(db, "corpus_books_etag", feed.etag);
   })();
-  return { books: uuids.length, updated, unchanged: false };
+  return { books: uuids.length, updated, unchanged: false, folded: followCalibreMatches(db) };
 }
 
 // --- Chapter locators ----------------------------------------------------------------------------

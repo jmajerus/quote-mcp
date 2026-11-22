@@ -5,6 +5,7 @@ import type { DB } from "./db.js";
 import { RELATION_LABEL, RELATION_TYPE, SEARCH_RELATIONS, ToolError, ftsQuery, relatedIds, type SearchRelation } from "./common.js";
 import type { ApiItem } from "./zotero.js";
 import { quoteLabel, readProvenance } from "./provenance.js";
+import { publicChoice } from "./selection.js";
 
 export { RELATION_LABEL, SEARCH_RELATIONS, ToolError, ftsQuery, type SearchRelation };
 
@@ -349,6 +350,8 @@ export function getQuote(db: DB, id: number) {
     edited: Boolean(q.edited),
     created_at: q.created_at, updated_at: q.updated_at,
     provenance: readProvenance(q.provenance),
+    /** Whether the public site shows it without a person promoting it, and why (src/selection.ts). */
+    public: publicChoice(db, id),
     history: db.prepare("SELECT at, kind, actor, reason FROM history WHERE quote_id = ? ORDER BY id").all(id),
     proposals: (db.prepare("SELECT id FROM proposals WHERE quote_id = ? AND status = 'pending' ORDER BY id").pluck().all(id) as number[]).map((p) => proposal(db, p)),
   };

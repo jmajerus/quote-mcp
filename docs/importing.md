@@ -80,7 +80,8 @@ import, and saving the edit checks its words again.
 
 ## Works
 
-Each quote cites a work. Works are matched from the store with `rematch`; the timer's import doesn't move them.
+Each quote cites a work. Works are matched from the store with `rematch`; the timer's import moves only the one kind described
+under [A Calibre book filed later](#a-calibre-book-filed-later).
 
 A work matches a primary-library item by its short title: case, accents, punctuation, HTML escapes, a leading article, `&`
 against "and", a trailing article ("One Who Is Not Busy, The"), any subtitle, and a parenthetical at the end ("(Signet Classics)") don't count. When several items have that title, they're narrowed by a shared author surname,
@@ -100,6 +101,21 @@ To match works again, after filing or merging items in Zotero:
 It brings each library's mirror up to date, except in a dry run, then checks each work that isn't matched and each
 whose item has gone. A move adds a `work_matched` history entry per quote. It also lists each match whose item shares no author
 with the work, or has none, since it may be another book. A work made by `add_quote` is matched this way too.
+
+### A Calibre book filed later
+
+`add_quote` makes an `unmatched` work for a Calibre book that isn't in Zotero, found again by the book's Calibre UUID. Once
+the book is filed and its citekey pinned, corpus-mcp matches it to the Zotero item and names that item with the book. From then
+on the earlier work is folded into the Zotero item's work, so one book's quotes stay on one work and cite_quote cites them from
+Zotero. The fold happens at the first of:
+
+- the next `add_quote` for the book, which saves its quote to the Zotero item's work and moves the earlier quotes with it;
+- the next import, which reads corpus-mcp's books feed and folds every such work whose Zotero item the mirror has. An item the
+  mirror hasn't synced yet waits for the import after.
+
+As with `rematch`, each quote keeps its id and gains a `work_matched` history entry, and the old work's id still resolves:
+`quote:<old id>` (holdings-mcp's key, or a draft's provenance) names the Zotero item's work. The import prints a line for each
+work it folds.
 
 ## Margin notes
 

@@ -8,7 +8,8 @@ the book's, and later changes to its tags, comment, or page are in its history, 
 The server writes the stamp. The caller never supplies one. It's stored as JSON in `quotes.provenance`
 ([src/provenance.ts](../src/provenance.ts)). `get_quote` returns it in full, `search_quotes` returns its
 `generative` value, and the admin quote page shows it under **Provenance**. The public site doesn't show it,
-and the public snapshot doesn't copy it.
+and the public snapshot doesn't copy it. It does decide what the public site shows: a quote a generative agent saved
+stays off it until a person promotes it ([the public site](public-site.md#chosen-by-a-person)).
 
 ## The G label
 
