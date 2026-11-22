@@ -218,6 +218,12 @@ describe("serving the public site", () => {
     }
     const proxied = await (await fetch(`${pub}/site.json`, { headers: { "x-forwarded-proto": "https", "x-forwarded-host": "quotes.example.org" } })).json();
     expect(proxied.url).toBe("https://quotes.example.org");
+    // Cacheable, and revalidated against the snapshot's hash.
+    const first = await fetch(`${pub}/api/public/citekeys`);
+    expect(first.headers.get("cache-control")).toBe("public, max-age=60");
+    const etag = first.headers.get("etag")!;
+    expect(etag).toMatch(/^W\/"[0-9a-f]{20}"$/);
+    expect((await fetch(`${lan}/site.json`, { headers: { "if-none-match": etag } })).status).toBe(304);
   });
 
   it("redirects / to /admin with no public site, and refuses a public port", async () => {

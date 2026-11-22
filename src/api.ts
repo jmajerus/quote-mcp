@@ -1,4 +1,5 @@
 import type http from "node:http";
+import type { TLSSocket } from "node:tls";
 import { type ApiAnswer, type Routes, answerApi, answerLinking, publishedRoutes } from "./api-routes.js";
 import type { DB } from "./db.js";
 import type { Published } from "./published.js";
@@ -52,11 +53,21 @@ export function handlePublishedApi(p: Published, req: http.IncomingMessage, res:
 }
 
 /**
- * Answers /site.json or /api/public/citekeys from the public snapshot. The site's URL is the one the request came in
- * on, as a proxy in front reports it.
+ * Answers /site.json or /api/public/citekeys from the public snapshot, cacheable as the site's pages are and with the
+ * snapshot's hash as its ETag, as the Worker answers them. The site's URL is the one the request came in on: the
+ * scheme and host a proxy in front reports, else the connection's own (HTTPS on the TLS listener).
  */
 export async function handleLinking(p: Published, req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
-  const proto = String(req.headers["x-forwarded-proto"] ?? "http").split(",")[0].trim();
+  const tls = (req.socket as TLSSocket).encrypted === true;
+  const proto = String(req.headers["x-forwarded-proto"] ?? (tls ? "https" : "http")).split(",")[0].trim();
   const host = String(req.headers["x-forwarded-host"] ?? req.headers.host ?? "localhost").split(",")[0].trim();
-  write(res, await answerLinking(p, req.method ?? "GET", url.pathname, `${proto}://${host}`));
+  const a = await answerLinking(p, req.method ?? "GET", url.pathname, `${proto}://${host}`);
+  if (a.status !== 200) return write(res, a);
+  const etag = `W/"${p.hash.slice(0, 20)}"`;
+  const cache = { "cache-control": "public, max-age=60", etag, "x-content-type-options": "nosniff" };
+  if (req.headers["if-none-match"]?.split(/\s*,\s*/).includes(etag)) {
+    res.writeHead(304, cache).end();
+    return;
+  }
+  res.writeHead(200, { "content-type": "application/json; charset=utf-8", ...cache }).end(JSON.stringify(a.body));
 }
