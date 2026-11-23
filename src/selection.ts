@@ -15,6 +15,8 @@ import { readProvenance } from "./provenance.js";
  *   - a quote that is part of a sentence isn't public unless a person saved it (generative: false), since saving it
  *     by hand was the choice. Where nothing says who saved it (a Zotero note), it's left out.
  *
+ * And a record tagged `private` is never public, promoted or not: the tag is the owner's own word on it.
+ *
  * Promoting is a person's act, from the admin pages or the CLI, never an MCP tool. It is kept in the quote's
  * history ('promoted', and 'unpromoted' to take it back), so who chose it and when stays on the record. Nothing is
  * deleted: a hidden quote keeps its id, its citation, and every marker that names it.
@@ -69,10 +71,15 @@ export const isWholeSentence = (b: SentenceBounds) => b.starts && b.ends;
 
 export interface Promotion { by: string; at: string; reason: string | null }
 
+/** Why a record is held back: tagged private, saved by a generative agent, or part of a sentence nobody chose. */
+export type Held = "tagged" | "agent" | "fragment";
+
 export interface PublicChoice {
   /** Whether the public site shows it (at the quotes level, and for a note only with notes: all). */
   shown: boolean;
   reason: string;
+  /** Why it's held back; null when it's shown. */
+  held: Held | null;
   /** Set when a person promoted it, and hasn't taken that back. */
   promoted: Promotion | null;
   /** For a quote: whether its words are a whole sentence, and how that was judged. */
@@ -85,6 +92,7 @@ interface Row { id: number; kind: string; text: string; provenance: unknown }
 export function publicChooser(db: DB): (q: Row) => PublicChoice {
   const lastPromotion = db.prepare(`SELECT kind, actor, at, reason FROM history WHERE quote_id = ? AND kind IN ('promoted', 'unpromoted')
     ORDER BY id DESC LIMIT 1`);
+  const taggedPrivate = db.prepare("SELECT 1 FROM quote_tags WHERE quote_id = ? AND tag = 'private' COLLATE NOCASE").pluck();
   const anchorOf = db.prepare(`SELECT json_extract(raw, '$.anchor') FROM quote_origins WHERE quote_id = ? AND kind IN ('agent', 'corpus')
     AND json_extract(raw, '$.anchor') IS NOT NULL ORDER BY imported_at DESC LIMIT 1`).pluck();
   return (q) => {
@@ -95,16 +103,19 @@ export function publicChooser(db: DB): (q: Row) => PublicChoice {
       const raw = anchorOf.get(q.id) as string | undefined;
       sentence = sentenceBounds(q.text, raw ? (JSON.parse(raw) as Context) : null);
     }
-    if (promoted) return { shown: true, reason: `Promoted by ${promoted.by}.`, promoted, sentence };
+    if (taggedPrivate.get(q.id)) {
+      return { shown: false, held: "tagged", reason: `Tagged private: it stays off the public site${promoted ? ", though a person promoted it" : ""}.`, promoted, sentence };
+    }
+    if (promoted) return { shown: true, held: null, reason: `Promoted by ${promoted.by}.`, promoted, sentence };
     const generative = readProvenance(q.provenance)?.generative ?? null;
     if (generative === true) {
-      return { shown: false, reason: "Saved by a generative agent: it stays off the public site until a person promotes it.", promoted, sentence };
+      return { shown: false, held: "agent", reason: "Saved by a generative agent: it stays off the public site until a person promotes it.", promoted, sentence };
     }
     if (sentence && !isWholeSentence(sentence) && generative !== false) {
       const part = !sentence.starts && !sentence.ends ? "begins and ends mid-sentence" : !sentence.starts ? "begins mid-sentence" : "ends mid-sentence";
-      return { shown: false, reason: `Part of a sentence (it ${part}, judged from ${sentence.judged_by === "source" ? "the book's text" : "its words"}), and not saved by a person: it stays off the public site until a person promotes it.`, promoted, sentence };
+      return { shown: false, held: "fragment", reason: `Part of a sentence (it ${part}, judged from ${sentence.judged_by === "source" ? "the book's text" : "its words"}), and not saved by a person: it stays off the public site until a person promotes it.`, promoted, sentence };
     }
-    return { shown: true, reason: generative === false ? "Saved by a person." : "A whole sentence, not saved by an agent.", promoted, sentence };
+    return { shown: true, held: null, reason: generative === false ? "Saved by a person." : "A whole sentence, not saved by an agent.", promoted, sentence };
   };
 }
 

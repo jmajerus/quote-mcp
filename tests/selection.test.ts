@@ -6,7 +6,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { DB } from "../src/db.js";
 import { readIntro } from "../src/intro.js";
 import { stamp } from "../src/provenance.js";
-import { getQuote } from "../src/queries.js";
+import { getQuote, searchQuotes } from "../src/queries.js";
 import { promote, publicChoice, sentenceBounds } from "../src/selection.js";
 import { buildSnapshot } from "../src/snapshot.js";
 import { renderAdmin, savePromotion } from "../src/web.js";
@@ -119,5 +119,39 @@ describe("the public site's choice", () => {
     savePromotion(db, `/admin/quotes/${id}/promote`, new URLSearchParams({ undo: "1" }), "owner@example.com");
     expect(publicChoice(db, id).shown).toBe(false);
     expect(savePromotion(db, "/admin/quotes/1/edit", new URLSearchParams(), "x")).toBeNull();
+  });
+
+  it("filters the quote list by whether the public site shows a record, and by tag", () => {
+    const agents = addQuote("having become literally blind", true);
+    const persons = addQuote("Collaboration consists in generating possibility.", false);
+    db.prepare("INSERT INTO quote_tags (quote_id, tag, origin) VALUES (?, 'blindness', 'manual')").run(agents);
+    const ids = (shown?: boolean) => searchQuotes(db, { public: shown, limit: 100 }).quotes.map((q) => q.id);
+    expect(ids(false)).toContain(agents);
+    expect(ids(false)).not.toContain(persons);
+    expect(ids(true)).toContain(persons);
+    expect(ids(true)).not.toContain(agents);
+    expect(searchQuotes(db, { public: false }).total + searchQuotes(db, { public: true }).total).toBe(searchQuotes(db, {}).total);
+
+    // A record tagged private is held back too, for its own reason, and promoting doesn't override the tag.
+    const tagged = addQuote("Everyone deserves dignity.", false);
+    db.prepare("INSERT INTO quote_tags (quote_id, tag, origin) VALUES (?, 'Private', 'zotero')").run(tagged);
+    expect(ids(false)).toContain(tagged);
+    expect(publicChoice(db, tagged)).toMatchObject({ shown: false, held: "tagged" });
+    expect(publicChoice(db, agents)).toMatchObject({ shown: false, held: "agent" });
+    expect(publicChoice(db, persons)).toMatchObject({ shown: true, held: null });
+    promote(db, tagged, "owner@example.com");
+    expect(publicChoice(db, tagged)).toMatchObject({ shown: false, held: "tagged" });
+    expect(publicIds()).not.toContain(tagged);
+    expect(renderAdmin(db, `/admin/quotes/${tagged}`, new URLSearchParams())).not.toContain("<button>Promote</button>");
+
+    const all = renderAdmin(db, "/admin/quotes", new URLSearchParams({ public: "hidden" }))!;
+    expect(all).toContain("private: tagged</span>");
+    expect(all).toContain("private: agent's</span>");
+
+    const html = renderAdmin(db, "/admin/quotes", new URLSearchParams({ public: "hidden", tag: "blindness" }))!;
+    expect(html).toContain(`href="/admin/quotes/${agents}"`);
+    expect(html).not.toContain(`href="/admin/quotes/${persons}"`);
+    expect(html).toContain('<input name="tag" placeholder="Tag" value="blindness"');
+    expect(html).toContain('<input type="radio" name="public" value="hidden" checked> Private');
   });
 });

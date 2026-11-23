@@ -133,8 +133,9 @@ Its words are read for concepts:
    Goffman" gives two tags and the prose after the dash).
 4. `.mobbing` or `.false-self` anywhere in a note is always a tag.
 
-The note's other Zotero tags are kept as tags. A note tagged `private` stays private on the public site even
-when notes are shared (see [the public site](public-site.md#what-is-public)).
+The note's other Zotero tags are kept as tags. A note tagged `private` stays off the public site, even when notes
+are shared (see [Tagged private](public-site.md#tagged-private)). An import adds tags but never removes them, so taking
+`private` off in Zotero doesn't make the note public; take it off on the admin edit page.
 
 ## The store
 

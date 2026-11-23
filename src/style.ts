@@ -38,6 +38,9 @@ form.filters input[name="q"] { flex: 1 1 260px; }
 form.filters fieldset.include { flex: 1 0 100%; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; border: 1px solid var(--border); border-radius: 6px; margin: 0; padding: 4px 10px 6px; }
 form.filters fieldset.include legend { padding: 0 4px; color: var(--muted); font-size: 0.85rem; }
 form.filters fieldset.include label { display: flex; gap: 4px; align-items: center; }
+form.filters fieldset.public { display: flex; gap: 14px; align-items: center; border: 1px solid var(--border); border-radius: 6px; margin: 0; padding: 4px 10px 6px; }
+form.filters fieldset.public legend { padding: 0 4px; color: var(--muted); font-size: 0.85rem; }
+form.filters fieldset.public label { display: flex; gap: 4px; align-items: center; }
 form.edit label { display: block; margin: 14px 0 4px; font-weight: 600; }
 form.edit fieldset.suspects, form.edit fieldset.concepts { border: 1px solid var(--border); border-radius: 6px; margin: 14px 0 0; padding: 4px 12px 8px; }
 form.edit fieldset.suspects legend, form.edit fieldset.concepts legend { padding: 0 4px; color: var(--muted); font-size: 0.85rem; }
@@ -57,6 +60,7 @@ button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid
 blockquote { margin: 0 0 10px; padding: 12px 16px; background: var(--quote); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; white-space: pre-wrap; }
 .chip { display: inline-block; background: var(--chip); color: var(--chip-text); border-radius: 999px; padding: 1px 9px; font-size: 0.82rem; margin: 2px 4px 2px 0; text-decoration: none; }
 .kind { display: inline-block; border: 1px solid var(--border); color: var(--muted); border-radius: 4px; padding: 0 6px; font-size: 0.78rem; margin-right: 4px; }
+.kind.held { border-style: dashed; }
 .words { margin: 0 0 10px; padding: 12px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; white-space: pre-wrap; }
 .chip.plain { background: transparent; border: 1px dashed var(--border); color: var(--muted); }
 .flag { display: inline-block; background: var(--warn-bg); color: var(--warn); border-radius: 4px; padding: 0 6px; font-size: 0.78rem; margin-right: 4px; }

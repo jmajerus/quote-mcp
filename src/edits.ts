@@ -44,6 +44,11 @@ export function updateQuote(db: DB, args: UpdateQuoteArgs, actor: string) {
   const remove = clean(args.remove_tags);
   const both = add.filter((t) => remove.some((r) => r.toLowerCase() === t.toLowerCase()));
   if (both.length) throw new ToolError(`${both.join(", ")} is both added and removed.`);
+  // The private tag keeps a record off the public site, and putting a record there is a person's choice (src/selection.ts):
+  // an agent may add the tag, but only a person, on the admin edit page, takes it off.
+  if (remove.some((t) => t.toLowerCase() === "private")) {
+    throw new ToolError("The private tag is taken off only by a person, on the quote's admin edit page: it keeps the record off the public site.");
+  }
   if (!add.length && !remove.length && args.comment === undefined) throw new ToolError("Nothing to change: give comment, add_tags, or remove_tags.");
   const why = args.reason?.trim() || "update_quote";
   return db.transaction(() => {

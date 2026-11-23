@@ -5,7 +5,7 @@ import type { DB } from "./db.js";
 import { RELATION_LABEL, RELATION_TYPE, SEARCH_RELATIONS, ToolError, ftsQuery, relatedIds, type SearchRelation } from "./common.js";
 import type { ApiItem } from "./zotero.js";
 import { quoteLabel, readProvenance } from "./provenance.js";
-import { publicChoice } from "./selection.js";
+import { publicChoice, publicChooser } from "./selection.js";
 
 export { RELATION_LABEL, SEARCH_RELATIONS, ToolError, ftsQuery, type SearchRelation };
 
@@ -221,6 +221,8 @@ export interface SearchArgs {
   flag?: string;
   status?: "transcribed" | "verified" | "unparsed" | "any";
   kind?: "quote" | "note" | "any";
+  /** Only records the public site shows (true) or keeps off it (false), as the quote page's "Public site" row decides (src/selection.ts). */
+  public?: boolean;
   /** newest or oldest by number, or the best match first (a query's default; without one, oldest). */
   order?: "newest" | "oldest" | "match";
   limit?: number;
@@ -300,8 +302,20 @@ export function searchQuotes(db: DB, args: SearchArgs) {
   const limit = Math.min(Math.max(args.limit ?? 20, 1), 100);
   const offset = Math.max(args.offset ?? 0, 0);
   const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
-  const total = db.prepare(`SELECT COUNT(*) FROM ${from} ${clause}`).pluck().get(params) as number;
-  const rows = db.prepare(`SELECT q.*, ${snippet} AS snippet FROM ${from} ${clause} ORDER BY ${order} LIMIT ${limit} OFFSET ${offset}`).all(params) as Record<string, unknown>[];
+  let total: number;
+  let rows: Record<string, unknown>[];
+  if (args.public === undefined) {
+    total = db.prepare(`SELECT COUNT(*) FROM ${from} ${clause}`).pluck().get(params) as number;
+    rows = db.prepare(`SELECT q.*, ${snippet} AS snippet FROM ${from} ${clause} ORDER BY ${order} LIMIT ${limit} OFFSET ${offset}`).all(params) as Record<string, unknown>[];
+  } else {
+    // Whether a record is public is decided in code (its sentence bounds, who saved it, a promotion), not SQL:
+    // every match is judged, and the page is cut from those that pass.
+    const choose = publicChooser(db);
+    const all = db.prepare(`SELECT q.*, ${snippet} AS snippet FROM ${from} ${clause} ORDER BY ${order}`).all(params) as Record<string, unknown>[];
+    const kept = all.filter((r) => choose(r as never).shown === args.public);
+    total = kept.length;
+    rows = kept.slice(offset, offset + limit);
+  }
   // Which books this search is about, so a list of one book's quotes can offer another quote on it.
   const works = args.work
     ? db.prepare(`SELECT DISTINCT q.work_id FROM ${from} ${clause ? `${clause} AND` : "WHERE"} q.work_id IS NOT NULL`).pluck().all(params) as number[]

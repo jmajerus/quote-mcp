@@ -54,6 +54,9 @@ describe("update_quote", () => {
     const id = byText("Mobbing is an emotional assault");
     fails(() => updateQuote(db, { id }, "agent"), /Nothing to change/);
     fails(() => updateQuote(db, { id, add_tags: ["x"], remove_tags: ["X"] }, "agent"), /both added and removed/);
+    expect(updateQuote(db, { id, add_tags: ["private"] }, "agent").changed).toEqual(["+private"]);
+    fails(() => updateQuote(db, { id, remove_tags: ["Private"] }, "agent"), /only by a person/);
+    expect(tags(id)).toContain("private");
     const note = db.prepare("SELECT id FROM quotes WHERE kind = 'note' LIMIT 1").pluck().get() as number;
     fails(() => updateQuote(db, { id: note, comment: "rewritten" }, "agent"), /a person's own/);
     fails(() => updateQuote(db, { id: 99999, comment: "x" }, "agent"), /No quote or note 99999/);

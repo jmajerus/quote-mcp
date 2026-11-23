@@ -34,12 +34,19 @@ paragraphs make the front page's introduction. Each collection's introduction is
 
 - **Public:** at `catalogue`, concepts, sets, maps, collections, and works by title and author, with counts. At
   `quotes`, also each quote's text, place, work, and concepts, with its citation (Pandoc, BibTeX, CSL JSON).
-- **Only with `notes: all`:** notes, and the comments on quotes; a note tagged `private` in Zotero stays
-  private even then.
-- **Never:** unparsed quotes, flags, suspect words, plain tags, origins, history, the worklists, `/admin`, and
+- **Only with `notes: all`:** notes, and the comments on quotes.
+- **Never:** a record tagged `private`, even one a person promoted; unparsed quotes, flags, suspect words, plain tags, origins, history, the worklists, `/admin`, and
   `/mcp`.
 - **Only once a person promotes it:** a record a generative agent saved, and part of a sentence no person saved
   (below).
+
+### Tagged private
+
+A record tagged `private` stays off the public site, whatever the rules below say and even if a person promoted it. Tag it
+where you're working: on a note in Zotero (the next import brings the tag across), or in the tags on the quote's admin edit
+page. An agent can add the tag with `update_quote` but can't take it off. To make a record public again, take the tag off on
+its admin edit page; taking it off in Zotero doesn't, since an import adds tags but never removes them. The removal sticks
+through later imports.
 
 ### Chosen by a person
 

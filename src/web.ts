@@ -14,7 +14,7 @@ import { type ConceptSet, captureSpaces } from "./sets.js";
 import { includeChoice, includeValue } from "./common.js";
 import { CSS, esc } from "./style.js";
 import { describeProvenance } from "./provenance.js";
-import { type PublicChoice, promote } from "./selection.js";
+import { type Held, type PublicChoice, promote, publicChoice } from "./selection.js";
 import { type Synset, senseKey } from "./wordnet.js";
 
 /**
@@ -59,10 +59,17 @@ function tagChips(tags: { tag: string; concept: string | null }[]): string {
 
 type Listed = ReturnType<typeof searchQuotes>["quotes"][number];
 
-function quoteCard(q: Listed): string {
+const HELD_LABEL: Record<Held, string> = { tagged: "private: tagged", agent: "private: agent's", fragment: "private: part of a sentence" };
+
+/** A held-back record's badge, saying why the public site doesn't show it; nothing for a public one. */
+function heldBadge(p: PublicChoice): string {
+  return p.held ? `<span class="kind held" title="${esc(p.reason)}">${HELD_LABEL[p.held]}</span> ` : "";
+}
+
+function quoteCard(q: Listed, p: PublicChoice): string {
   const words = q.kind === "note" ? q.note ?? "" : q.text;
   const text = q.snippet ? emphasisHtml(q.snippet).replace(/«/g, "<mark>").replace(/»/g, "</mark>") : emphasisHtml(words.length > 420 ? `${words.slice(0, 420)}…` : words);
-  return `<div class="result"><p class="text"><a href="/admin/quotes/${q.id}"${q.generative ? ' title="Saved by a generative agent"' : ""}>${q.label}</a> ${q.kind === "note" ? '<span class="kind">note</span>' : ""}${text}</p>
+  return `<div class="result"><p class="text"><a href="/admin/quotes/${q.id}"${q.generative ? ' title="Saved by a generative agent"' : ""}>${q.label}</a> ${q.kind === "note" ? '<span class="kind">note</span> ' : ""}${heldBadge(p)}${text}</p>
 <div class="meta">${workLine(q.work, q.attribution)}${q.locator ? ` · ${esc(q.locator)}` : ""}${q.chapter_author ? ` · by ${esc(q.chapter_author)}` : ""}</div>
 <div>${tagChips(q.tags)}${q.flags.map((f) => `<span class="flag">${esc(f)}</span>`).join("")}</div></div>`;
 }
@@ -117,7 +124,7 @@ function quotesPage(db: DB, p: URLSearchParams): string {
   const number = quoteNumber(p);
   const params = {
     q: number === null ? p.get("q") ?? "" : String(number), concept: p.get("concept") ?? "", tag: p.get("tag") ?? "", author: p.get("author") ?? "", work: p.get("work") ?? "",
-    status: p.get("status") ?? "", kind: p.get("kind") ?? "", include: includeValue(exact, include), order: p.get("order") ?? "", offset: Number(p.get("offset") ?? 0),
+    status: p.get("status") ?? "", kind: p.get("kind") ?? "", public: p.get("public") ?? "", include: includeValue(exact, include), order: p.get("order") ?? "", offset: Number(p.get("offset") ?? 0),
   };
   // Newest first unless asked otherwise; the empty value keeps that default out of the URL.
   const order = params.order === "oldest" || params.order === "match" ? params.order : "newest";
@@ -126,28 +133,30 @@ function quotesPage(db: DB, p: URLSearchParams): string {
   try {
     const r = searchQuotes(db, {
       query: params.q || undefined, concept: params.concept || undefined, include, exact, tag: params.tag || undefined, author: params.author || undefined,
-      work: params.work || undefined, status: (params.status || undefined) as never, kind: (params.kind || undefined) as never, order, offset: params.offset, limit: 25,
+      work: params.work || undefined, status: (params.status || undefined) as never, kind: (params.kind || undefined) as never,
+      public: params.public === "shown" ? true : params.public === "hidden" ? false : undefined, order, offset: params.offset, limit: 25,
     });
     if (r.works?.length === 1) {
       const itemType = db.prepare("SELECT item_type FROM works WHERE id = ?").pluck().get(r.works[0]) as string | null;
       add = `<p class="sub"><a href="/admin/capture?work=${r.works[0]}">Add a quote</a> to this ${workLabel(itemType)}.</p>`;
     }
-    body = r.quotes.map(quoteCard).join("") + pager("/admin/quotes", { ...params, offset: undefined }, r.total, r.offset, r.limit);
+    body = r.quotes.map((q) => quoteCard(q, publicChoice(db, q.id))).join("") + pager("/admin/quotes", { ...params, offset: undefined }, r.total, r.offset, r.limit);
   } catch (error) {
     if (!(error instanceof ToolError)) throw error;
     body = `<p class="flag">${esc(error.message)}</p>`;
   }
   if (number !== null) body = `<p class="note">No quote or note ${number}. Words that match it:</p>${body}`;
-  const input = (name: "q" | "concept" | "author" | "work", label: string) => `<input name="${name}" placeholder="${esc(label)}" value="${esc(params[name])}" aria-label="${esc(label)}">`;
+  const input = (name: "q" | "concept" | "tag" | "author" | "work", label: string) => `<input name="${name}" placeholder="${esc(label)}" value="${esc(params[name])}" aria-label="${esc(label)}">`;
   const box = (kind: string, on: boolean) => `<label><input type="checkbox" data-include value="${kind}"${on ? " checked" : ""}> ${kind}</label>`;
   const boxes = box("exact", exact) + SEARCH_RELATIONS.map((kind) => box(kind, include.includes(kind))).join("");
   return page("Quotes", "quotes", `<h1>Quotes</h1>
-<form class="filters" method="get">${input("q", JUMP_PLACEHOLDER)}${input("concept", "Concept")}${input("author", "Author")}${input("work", "Work")}
+<form class="filters" method="get">${input("q", JUMP_PLACEHOLDER)}${input("concept", "Concept")}${input("tag", "Tag")}${input("author", "Author")}${input("work", "Work")}
 <select name="status" aria-label="Status"><option value="">Ready to use</option>${["transcribed", "unparsed", "any"].map((s) => `<option${params.status === s ? " selected" : ""}>${s}</option>`).join("")}</select>
 <select name="kind" aria-label="Kind"><option value="">Quotes and notes</option>${[["quote", "Quotes"], ["note", "Notes"]].map(([v, label]) => `<option value="${v}"${params.kind === v ? " selected" : ""}>${label}</option>`).join("")}</select>
+<fieldset class="public"><legend>Public site</legend>${[["", "All"], ["shown", "Public"], ["hidden", "Private"]].map(([v, label]) => `<label><input type="radio" name="public" value="${v}"${params.public === v ? " checked" : ""}> ${label}</label>`).join("")}</fieldset>
 <select name="order" aria-label="Order">${[["", "Newest first"], ["oldest", "Oldest first"], ["match", "Best match"]].map(([v, label]) => `<option value="${v}"${params.order === v ? " selected" : ""}>${label}</option>`).join("")}</select>
 <fieldset class="include"><legend>Include</legend><input type="hidden" name="include" id="include-value" value="${esc(params.include)}">${boxes}</fieldset>
-${params.tag ? `<input type="hidden" name="tag" value="${esc(params.tag)}">` : ""}<button>Search</button></form>
+<button>Search</button></form>
 <script>
 const includeForm = document.querySelector("form.filters");
 includeForm.addEventListener("submit", () => {
@@ -156,7 +165,7 @@ includeForm.addEventListener("submit", () => {
 });
 </script>
 <p class="note">Exact is the concept named. Narrower and broader follow the whole chain. Related and opposite add the concepts one step away.</p>
-${params.tag ? `<p class="note">Tag: ${esc(params.tag)} · <a href="/admin/quotes">clear</a></p>` : ""}${add}${body}`);
+${add}${body}`);
 }
 
 /** One proposal as a before-and-after table, with its reason and the command that accepts it. */
@@ -205,7 +214,8 @@ ${(q.history as { at: string; kind: string; reason: string }[]).map((h) => `<tr>
  */
 function publicRow(id: number, p: PublicChoice): string {
   const button = (undo: boolean, label: string) => `<form class="accept" method="post" action="/admin/quotes/${id}/promote">${undo ? '<input type="hidden" name="undo" value="1">' : ""}<button>${label}</button></form>`;
-  const action = p.promoted ? button(true, "Take back") : p.shown ? "" : button(false, "Promote");
+  // Promoting can't override the private tag, so a tagged record is offered no button (only Take back for an old promotion).
+  const action = p.promoted ? button(true, "Take back") : p.shown || p.held === "tagged" ? "" : button(false, "Promote");
   return `${p.shown ? "Shown" : "Not shown"}: ${esc(p.reason)}${p.promoted ? ` (${esc(p.promoted.at.slice(0, 10))})` : ""} ${action}`;
 }
 
@@ -271,7 +281,7 @@ function conceptPage(db: DB, slug: string, p: URLSearchParams): string {
 ${c.definition ? `<p>${esc(c.definition)}</p>` : ""}
 <div class="scroll"><table>${c.alt_labels.length ? `<tr><th>Also</th><td>${c.alt_labels.map(esc).join(", ")}</td></tr>` : ""}${relations}
 ${wordnetRow(c.wordnet, c.synset)}</table></div>
-<h2>Quotes, with narrower concepts</h2>${quotes.quotes.map(quoteCard).join("")}${pager(`/admin/concepts/${pathSegment(c.slug)}`, {}, quotes.total, quotes.offset, quotes.limit)}`);
+<h2>Quotes, with narrower concepts</h2>${quotes.quotes.map((q) => quoteCard(q, publicChoice(db, q.id))).join("")}${pager(`/admin/concepts/${pathSegment(c.slug)}`, {}, quotes.total, quotes.offset, quotes.limit)}`);
 }
 
 /** A word for a POSIX shell, in single quotes, so a tag copied from the worklist runs nothing. */
@@ -296,7 +306,7 @@ ${(r.proposals as (Proposal & { quote: { id: number; text: string; work: string 
     body = `<p>terminology-mcp holds the concepts. To make a tag one, propose it there with a quote as evidence; the quote's tag stays as it is, and resolves once the concept arrives.</p>
 <div class="scroll"><table><tr><th>Tag</th><th>Quotes</th><th>Propose</th></tr>${tags.map((t) => `<tr><td><a href="/admin/quotes${qs({ tag: t.tag, status: "any" })}">${esc(t.tag)}</a></td><td>${t.quotes}</td><td><code>quote-mcp propose ${esc(shellWord(t.tag))}</code></td></tr>`).join("")}</table></div>`;
   } else {
-    body = (r.quotes as Listed[]).map(quoteCard).join("");
+    body = (r.quotes as Listed[]).map((q) => quoteCard(q, publicChoice(db, q.id))).join("");
   }
   return page(QUEUE_LABEL[queue], "worklists", `<h1>${QUEUE_LABEL[queue]}</h1><p class="sub"><a href="/admin/worklists">All worklists</a></p>${body}${"tags" in r ? "" : pager(`/admin/worklists/${queue}`, {}, r.total, r.offset, r.limit)}`);
 }
