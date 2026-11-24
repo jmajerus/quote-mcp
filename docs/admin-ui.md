@@ -15,10 +15,12 @@ works, and concepts, when the store was last imported, and the worklists with ho
 `/admin/quotes`: search over quotes and notes, with the same filters as `search_quotes` (see
 [MCP tools](tools.md#search_quotes)): words, concept, tag, author, work, status, and kind, and whether the
 [public site](#a-quote-or-note) shows the record (**Public site**: **All**, **Public**, or **Private**, as the quote's **Public site** row decides). **Private**
-takes in every record the site holds back, and each one's badge says why: **private: tagged** (tagged `private`; see [Tagged private](public-site.md#tagged-private)),
-**private: agent's** (a generative agent saved it), **private: part of a sentence** (and no person saved it), or **private: not yet checked** (its text or anchor just
-changed, and the next import checks it). Hover
-over the badge for the whole reason. Promoting can't override the `private` tag, so a tagged record has no **Promote** button. A concept search
+takes in every record the site holds back. Each result's last line starts with two badges, ahead of its tags. **agent**
+says a generative agent saved it (its number is G874 rather than #874), and stays when the record is promoted. The other
+badge gives the public status: **promoted** once a person has promoted it, or **private** with why: **private: tagged**
+(tagged `private`; see [Tagged private](public-site.md#tagged-private)), **private: part of a sentence** (and no person
+saved it), **private: not yet checked** (its text or anchor just changed, and the next import checks it), or just
+**private** beside **agent**. Hover over a badge for the whole reason. Promoting can't override the `private` tag, so a tagged record has no **Promote** button. A concept search
 includes that concept. **Include** starts with **exact** on. Narrower, broader, related, and opposite
 stay off until checked, and **exact** can be turned off so the named concept drops out. Narrower and
 broader follow the whole chain. Related and opposite add the concepts one step away. The **Tag** box takes a tag as it's written on the quote (a tag chip

@@ -170,7 +170,12 @@ describe("the public site's choice", () => {
 
     const all = renderAdmin(db, "/admin/quotes", new URLSearchParams({ public: "hidden" }))!;
     expect(all).toContain("private: tagged</span>");
-    expect(all).toContain("private: agent's</span>");
+    expect(all).toContain('title="Saved by a generative agent">agent</span><span class="kind held"');
+    // Promoted, an agent's record still says an agent saved it, and that a person promoted it.
+    promote(db, agents, "owner@example.com");
+    const shown = renderAdmin(db, "/admin/quotes", new URLSearchParams({ public: "shown", tag: "blindness" }))!;
+    expect(shown).toMatch(/>agent<\/span><span class="kind" title="Promoted by owner@example.com.">promoted<\/span>/);
+    promote(db, agents, "owner@example.com", { undo: true });
 
     const html = renderAdmin(db, "/admin/quotes", new URLSearchParams({ public: "hidden", tag: "blindness" }))!;
     expect(html).toContain(`href="/admin/quotes/${agents}"`);

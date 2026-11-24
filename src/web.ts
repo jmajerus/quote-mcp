@@ -59,19 +59,26 @@ function tagChips(tags: { tag: string; concept: string | null }[]): string {
 
 type Listed = ReturnType<typeof searchQuotes>["quotes"][number];
 
-const HELD_LABEL: Record<Held, string> = { tagged: "private: tagged", agent: "private: agent's", fragment: "private: part of a sentence", unchecked: "private: not yet checked" };
+/** For an agent's record the agent badge already says why, so its status reads just "private". */
+const HELD_LABEL: Record<Held, string> = { tagged: "private: tagged", agent: "private", fragment: "private: part of a sentence", unchecked: "private: not yet checked" };
 
-/** A held-back record's badge, saying why the public site doesn't show it; nothing for a public one. */
-function heldBadge(p: PublicChoice): string {
-  return p.held ? `<span class="kind held" title="${esc(p.reason)}">${HELD_LABEL[p.held]}</span> ` : "";
+/**
+ * Who saved a record and whether the public site shows it, as two separate badges: "agent" stays when the record is
+ * promoted, and the status reads "private" with its reason, or "promoted". A public record no one promoted has neither.
+ */
+function statusBadges(q: Listed, p: PublicChoice): string {
+  const agent = q.generative ? '<span class="kind" title="Saved by a generative agent">agent</span>' : "";
+  const status = p.held ? `<span class="kind held" title="${esc(p.reason)}">${HELD_LABEL[p.held]}</span>`
+    : p.promoted ? `<span class="kind" title="${esc(p.reason)}">promoted</span>` : "";
+  return agent + status;
 }
 
 function quoteCard(q: Listed, p: PublicChoice): string {
   const words = q.kind === "note" ? q.note ?? "" : q.text;
   const text = q.snippet ? emphasisHtml(q.snippet).replace(/«/g, "<mark>").replace(/»/g, "</mark>") : emphasisHtml(words.length > 420 ? `${words.slice(0, 420)}…` : words);
-  return `<div class="result"><p class="text"><a href="/admin/quotes/${q.id}"${q.generative ? ' title="Saved by a generative agent"' : ""}>${q.label}</a> ${q.kind === "note" ? '<span class="kind">note</span> ' : ""}${heldBadge(p)}${text}</p>
+  return `<div class="result"><p class="text"><a href="/admin/quotes/${q.id}"${q.generative ? ' title="Saved by a generative agent"' : ""}>${q.label}</a> ${q.kind === "note" ? '<span class="kind">note</span> ' : ""}${text}</p>
 <div class="meta">${workLine(q.work, q.attribution)}${q.locator ? ` · ${esc(q.locator)}` : ""}${q.chapter_author ? ` · by ${esc(q.chapter_author)}` : ""}</div>
-<div>${tagChips(q.tags)}${q.flags.map((f) => `<span class="flag">${esc(f)}</span>`).join("")}</div></div>`;
+<div>${statusBadges(q, p)}${tagChips(q.tags)}${q.flags.map((f) => `<span class="flag">${esc(f)}</span>`).join("")}</div></div>`;
 }
 
 function pager(base: string, params: Record<string, unknown>, total: number, offset: number, limit: number): string {
