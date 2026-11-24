@@ -7,7 +7,7 @@ import type { DB } from "../src/db.js";
 import { readIntro } from "../src/intro.js";
 import { stamp } from "../src/provenance.js";
 import { getQuote, searchQuotes } from "../src/queries.js";
-import { promote, publicChoice, sentenceBounds } from "../src/selection.js";
+import { promote, publicChoice, refreshSentences, sentenceBounds } from "../src/selection.js";
 import { buildSnapshot } from "../src/snapshot.js";
 import { renderAdmin, savePromotion } from "../src/web.js";
 import { makeStore } from "./fixture.js";
@@ -52,6 +52,7 @@ function addQuote(text: string, generative: boolean | null, anchor?: { prefix: s
     VALUES ('quote', ?, ?, ?, 'page', '12', 'verified', 'A', ?, ?, ?) RETURNING id`).pluck()
     .get(work, text, text.toLowerCase(), at, at, JSON.stringify(stamp(generative === true ? "mcp" : generative === false ? "capture" : "zotero", generative, at, null))) as number;
   if (anchor) db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, raw, imported_at) VALUES ('agent', ?, ?, ?, ?)").run(`r${id}`, id, JSON.stringify({ anchor: { ...anchor, text } }), at);
+  refreshSentences(db);
   return id;
 }
 
@@ -119,6 +120,23 @@ describe("the public site's choice", () => {
     savePromotion(db, `/admin/quotes/${id}/promote`, new URLSearchParams({ undo: "1" }), "owner@example.com");
     expect(publicChoice(db, id).shown).toBe(false);
     expect(savePromotion(db, "/admin/quotes/1/edit", new URLSearchParams(), "x")).toBeNull();
+  });
+
+  it("keeps each quote's sentence check, clears it when the text or anchor changes, and holds an unchecked quote back", () => {
+    const id = addQuote("Collaboration consists in generating possibility.", null, { prefix: "here. ", suffix: " The" });
+    expect(publicChoice(db, id)).toMatchObject({ shown: true, sentence: { starts: true, ends: true, judged_by: "source" } });
+
+    // The book's text before it changes: the words now run on from a sentence already begun.
+    db.prepare("UPDATE quote_origins SET raw = ? WHERE quote_id = ?").run(JSON.stringify({ anchor: { prefix: "In other words, ", suffix: " The" } }), id);
+    expect(publicChoice(db, id)).toMatchObject({ shown: false, held: "unchecked", sentence: null });
+    // The snapshot, built from a store open for writing, checks it first, and leaves it out as part of a sentence.
+    expect(publicIds()).not.toContain(id);
+    expect(publicChoice(db, id)).toMatchObject({ shown: false, held: "fragment", sentence: { starts: false } });
+
+    db.prepare("UPDATE quotes SET text = 'Consists in generating possibility.' WHERE id = ?").run(id);
+    expect(publicChoice(db, id).held).toBe("unchecked");
+    expect(refreshSentences(db)).toBe(1);
+    expect(refreshSentences(db, { all: true })).toBe(0);
   });
 
   it("filters the quote list by whether the public site shows a record, and by tag", () => {

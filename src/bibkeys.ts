@@ -6,6 +6,7 @@ import { citekeyOf } from "./csl.js";
 import { type DB, now } from "./db.js";
 import { citekeysIn } from "./public.js";
 import { fullTitle, normalizedTitle, quoteKey, shareAuthor, yearOf } from "./text.js";
+import { refreshSentences } from "./selection.js";
 
 /**
  * One-time migration of `[bib]Ryan1991[/bib]` markers the retired Drupal site left in stored quotes,
@@ -257,6 +258,7 @@ export function canonicalizeCitekeys(db: DB, { dryRun = false, catalogue = [], a
       for (const change of refreshed.values()) report.refreshed += change.count;
       report.keys = [...markers.values(), ...refreshed.values()].sort((a, b) => b.count - a.count || a.from.localeCompare(b.from));
       if (dryRun) throw ROLLBACK;
+      if (report.quotes) refreshSentences(db);
       if (report.quotes) db.exec(`DELETE FROM quotes_fts;
         INSERT INTO quotes_fts (rowid, text, comment, tags)
         SELECT q.id, q.text, COALESCE(q.comment, ''), COALESCE((SELECT group_concat(tag, ' ') FROM quote_tags WHERE quote_id = q.id), '') FROM quotes q;`);

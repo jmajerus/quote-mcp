@@ -1,7 +1,6 @@
 import type { DB } from "./db.js";
 import { now } from "./db.js";
 import { ToolError } from "./common.js";
-import { readProvenance } from "./provenance.js";
 
 /**
  * Which records the public site shows without a person choosing them (docs/public-site.md, "Chosen by a person").
@@ -71,8 +70,8 @@ export const isWholeSentence = (b: SentenceBounds) => b.starts && b.ends;
 
 export interface Promotion { by: string; at: string; reason: string | null }
 
-/** Why a record is held back: tagged private, saved by a generative agent, or part of a sentence nobody chose. */
-export type Held = "tagged" | "agent" | "fragment";
+/** Why a record is held back: tagged private, saved by a generative agent, part of a sentence nobody chose, or not yet checked. */
+export type Held = "tagged" | "agent" | "fragment" | "unchecked";
 
 export interface PublicChoice {
   /** Whether the public site shows it (at the quotes level, and for a note only with notes: all). */
@@ -82,48 +81,84 @@ export interface PublicChoice {
   held: Held | null;
   /** Set when a person promoted it, and hasn't taken that back. */
   promoted: Promotion | null;
-  /** For a quote: whether its words are a whole sentence, and how that was judged. */
+  /** For a quote: whether its words are a whole sentence, and how that was judged; null for a note, or until it's checked. */
   sentence: SentenceBounds | null;
 }
 
-interface Row { id: number; kind: string; text: string; provenance: unknown }
+// --- The choice, in SQL ----------------------------------------------------------------------------
+//
+// The choice is made in SQL, so a search can filter on it, count, and page in the store, and the snapshot, the admin
+// pages, and the CLI read the one rule. Whether a quote's words are a whole sentence needs the book text around it,
+// so that is worked out in code and kept in quotes.sentence: triggers (src/db.ts) clear it when the text or the
+// anchor changes, and refreshSentences fills it again. A quote not yet checked is held back, never shown by mistake.
 
-/** Decides for each record; built once per snapshot, so its statements are prepared once. */
-export function publicChooser(db: DB): (q: Row) => PublicChoice {
+/** The provenance stamp's generative: 1, 0, or NULL when nothing says. */
+const GENERATIVE = "(CASE WHEN json_valid(q.provenance) AND json_extract(q.provenance, '$.v') = 1 THEN json_extract(q.provenance, '$.generative') END)";
+const PROMOTED = `(SELECT h.kind FROM history h WHERE h.quote_id = q.id AND h.kind IN ('promoted', 'unpromoted') ORDER BY h.id DESC LIMIT 1) = 'promoted'`;
+
+/** Why the record q is held back ('tagged', 'agent', 'fragment', or 'unchecked'), or NULL when the public site shows it. */
+export const HELD_SQL = `(CASE
+  WHEN EXISTS (SELECT 1 FROM quote_tags p WHERE p.quote_id = q.id AND p.tag = 'private' COLLATE NOCASE) THEN 'tagged'
+  WHEN ${PROMOTED} THEN NULL
+  WHEN ${GENERATIVE} = 1 THEN 'agent'
+  WHEN q.kind = 'quote' AND q.sentence IS NULL THEN 'unchecked'
+  WHEN q.kind = 'quote' AND NOT (json_extract(q.sentence, '$.starts') AND json_extract(q.sentence, '$.ends')) AND ${GENERATIVE} IS NOT 0 THEN 'fragment'
+  END)`;
+
+/**
+ * Works out whether each quote's words are a whole sentence, from the anchor's book text where there is one, and keeps
+ * it in quotes.sentence. Fills the quotes not yet checked, or with `all` checks every quote again. Returns how many changed.
+ */
+export function refreshSentences(db: DB, o: { all?: boolean } = {}): number {
+  const rows = db.prepare(`SELECT q.id, q.text, q.sentence, (SELECT json_extract(o.raw, '$.anchor') FROM quote_origins o WHERE o.quote_id = q.id
+      AND o.kind IN ('agent', 'corpus') AND json_extract(o.raw, '$.anchor') IS NOT NULL ORDER BY o.imported_at DESC LIMIT 1) AS anchor
+    FROM quotes q WHERE q.kind = 'quote'${o.all ? "" : " AND q.sentence IS NULL"}`).all() as { id: number; text: string; sentence: string | null; anchor: string | null }[];
+  const set = db.prepare("UPDATE quotes SET sentence = ? WHERE id = ?");
+  let changed = 0;
+  db.transaction(() => {
+    for (const r of rows) {
+      const next = JSON.stringify(sentenceBounds(r.text, r.anchor ? (JSON.parse(r.anchor) as Context) : null));
+      if (next !== r.sentence) {
+        set.run(next, r.id);
+        changed++;
+      }
+    }
+  })();
+  return changed;
+}
+
+/** Decides for each record, from HELD_SQL, and says why; built once, so its statements are prepared once. */
+export function publicChooser(db: DB): (q: { id: number }) => PublicChoice {
+  const read = db.prepare(`SELECT ${HELD_SQL} AS held, ${GENERATIVE} AS generative, q.sentence FROM quotes q WHERE q.id = ?`);
   const lastPromotion = db.prepare(`SELECT kind, actor, at, reason FROM history WHERE quote_id = ? AND kind IN ('promoted', 'unpromoted')
     ORDER BY id DESC LIMIT 1`);
-  const taggedPrivate = db.prepare("SELECT 1 FROM quote_tags WHERE quote_id = ? AND tag = 'private' COLLATE NOCASE").pluck();
-  const anchorOf = db.prepare(`SELECT json_extract(raw, '$.anchor') FROM quote_origins WHERE quote_id = ? AND kind IN ('agent', 'corpus')
-    AND json_extract(raw, '$.anchor') IS NOT NULL ORDER BY imported_at DESC LIMIT 1`).pluck();
   return (q) => {
+    const row = read.get(q.id) as { held: Held | null; generative: number | null; sentence: string | null } | undefined;
+    if (!row) throw new ToolError(`No quote or note ${q.id}.`);
     const last = lastPromotion.get(q.id) as { kind: string; actor: string | null; at: string; reason: string | null } | undefined;
     const promoted = last?.kind === "promoted" ? { by: last.actor ?? "unknown", at: last.at, reason: last.reason } : null;
-    let sentence: SentenceBounds | null = null;
-    if (q.kind === "quote") {
-      const raw = anchorOf.get(q.id) as string | undefined;
-      sentence = sentenceBounds(q.text, raw ? (JSON.parse(raw) as Context) : null);
+    const sentence = row.sentence ? (JSON.parse(row.sentence) as SentenceBounds) : null;
+    const held = (reason: string): PublicChoice => ({ shown: false, held: row.held, reason, promoted, sentence });
+    switch (row.held) {
+      case "tagged":
+        return held(`Tagged private: it stays off the public site${promoted ? ", though a person promoted it" : ""}.`);
+      case "agent":
+        return held("Saved by a generative agent: it stays off the public site until a person promotes it.");
+      case "unchecked":
+        return held("Not yet checked for whole sentences: it stays off the public site until the next import checks it.");
+      case "fragment": {
+        const part = !sentence!.starts && !sentence!.ends ? "begins and ends mid-sentence" : !sentence!.starts ? "begins mid-sentence" : "ends mid-sentence";
+        return held(`Part of a sentence (it ${part}, judged from ${sentence!.judged_by === "source" ? "the book's text" : "its words"}), and not saved by a person: it stays off the public site until a person promotes it.`);
+      }
     }
-    if (taggedPrivate.get(q.id)) {
-      return { shown: false, held: "tagged", reason: `Tagged private: it stays off the public site${promoted ? ", though a person promoted it" : ""}.`, promoted, sentence };
-    }
-    if (promoted) return { shown: true, held: null, reason: `Promoted by ${promoted.by}.`, promoted, sentence };
-    const generative = readProvenance(q.provenance)?.generative ?? null;
-    if (generative === true) {
-      return { shown: false, held: "agent", reason: "Saved by a generative agent: it stays off the public site until a person promotes it.", promoted, sentence };
-    }
-    if (sentence && !isWholeSentence(sentence) && generative !== false) {
-      const part = !sentence.starts && !sentence.ends ? "begins and ends mid-sentence" : !sentence.starts ? "begins mid-sentence" : "ends mid-sentence";
-      return { shown: false, held: "fragment", reason: `Part of a sentence (it ${part}, judged from ${sentence.judged_by === "source" ? "the book's text" : "its words"}), and not saved by a person: it stays off the public site until a person promotes it.`, promoted, sentence };
-    }
-    return { shown: true, held: null, reason: generative === false ? "Saved by a person." : "A whole sentence, not saved by an agent.", promoted, sentence };
+    const reason = promoted ? `Promoted by ${promoted.by}.` : row.generative === 0 ? "Saved by a person." : "A whole sentence, not saved by an agent.";
+    return { shown: true, held: null, reason, promoted, sentence };
   };
 }
 
 /** The public choice for one record. */
 export function publicChoice(db: DB, id: number): PublicChoice {
-  const q = db.prepare("SELECT id, kind, text, provenance FROM quotes WHERE id = ?").get(id) as Row | undefined;
-  if (!q) throw new ToolError(`No quote or note ${id}.`);
-  return publicChooser(db)(q);
+  return publicChooser(db)({ id });
 }
 
 /**

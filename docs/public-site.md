@@ -66,6 +66,11 @@ mid-sentence, and a capital after a comma is a name, not a sentence's start. Whe
 passage begins a page), or there's no anchor (a paper book's quote), the words' shape decides that side: a capital or number
 first, a stop last, no ellipsis.
 
+The answer is kept with each quote (schema 10), so the choice is made in SQL: the admin search filters, counts, and pages on
+it, and the snapshot reads the same rule. Changing a quote's text or its anchor clears the answer (database triggers, whatever
+made the change), the change's own command works it out again, and every import checks every quote again. A quote not yet
+checked stays off the public site until it is.
+
 To promote a record, use the **Promote** button beside **Public site** on its admin page, or
 `quote-mcp promote <id>,…`. Either records a `promoted` history entry under your login; **Take back** (or `--undo`)
 records `unpromoted`, and the record follows the rules above again. No MCP tool promotes. `quote-mcp promote` with no ids

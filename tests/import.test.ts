@@ -339,7 +339,8 @@ describe("schema", () => {
     try {
       const file = path.join(dir, "quotes.db");
       const v6 = openDb(file);
-      // As schema 6 made it: no chapter kind.
+      // As schema 6 made it: no chapter kind, and no sentence triggers.
+      for (const name of v6.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'").pluck().all()) v6.exec(`DROP TRIGGER ${name as string}`);
       v6.pragma("foreign_keys = OFF");
       v6.pragma("legacy_alter_table = ON");
       const sql = (v6.prepare("SELECT sql FROM sqlite_master WHERE name = 'quotes'").pluck().get() as string).replace("'page', 'kindle', 'chapter', 'none'", "'page', 'kindle', 'none'");

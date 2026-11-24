@@ -5,6 +5,7 @@ import { rebuildSearch } from "./import.js";
 import { PAGE_REFERENCE, type ParsedNote } from "./parse.js";
 import { citekeysIn } from "./public.js";
 import { quoteKey } from "./text.js";
+import { refreshSentences } from "./selection.js";
 
 /**
  * Repairs typed quotes from their stored raw, by the pattern they were typed to (src/parse.ts). Only a clean reading is
@@ -156,6 +157,7 @@ export function repairQuotes(db: DB, { dryRun, only, actor = "repair" }: { dryRu
         result.repairs.push(repair);
       }
       if (result.repairs.length) rebuildSearch(db);
+      if (result.repairs.length) refreshSentences(db);
       if (dryRun) throw ROLLBACK;
     }).immediate();
   } catch (error) {

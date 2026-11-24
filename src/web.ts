@@ -59,7 +59,7 @@ function tagChips(tags: { tag: string; concept: string | null }[]): string {
 
 type Listed = ReturnType<typeof searchQuotes>["quotes"][number];
 
-const HELD_LABEL: Record<Held, string> = { tagged: "private: tagged", agent: "private: agent's", fragment: "private: part of a sentence" };
+const HELD_LABEL: Record<Held, string> = { tagged: "private: tagged", agent: "private: agent's", fragment: "private: part of a sentence", unchecked: "private: not yet checked" };
 
 /** A held-back record's badge, saying why the public site doesn't show it; nothing for a public one. */
 function heldBadge(p: PublicChoice): string {

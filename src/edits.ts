@@ -5,6 +5,7 @@ import { type Suspect, addKnownWords, dictionaryForm, loadDictionary, suspectTok
 import { withoutEmphasis } from "./public.js";
 import { type ProposalFields as Fields, conceptLabels, getQuote, locatorText, proposal } from "./queries.js";
 import { quoteKey } from "./text.js";
+import { refreshSentences } from "./selection.js";
 
 /**
  * Agents' changes to quotes already saved (docs/dev-briefs/holdings-and-quotes.md §2.5; PLAN.md "Quoted text
@@ -218,6 +219,7 @@ function applyFields(db: DB, q: Record<string, unknown>, c: Fields & { comment?:
   db.prepare("UPDATE quotes SET flags = ?, edited = 1, updated_at = ?, updated_by = ? WHERE id = ?").run(JSON.stringify(flags), stamp, editor, id);
   if (c.text !== undefined) settleOcr(db, id);
   refreshFts(db, id);
+  refreshSentences(db);
 }
 
 /** The word list plus words a person has accepted, or null when there is no word list to check against. */

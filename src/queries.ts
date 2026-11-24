@@ -5,7 +5,7 @@ import type { DB } from "./db.js";
 import { RELATION_LABEL, RELATION_TYPE, SEARCH_RELATIONS, ToolError, ftsQuery, relatedIds, type SearchRelation } from "./common.js";
 import type { ApiItem } from "./zotero.js";
 import { quoteLabel, readProvenance } from "./provenance.js";
-import { publicChoice, publicChooser } from "./selection.js";
+import { HELD_SQL, publicChoice } from "./selection.js";
 
 export { RELATION_LABEL, SEARCH_RELATIONS, ToolError, ftsQuery, type SearchRelation };
 
@@ -295,6 +295,8 @@ export function searchQuotes(db: DB, args: SearchArgs) {
     where.push("q.status = @status");
     params.status = args.status;
   } else if (!args.status) where.push("q.status != 'unparsed'");
+  // The public site's choice, the same SQL the snapshot reads (src/selection.ts).
+  if (args.public !== undefined) where.push(`${HELD_SQL} IS ${args.public ? "" : "NOT "}NULL`);
 
   if (args.order === "newest") order = "q.id DESC";
   else if (args.order === "oldest") order = "q.id";
@@ -302,25 +304,8 @@ export function searchQuotes(db: DB, args: SearchArgs) {
   const limit = Math.min(Math.max(args.limit ?? 20, 1), 100);
   const offset = Math.max(args.offset ?? 0, 0);
   const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
-  let total: number;
-  let rows: Record<string, unknown>[];
-  if (args.public === undefined) {
-    total = db.prepare(`SELECT COUNT(*) FROM ${from} ${clause}`).pluck().get(params) as number;
-    rows = db.prepare(`SELECT q.*, ${snippet} AS snippet FROM ${from} ${clause} ORDER BY ${order} LIMIT ${limit} OFFSET ${offset}`).all(params) as Record<string, unknown>[];
-  } else {
-    // Whether a record is public is decided in code (its sentence bounds, who saved it, a promotion), not SQL:
-    // every match is judged, from only the columns the chooser reads, and whole rows (with snippets) are read for the page alone.
-    // A few thousand records take milliseconds; a store far bigger would want the choice kept in a column.
-    const choose = publicChooser(db);
-    const all = db.prepare(`SELECT q.id, q.kind, q.text, q.provenance FROM ${from} ${clause} ORDER BY ${order}`).all(params) as { id: number; kind: string; text: string; provenance: unknown }[];
-    const kept = all.filter((r) => choose(r).shown === args.public).map((r) => r.id);
-    total = kept.length;
-    const ids = kept.slice(offset, offset + limit);
-    const byId = new Map((ids.length
-      ? db.prepare(`SELECT q.*, ${snippet} AS snippet FROM ${from} ${clause ? `${clause} AND` : "WHERE"} q.id IN (${ids.join(",")})`).all(params) as Record<string, unknown>[]
-      : []).map((r) => [r.id as number, r]));
-    rows = ids.map((id) => byId.get(id)!);
-  }
+  const total = db.prepare(`SELECT COUNT(*) FROM ${from} ${clause}`).pluck().get(params) as number;
+  const rows = db.prepare(`SELECT q.*, ${snippet} AS snippet FROM ${from} ${clause} ORDER BY ${order} LIMIT ${limit} OFFSET ${offset}`).all(params) as Record<string, unknown>[];
   // Which books this search is about, so a list of one book's quotes can offer another quote on it.
   const works = args.work
     ? db.prepare(`SELECT DISTINCT q.work_id FROM ${from} ${clause ? `${clause} AND` : "WHERE"} q.work_id IS NOT NULL`).pluck().all(params) as number[]
