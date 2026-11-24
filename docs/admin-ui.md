@@ -26,7 +26,7 @@ stay off until checked, and **exact** can be turned off so the named concept dro
 broader follow the whole chain. Related and opposite add the concepts one step away. The **Tag** box takes a tag as it's written on the quote (a tag chip
 links there too). **Order** lists the newest first (the highest number) by default; **Oldest first**
 and **Best match** (for a word search, the closest match first) are the others, and the choice carries across pages. Each result shows its work (with a link that opens the item in Zotero), its
-place, its tags (concepts first, as chips; then the tags that aren't concepts, dashed), its flags, and its status badges at the right (below). When the list is
+place, its tags (concepts first, as chips; then the tags that aren't concepts, dashed), its flags, and its status badges at the right (described above). When the list is
 one work, **Add a quote** opens the [capture page](#capturing-a-quote) on that work. The wording follows the work's type: a journal article, a book, or a work when the type has no ordinary name.
 
 A number alone in the words box, such as `848` or `#848`, with no concept, author, or work, goes straight
