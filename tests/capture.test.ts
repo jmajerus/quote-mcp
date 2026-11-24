@@ -212,6 +212,20 @@ describe("add_quote", () => {
     expect(fresh).toMatchObject({ anchored: true });
     expect(corpus.verified.length).toBe(2);
 
+    // The anchor verified again is the one kept, and the sentence check reads its book text.
+    const verify = corpus.verify.bind(corpus);
+    corpus.verify = async (r) => {
+      const v = await verify(r);
+      return v.match && corpus.verified.length > 3 ? { ...v, anchor: { ...v.anchor, sha256: "def", prefix: "In other words, ", suffix: " The" } } : v;
+    };
+    corpus.anchorErrors = [new CorpusError(409, "stale-anchor", { error: "stale-anchor" })];
+    const moved = saved(await addQuote(db, { work: "main:42", text: "It begins when an individual" }, options())).id;
+    const kept = JSON.parse(db.prepare("SELECT raw FROM quote_origins WHERE quote_id = ? AND kind = 'agent'").pluck().get(moved) as string) as { anchor: unknown };
+    expect(kept.anchor).toEqual(corpus.anchors.get(moved));
+    expect(kept.anchor).toMatchObject({ sha256: "def" });
+    expect(JSON.parse(db.prepare("SELECT sentence FROM quotes WHERE id = ?").pluck().get(moved) as string)).toMatchObject({ starts: false, judged_by: "source" });
+    corpus.verify = verify;
+
     corpus.anchorErrors = [0, 1, 2].map(() => new CorpusError(0, "unreachable"));
     const pending = await addQuote(db, { work: "main:42", text: "the target of disrespectful" }, options());
     const id = saved(pending).id;

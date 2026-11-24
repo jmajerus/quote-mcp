@@ -8,6 +8,7 @@ import { type ParsedNote, noteText, parseNote, readLocator } from "./parse.js";
 import { fullTitle, normalizedTitle, quoteKey, shareAuthor, slugify, yearOf } from "./text.js";
 import type { ApiItem } from "./zotero.js";
 import { stamp as provenanceStamp } from "./provenance.js";
+import { refreshSentences } from "./selection.js";
 
 /**
  * The import: the old site's concepts, works, and quotes, then the quote notes in the Zotero mirror,
@@ -380,6 +381,8 @@ export function runImport(db: DB, opts: ImportOptions): ImportStats {
     }
     stats.unresolvedTags = (db.prepare("SELECT tag, COUNT(*) AS n FROM quote_tags WHERE concept_id IS NULL GROUP BY tag COLLATE NOCASE ORDER BY n DESC, tag").all() as { tag: string; n: number }[])
       .map((r) => [r.tag, r.n]);
+    // Every quote's sentence check again, not only those a change cleared: a sweep that puts right anything a writer missed.
+    refreshSentences(db, { all: true });
   })();
   return stats;
 }

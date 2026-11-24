@@ -5,7 +5,7 @@ import type { DB } from "./db.js";
 import { RELATION_LABEL, RELATION_TYPE, SEARCH_RELATIONS, ToolError, ftsQuery, relatedIds, type SearchRelation } from "./common.js";
 import type { ApiItem } from "./zotero.js";
 import { quoteLabel, readProvenance } from "./provenance.js";
-import { publicChoice } from "./selection.js";
+import { HELD_SQL, publicChoice } from "./selection.js";
 
 export { RELATION_LABEL, SEARCH_RELATIONS, ToolError, ftsQuery, type SearchRelation };
 
@@ -221,6 +221,8 @@ export interface SearchArgs {
   flag?: string;
   status?: "transcribed" | "verified" | "unparsed" | "any";
   kind?: "quote" | "note" | "any";
+  /** Only records the public site shows (true) or keeps off it (false), as the quote page's "Public site" row decides (src/selection.ts). */
+  public?: boolean;
   /** newest or oldest by number, or the best match first (a query's default; without one, oldest). */
   order?: "newest" | "oldest" | "match";
   limit?: number;
@@ -293,6 +295,8 @@ export function searchQuotes(db: DB, args: SearchArgs) {
     where.push("q.status = @status");
     params.status = args.status;
   } else if (!args.status) where.push("q.status != 'unparsed'");
+  // The public site's choice, the same SQL the snapshot reads (src/selection.ts).
+  if (args.public !== undefined) where.push(`${HELD_SQL} IS ${args.public ? "" : "NOT "}NULL`);
 
   if (args.order === "newest") order = "q.id DESC";
   else if (args.order === "oldest") order = "q.id";

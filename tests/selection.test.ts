@@ -6,8 +6,8 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import type { DB } from "../src/db.js";
 import { readIntro } from "../src/intro.js";
 import { stamp } from "../src/provenance.js";
-import { getQuote } from "../src/queries.js";
-import { promote, publicChoice, sentenceBounds } from "../src/selection.js";
+import { getQuote, searchQuotes } from "../src/queries.js";
+import { promote, publicChoice, refreshSentences, sentenceBounds } from "../src/selection.js";
 import { buildSnapshot } from "../src/snapshot.js";
 import { renderAdmin, savePromotion } from "../src/web.js";
 import { makeStore } from "./fixture.js";
@@ -52,6 +52,7 @@ function addQuote(text: string, generative: boolean | null, anchor?: { prefix: s
     VALUES ('quote', ?, ?, ?, 'page', '12', 'verified', 'A', ?, ?, ?) RETURNING id`).pluck()
     .get(work, text, text.toLowerCase(), at, at, JSON.stringify(stamp(generative === true ? "mcp" : generative === false ? "capture" : "zotero", generative, at, null))) as number;
   if (anchor) db.prepare("INSERT INTO quote_origins (kind, ref, quote_id, raw, imported_at) VALUES ('agent', ?, ?, ?, ?)").run(`r${id}`, id, JSON.stringify({ anchor: { ...anchor, text } }), at);
+  refreshSentences(db);
   return id;
 }
 
@@ -119,5 +120,62 @@ describe("the public site's choice", () => {
     savePromotion(db, `/admin/quotes/${id}/promote`, new URLSearchParams({ undo: "1" }), "owner@example.com");
     expect(publicChoice(db, id).shown).toBe(false);
     expect(savePromotion(db, "/admin/quotes/1/edit", new URLSearchParams(), "x")).toBeNull();
+  });
+
+  it("keeps each quote's sentence check, clears it when the text or anchor changes, and holds an unchecked quote back", () => {
+    const id = addQuote("Collaboration consists in generating possibility.", null, { prefix: "here. ", suffix: " The" });
+    expect(publicChoice(db, id)).toMatchObject({ shown: true, sentence: { starts: true, ends: true, judged_by: "source" } });
+
+    // The book's text before it changes: the words now run on from a sentence already begun.
+    db.prepare("UPDATE quote_origins SET raw = ? WHERE quote_id = ?").run(JSON.stringify({ anchor: { prefix: "In other words, ", suffix: " The" } }), id);
+    expect(publicChoice(db, id)).toMatchObject({ shown: false, held: "unchecked", sentence: null });
+    // The snapshot, built from a store open for writing, checks it first, and leaves it out as part of a sentence.
+    expect(publicIds()).not.toContain(id);
+    expect(publicChoice(db, id)).toMatchObject({ shown: false, held: "fragment", sentence: { starts: false } });
+
+    db.prepare("UPDATE quotes SET text = 'Consists in generating possibility.' WHERE id = ?").run(id);
+    expect(publicChoice(db, id).held).toBe("unchecked");
+    expect(refreshSentences(db)).toBe(1);
+    expect(refreshSentences(db, { all: true })).toBe(0);
+
+    // A person's quote, or a promoted one, is shown whatever its words are, so a pending check doesn't hold it back.
+    const persons = addQuote("Consists in generating possibility.", false);
+    db.prepare("UPDATE quotes SET text = 'consists in generating' WHERE id = ?").run(persons);
+    expect(db.prepare("SELECT sentence FROM quotes WHERE id = ?").pluck().get(persons)).toBeNull();
+    expect(publicChoice(db, persons)).toMatchObject({ shown: true, held: null });
+  });
+
+  it("filters the quote list by whether the public site shows a record, and by tag", () => {
+    const agents = addQuote("having become literally blind", true);
+    const persons = addQuote("Collaboration consists in generating possibility.", false);
+    db.prepare("INSERT INTO quote_tags (quote_id, tag, origin) VALUES (?, 'blindness', 'manual')").run(agents);
+    const ids = (shown?: boolean) => searchQuotes(db, { public: shown, limit: 100 }).quotes.map((q) => q.id);
+    expect(ids(false)).toContain(agents);
+    expect(ids(false)).not.toContain(persons);
+    expect(ids(true)).toContain(persons);
+    expect(ids(true)).not.toContain(agents);
+    expect(searchQuotes(db, { public: false }).total + searchQuotes(db, { public: true }).total).toBe(searchQuotes(db, {}).total);
+
+    // A record tagged private is held back too, for its own reason, and promoting doesn't override the tag.
+    const tagged = addQuote("Everyone deserves dignity.", false);
+    db.prepare("INSERT INTO quote_tags (quote_id, tag, origin) VALUES (?, 'Private', 'zotero')").run(tagged);
+    expect(ids(false)).toContain(tagged);
+    expect(publicChoice(db, tagged)).toMatchObject({ shown: false, held: "tagged" });
+    expect(publicChoice(db, agents)).toMatchObject({ shown: false, held: "agent" });
+    expect(publicChoice(db, persons)).toMatchObject({ shown: true, held: null });
+    promote(db, tagged, "owner@example.com");
+    expect(publicChoice(db, tagged)).toMatchObject({ shown: false, held: "tagged" });
+    expect(publicIds()).not.toContain(tagged);
+    expect(renderAdmin(db, `/admin/quotes/${tagged}`, new URLSearchParams())).not.toContain("<button>Promote</button>");
+
+    const all = renderAdmin(db, "/admin/quotes", new URLSearchParams({ public: "hidden" }))!;
+    expect(all).toContain("private: tagged</span>");
+    expect(all).toContain("private: agent's</span>");
+
+    const html = renderAdmin(db, "/admin/quotes", new URLSearchParams({ public: "hidden", tag: "blindness" }))!;
+    expect(html).toContain(`href="/admin/quotes/${agents}"`);
+    expect(html).not.toContain(`href="/admin/quotes/${persons}"`);
+    expect(html).toContain('<input name="tag" placeholder="Tag" value="blindness"');
+    expect(html).toContain('<input type="radio" name="public" value="hidden" checked> Private');
   });
 });

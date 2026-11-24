@@ -10,6 +10,7 @@ import { quoteKey, yearOf } from "./text.js";
 import { absorbWork } from "./rematch.js";
 import { syncLibrary } from "./sync.js";
 import { type ApiItem, ZoteroClient, needsKey, zoteroConfig } from "./zotero.js";
+import { refreshSentences } from "./selection.js";
 
 /**
  * add_quote: a quote saved by an agent (docs/dev-briefs/holdings-and-quotes.md §2.1). For a work with a
@@ -639,6 +640,7 @@ function save(db: DB, args: AddQuoteArgs, plan: Plan, requestId: string, actor: 
     db.prepare("INSERT INTO history (quote_id, at, kind, before, after, actor, reason) VALUES (?, ?, 'added', ?, ?, ?, ?)")
       .run(id, stamp, plan.exact ? null : args.text, plan.text, actor, `${lead}: ${how}`);
     db.prepare("INSERT INTO quotes_fts (rowid, text, comment, tags) VALUES (?, ?, ?, ?)").run(id, plan.text, comment ?? "", tags.join(" "));
+    refreshSentences(db);
     return id;
   })();
 }
@@ -654,6 +656,7 @@ function takeOver(db: DB, id: number, args: AddQuoteArgs, plan: Plan, requestId:
   db.prepare("UPDATE quotes_fts SET tags = (SELECT group_concat(tag, ' ') FROM quote_tags WHERE quote_id = ?) WHERE rowid = ?").run(id, id);
   db.prepare("INSERT INTO history (quote_id, at, kind, before, after, actor, reason) VALUES (?, ?, 'taken_over', NULL, NULL, ?, ?)")
     .run(id, stamp, actor, `take-corpus-quotes: corpus-mcp's quote ${requestId} has these words${plan.book ? `, checked against Calibre book ${plan.book.book_id}` : ""}`);
+  refreshSentences(db);
   return { takenOver: id };
 }
 
@@ -669,6 +672,13 @@ async function postAnchor(db: DB, corpus: CorpusClient, id: number, anchor: Reco
       await corpus.anchor(id, current);
       const flags = (JSON.parse(db.prepare("SELECT flags FROM quotes WHERE id = ?").pluck().get(id) as string) as string[]).filter((f) => f !== ANCHOR_MISSING);
       db.prepare("UPDATE quotes SET flags = ? WHERE id = ?").run(JSON.stringify(flags), id);
+      // A stale anchor was verified again: keep the one corpus-mcp took, so the sentence check (and a later relabel) reads it.
+      if (current !== anchor) {
+        const origin = db.prepare(`SELECT rowid, raw FROM quote_origins WHERE quote_id = ? AND kind IN ('agent', 'corpus')
+          AND json_extract(raw, '$.anchor') IS NOT NULL ORDER BY imported_at DESC LIMIT 1`).get(id) as { rowid: number; raw: string } | undefined;
+        if (origin) db.prepare("UPDATE quote_origins SET raw = ? WHERE rowid = ?").run(JSON.stringify({ ...JSON.parse(origin.raw), anchor: current }), origin.rowid);
+        refreshSentences(db);
+      }
       return true;
     } catch (error) {
       if (!(error instanceof CorpusError)) throw error;
@@ -817,6 +827,7 @@ export async function followAnchors(db: DB, corpus: CorpusClient): Promise<{ rea
     setMeta(db, "corpus_anchor_log", log);
     setMeta(db, "corpus_anchor_seq", String(since));
   }
+  refreshSentences(db);
   counts.to = since;
   return counts;
 }

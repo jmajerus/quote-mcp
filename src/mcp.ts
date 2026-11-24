@@ -164,7 +164,7 @@ export function createServer(db: DB, sets: ConceptSet[] = [], capture?: Capture,
 
     server.registerTool("update_quote", {
       title: "Change a quote's tags or comment",
-      description: "Add or remove tags, or set the comment (empty clears it), on a quote. Changes go into the quote's history. A removed tag stays off even if the quote's Zotero note still has it. A note's words are a person's own and aren't changed here. To change a quote's text, page, or chapter author, use propose_quote_fix.",
+      description: "Add or remove tags, or set the comment (empty clears it), on a quote. Changes go into the quote's history. A removed tag stays off even if the quote's Zotero note still has it. The tag private keeps a record off the public site: it can be added here, but only a person takes it off. A note's words are a person's own and aren't changed here. To change a quote's text, page, or chapter author, use propose_quote_fix.",
       inputSchema: {
         id: quoteId,
         comment: z.string().max(4000).nullable().optional().describe("The new comment; empty or null clears it"),

@@ -7,7 +7,7 @@ import { type CslItem, citationRenderer } from "./citations.js";
 import { citekeyOf, zoteroToCsl } from "./csl.js";
 import { type Visibility, bibtex, plainText, visible } from "./public.js";
 import { citeQuote, locatorText, workSummary } from "./queries.js";
-import { publicChooser } from "./selection.js";
+import { HELD_SQL, refreshSentences } from "./selection.js";
 import { type ConceptSet, currentSets, definitionOf, resolveSet } from "./sets.js";
 import type { Intro } from "./intro.js";
 
@@ -135,9 +135,9 @@ function fill(store: DB, snap: Database.Database, o: SnapshotOptions): void {
 
   // Public records, with words only at the quotes level, and the works they come from. An agent's quote, or part of a
   // sentence no person saved, waits for a person to promote it (src/selection.ts).
-  const chosen = publicChooser(store);
-  const records = (store.prepare(`SELECT q.* FROM quotes q WHERE ${visible(o)} ORDER BY q.id`).all() as Row[])
-    .filter((q) => chosen(q as { id: number; kind: string; text: string; provenance: unknown }).shown);
+  // A store open for writing checks the quotes whose sentence check a change cleared; one opened read-only holds them back.
+  if (!store.readonly) refreshSentences(store);
+  const records = store.prepare(`SELECT q.* FROM quotes q WHERE ${visible(o)} AND ${HELD_SQL} IS NULL ORDER BY q.id`).all() as Row[];
   const firstOfWork = new Map<number, number>();
   const tags = store.prepare("SELECT DISTINCT concept_id FROM quote_tags WHERE quote_id = ? AND concept_id IS NOT NULL");
   const works = new Set<number>();

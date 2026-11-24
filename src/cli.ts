@@ -24,7 +24,7 @@ import { replicaScript } from "./replica.js";
 import { type ConceptSet, listSets, loadSets } from "./sets.js";
 import { configReport, siteSetting } from "./settings.js";
 import { rematchWorks } from "./rematch.js";
-import { promote, publicChooser } from "./selection.js";
+import { HELD_SQL, promote, publicChooser } from "./selection.js";
 import { repairQuotes, repairReport } from "./repair.js";
 import { AUDIT_KINDS, type AuditKind, auditOf, auditStore } from "./audit.js";
 import { type SnapshotOptions, buildSnapshot, readMapsFile } from "./snapshot.js";
@@ -661,8 +661,8 @@ function promoteCommand() {
   try {
     if (!ids.length) {
       const chosen = publicChooser(db);
-      const held = (db.prepare("SELECT id, kind, text, comment, provenance FROM quotes WHERE status != 'unparsed' ORDER BY id").all() as { id: number; kind: string; text: string; comment: string | null; provenance: unknown }[])
-        .map((q) => ({ q, c: chosen(q) })).filter(({ c }) => !c.shown);
+      const held = (db.prepare(`SELECT id, kind, text, comment FROM quotes q WHERE status != 'unparsed' AND ${HELD_SQL} IS NOT NULL ORDER BY id`).all() as { id: number; kind: string; text: string; comment: string | null }[])
+        .map((q) => ({ q, c: chosen(q) }));
       if (!held.length) return console.log("Nothing is held back from the public site.");
       for (const { q, c } of held) console.log(`${q.id}. ${(q.kind === "note" ? q.comment ?? "" : q.text).slice(0, 80).replace(/\s+/g, " ")}\n   ${c.reason}`);
       console.log(`\n${held.length} held back. quote-mcp promote <id>,… [--reason "…"] shows one on the public site.`);

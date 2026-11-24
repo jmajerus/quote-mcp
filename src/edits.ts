@@ -5,6 +5,7 @@ import { type Suspect, addKnownWords, dictionaryForm, loadDictionary, suspectTok
 import { withoutEmphasis } from "./public.js";
 import { type ProposalFields as Fields, conceptLabels, getQuote, locatorText, proposal } from "./queries.js";
 import { quoteKey } from "./text.js";
+import { refreshSentences } from "./selection.js";
 
 /**
  * Agents' changes to quotes already saved (docs/dev-briefs/holdings-and-quotes.md §2.5; PLAN.md "Quoted text
@@ -44,6 +45,11 @@ export function updateQuote(db: DB, args: UpdateQuoteArgs, actor: string) {
   const remove = clean(args.remove_tags);
   const both = add.filter((t) => remove.some((r) => r.toLowerCase() === t.toLowerCase()));
   if (both.length) throw new ToolError(`${both.join(", ")} is both added and removed.`);
+  // The private tag keeps a record off the public site, and putting a record there is a person's choice (src/selection.ts):
+  // an agent may add the tag, but only a person, on the admin edit page, takes it off.
+  if (remove.some((t) => t.toLowerCase() === "private")) {
+    throw new ToolError("The private tag is taken off only by a person, on the quote's admin edit page: it keeps the record off the public site.");
+  }
   if (!add.length && !remove.length && args.comment === undefined) throw new ToolError("Nothing to change: give comment, add_tags, or remove_tags.");
   const why = args.reason?.trim() || "update_quote";
   return db.transaction(() => {
@@ -213,6 +219,7 @@ function applyFields(db: DB, q: Record<string, unknown>, c: Fields & { comment?:
   db.prepare("UPDATE quotes SET flags = ?, edited = 1, updated_at = ?, updated_by = ? WHERE id = ?").run(JSON.stringify(flags), stamp, editor, id);
   if (c.text !== undefined) settleOcr(db, id);
   refreshFts(db, id);
+  refreshSentences(db);
 }
 
 /** The word list plus words a person has accepted, or null when there is no word list to check against. */

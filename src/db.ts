@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import { backfillProvenance } from "./provenance.js";
+import { refreshSentences } from "./selection.js";
 
 /**
  * The quote store: primary data, never rebuilt (back it up). Quotes are the records people edit; their
@@ -17,7 +18,7 @@ import { backfillProvenance } from "./provenance.js";
 
 export type DB = Database.Database;
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 /**
  * The quotes table. A locator is a printed page, a Kindle location, or (for an EPUB, which has no pages) a
@@ -34,10 +35,26 @@ const QUOTES_TABLE = `CREATE TABLE IF NOT EXISTS quotes (
   edited INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL, created_by TEXT, updated_at TEXT NOT NULL, updated_by TEXT,
   -- Who or what saved it (src/provenance.ts): JSON, written once and never changed.
-  provenance TEXT
+  provenance TEXT,
+  -- Whether a quote's words are a whole sentence (src/selection.ts), as JSON; NULL until checked, and again when its text or anchor changes.
+  sentence TEXT
 );`;
 
-const QUOTE_COLUMNS = "id, kind, work_id, text, text_key, locator_kind, locator, chapter_author, comment, attribution, source_url, status, grade, flags, suspects, edited, created_at, created_by, updated_at, updated_by, provenance";
+const QUOTE_COLUMNS = "id, kind, work_id, text, text_key, locator_kind, locator, chapter_author, comment, attribution, source_url, status, grade, flags, suspects, edited, created_at, created_by, updated_at, updated_by, provenance, sentence";
+
+/**
+ * A quote's sentence check goes stale when its text or its anchor's book text changes: these clear it, whatever the
+ * writer, and refreshSentences fills it again. Made after migrate, since rebuilding the quotes table drops its triggers.
+ */
+const SENTENCE_TRIGGERS = `
+CREATE TRIGGER IF NOT EXISTS quotes_sentence_text AFTER UPDATE OF text ON quotes WHEN NEW.text IS NOT OLD.text
+  BEGIN UPDATE quotes SET sentence = NULL WHERE id = NEW.id; END;
+CREATE TRIGGER IF NOT EXISTS origins_sentence_insert AFTER INSERT ON quote_origins WHEN NEW.kind IN ('agent', 'corpus')
+  BEGIN UPDATE quotes SET sentence = NULL WHERE id = NEW.quote_id; END;
+CREATE TRIGGER IF NOT EXISTS origins_sentence_update AFTER UPDATE OF raw, quote_id ON quote_origins WHEN NEW.kind IN ('agent', 'corpus')
+  BEGIN UPDATE quotes SET sentence = NULL WHERE id IN (NEW.quote_id, OLD.quote_id); END;
+CREATE TRIGGER IF NOT EXISTS origins_sentence_delete AFTER DELETE ON quote_origins WHEN OLD.kind IN ('agent', 'corpus')
+  BEGIN UPDATE quotes SET sentence = NULL WHERE id = OLD.quote_id; END;`;
 
 /** One Calibre book from corpus-mcp's books feed, kept for the works add_quote made for books not in Zotero. */
 const CALIBRE_BOOKS = `CREATE TABLE IF NOT EXISTS calibre_books (
@@ -193,10 +210,15 @@ function migrate(db: DB): void {
   // 8: a provenance stamp on each quote, added first since the copy below takes it; those saved before are
   // stamped from their origins, marked inferred.
   if (!columns("quotes").has("provenance")) db.exec("ALTER TABLE quotes ADD COLUMN provenance TEXT");
+  // 10: each quote's sentence check, added before the copy below too, which takes it.
+  if (!columns("quotes").has("sentence")) db.exec("ALTER TABLE quotes ADD COLUMN sentence TEXT");
   if (!quotesSql.includes("'chapter'")) rebuildQuotes(db);
   backfillProvenance(db);
   // 9: each concept's WordNet synset, as the WordNet server describes its link (src/wordnet.ts); the term sync fills it.
   if (!columns("concepts").has("synset")) db.exec("ALTER TABLE concepts ADD COLUMN synset TEXT");
+  // 10: the triggers that clear a stale sentence check, and the check for quotes that haven't one.
+  db.exec(SENTENCE_TRIGGERS);
+  refreshSentences(db);
 }
 
 /**
@@ -208,6 +230,8 @@ function rebuildQuotes(db: DB): void {
   db.pragma("foreign_keys = OFF");
   try {
     db.transaction(() => {
+      // The sentence triggers name the quotes table, which is dropped for a moment; migrate makes them again after.
+      for (const name of db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE '%sentence%'").pluck().all()) db.exec(`DROP TRIGGER ${name as string}`);
       db.exec(QUOTES_TABLE.replace("CREATE TABLE IF NOT EXISTS quotes (", "CREATE TABLE quotes_rebuilt ("));
       db.exec(`INSERT INTO quotes_rebuilt (${QUOTE_COLUMNS}) SELECT ${QUOTE_COLUMNS} FROM quotes`);
       db.exec("DROP TABLE quotes");
