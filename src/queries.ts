@@ -309,12 +309,17 @@ export function searchQuotes(db: DB, args: SearchArgs) {
     rows = db.prepare(`SELECT q.*, ${snippet} AS snippet FROM ${from} ${clause} ORDER BY ${order} LIMIT ${limit} OFFSET ${offset}`).all(params) as Record<string, unknown>[];
   } else {
     // Whether a record is public is decided in code (its sentence bounds, who saved it, a promotion), not SQL:
-    // every match is judged, and the page is cut from those that pass.
+    // every match is judged, from only the columns the chooser reads, and whole rows (with snippets) are read for the page alone.
+    // A few thousand records take milliseconds; a store far bigger would want the choice kept in a column.
     const choose = publicChooser(db);
-    const all = db.prepare(`SELECT q.*, ${snippet} AS snippet FROM ${from} ${clause} ORDER BY ${order}`).all(params) as Record<string, unknown>[];
-    const kept = all.filter((r) => choose(r as never).shown === args.public);
+    const all = db.prepare(`SELECT q.id, q.kind, q.text, q.provenance FROM ${from} ${clause} ORDER BY ${order}`).all(params) as { id: number; kind: string; text: string; provenance: unknown }[];
+    const kept = all.filter((r) => choose(r).shown === args.public).map((r) => r.id);
     total = kept.length;
-    rows = kept.slice(offset, offset + limit);
+    const ids = kept.slice(offset, offset + limit);
+    const byId = new Map((ids.length
+      ? db.prepare(`SELECT q.*, ${snippet} AS snippet FROM ${from} ${clause ? `${clause} AND` : "WHERE"} q.id IN (${ids.join(",")})`).all(params) as Record<string, unknown>[]
+      : []).map((r) => [r.id as number, r]));
+    rows = ids.map((id) => byId.get(id)!);
   }
   // Which books this search is about, so a list of one book's quotes can offer another quote on it.
   const works = args.work
