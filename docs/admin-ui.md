@@ -15,7 +15,7 @@ works, and concepts, when the store was last imported, and the worklists with ho
 `/admin/quotes`: search over quotes and notes, with the same filters as `search_quotes` (see
 [MCP tools](tools.md#search_quotes)): words, concept, tag, author, work, status, and kind, and whether the
 [public site](#a-quote-or-note) shows the record (**Public site**: **All**, **Public**, or **Private**, as the quote's **Public site** row decides). **Private**
-takes in every record the site holds back. Each result's last line starts with two badges, ahead of its tags. **agent**
+takes in every record the site holds back. Each result's last line lists its concepts, then its other tags, then its flags, and at the far right two badges. **agent**
 says a generative agent saved it (its number is G874 rather than #874), and stays when the record is promoted. The other
 badge gives the public status: **promoted** once a person has promoted it, or **private** with why: **private: tagged**
 (tagged `private`; see [Tagged private](public-site.md#tagged-private)), **private: part of a sentence** (and no person
@@ -26,7 +26,7 @@ stay off until checked, and **exact** can be turned off so the named concept dro
 broader follow the whole chain. Related and opposite add the concepts one step away. The **Tag** box takes a tag as it's written on the quote (a tag chip
 links there too). **Order** lists the newest first (the highest number) by default; **Oldest first**
 and **Best match** (for a word search, the closest match first) are the others, and the choice carries across pages. Each result shows its work (with a link that opens the item in Zotero), its
-place, its tags (concepts as chips; tags that aren't concepts are dashed), and its flags. When the list is
+place, its tags (concepts first, as chips; then the tags that aren't concepts, dashed), its flags, and its status badges at the right (below). When the list is
 one work, **Add a quote** opens the [capture page](#capturing-a-quote) on that work. The wording follows the work's type: a journal article, a book, or a work when the type has no ordinary name.
 
 A number alone in the words box, such as `848` or `#848`, with no concept, author, or work, goes straight

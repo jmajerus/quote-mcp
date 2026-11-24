@@ -51,8 +51,9 @@ function workLine(w: WorkSummary | null, attribution: string | null): string {
   return `${who ? `${esc(who)}, ` : ""}<a href="/admin/quotes${qs({ work: w.zotero_key ?? w.title })}"><cite>${esc(w.title)}</cite></a>${w.year ? ` (${esc(w.year)})` : ""}${status}`;
 }
 
+/** Concepts first, then the tags that aren't concepts, each group in the order given (by name). */
 function tagChips(tags: { tag: string; concept: string | null }[]): string {
-  return tags.map((t) => (t.concept
+  return [...tags.filter((t) => t.concept), ...tags.filter((t) => !t.concept)].map((t) => (t.concept
     ? `<a class="chip" href="/admin/concepts/${pathSegment(t.concept)}">${esc(t.tag)}</a>`
     : `<a class="chip plain" href="/admin/quotes${qs({ tag: t.tag })}" title="Not a concept">${esc(t.tag)}</a>`)).join("");
 }
@@ -70,7 +71,7 @@ function statusBadges(q: Listed, p: PublicChoice): string {
   const agent = q.generative ? '<span class="kind" title="Saved by a generative agent">agent</span>' : "";
   const status = p.held ? `<span class="kind held" title="${esc(p.reason)}">${HELD_LABEL[p.held]}</span>`
     : p.promoted ? `<span class="kind" title="${esc(p.reason)}">promoted</span>` : "";
-  return agent + status;
+  return agent || status ? `<span class="status">${agent}${status}</span>` : "";
 }
 
 function quoteCard(q: Listed, p: PublicChoice): string {
@@ -78,7 +79,7 @@ function quoteCard(q: Listed, p: PublicChoice): string {
   const text = q.snippet ? emphasisHtml(q.snippet).replace(/«/g, "<mark>").replace(/»/g, "</mark>") : emphasisHtml(words.length > 420 ? `${words.slice(0, 420)}…` : words);
   return `<div class="result"><p class="text"><a href="/admin/quotes/${q.id}"${q.generative ? ' title="Saved by a generative agent"' : ""}>${q.label}</a> ${q.kind === "note" ? '<span class="kind">note</span> ' : ""}${text}</p>
 <div class="meta">${workLine(q.work, q.attribution)}${q.locator ? ` · ${esc(q.locator)}` : ""}${q.chapter_author ? ` · by ${esc(q.chapter_author)}` : ""}</div>
-<div>${statusBadges(q, p)}${tagChips(q.tags)}${q.flags.map((f) => `<span class="flag">${esc(f)}</span>`).join("")}</div></div>`;
+<div class="badges">${tagChips(q.tags)}${q.flags.map((f) => `<span class="flag">${esc(f)}</span>`).join("")}${statusBadges(q, p)}</div></div>`;
 }
 
 function pager(base: string, params: Record<string, unknown>, total: number, offset: number, limit: number): string {

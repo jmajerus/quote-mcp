@@ -56,6 +56,9 @@ form.edit .actions { margin-top: 16px; display: flex; gap: 12px; align-items: ce
 button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: var(--surface); cursor: pointer; }
 .result { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
 .result .text { margin: 0 0 6px; }
+.result .badges { display: flex; flex-wrap: wrap; align-items: center; }
+.result .badges .status { margin-left: auto; padding-left: 8px; }
+.result .badges .status .kind:last-child { margin-right: 0; }
 .meta { color: var(--muted); font-size: 0.87rem; }
 blockquote { margin: 0 0 10px; padding: 12px 16px; background: var(--quote); border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; white-space: pre-wrap; }
 .chip { display: inline-block; background: var(--chip); color: var(--chip-text); border-radius: 999px; padding: 1px 9px; font-size: 0.82rem; margin: 2px 4px 2px 0; text-decoration: none; }

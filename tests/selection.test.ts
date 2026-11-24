@@ -170,12 +170,22 @@ describe("the public site's choice", () => {
 
     const all = renderAdmin(db, "/admin/quotes", new URLSearchParams({ public: "hidden" }))!;
     expect(all).toContain("private: tagged</span>");
-    expect(all).toContain('title="Saved by a generative agent">agent</span><span class="kind held"');
+    expect(all).toContain('<span class="status"><span class="kind" title="Saved by a generative agent">agent</span><span class="kind held"');
     // Promoted, an agent's record still says an agent saved it, and that a person promoted it.
     promote(db, agents, "owner@example.com");
     const shown = renderAdmin(db, "/admin/quotes", new URLSearchParams({ public: "shown", tag: "blindness" }))!;
     expect(shown).toMatch(/>agent<\/span><span class="kind" title="Promoted by owner@example.com.">promoted<\/span>/);
     promote(db, agents, "owner@example.com", { undo: true });
+
+    // Concepts come first, then other tags, though a tag sorts before them by name, and the status badges come last.
+    const dignity = db.prepare("SELECT id FROM concepts WHERE slug = 'dignity'").pluck().get() as number;
+    db.prepare("INSERT INTO quote_tags (quote_id, tag, concept_id, origin) VALUES (?, 'dignity', ?, 'manual'), (?, 'aaa:project', NULL, 'manual')").run(agents, dignity, agents);
+    const card = renderAdmin(db, "/admin/quotes", new URLSearchParams({ tag: "blindness" }))!;
+    const at = (s: string) => card.indexOf(s);
+    expect(at(">dignity</a>")).toBeGreaterThan(-1);
+    expect(at(">dignity</a>")).toBeLessThan(at(">aaa:project</a>"));
+    expect(at(">aaa:project</a>")).toBeLessThan(at(">blindness</a>"));
+    expect(at(">blindness</a>")).toBeLessThan(at('<span class="status">'));
 
     const html = renderAdmin(db, "/admin/quotes", new URLSearchParams({ public: "hidden", tag: "blindness" }))!;
     expect(html).toContain(`href="/admin/quotes/${agents}"`);
