@@ -137,6 +137,12 @@ describe("the public site's choice", () => {
     expect(publicChoice(db, id).held).toBe("unchecked");
     expect(refreshSentences(db)).toBe(1);
     expect(refreshSentences(db, { all: true })).toBe(0);
+
+    // A person's quote, or a promoted one, is shown whatever its words are, so a pending check doesn't hold it back.
+    const persons = addQuote("Consists in generating possibility.", false);
+    db.prepare("UPDATE quotes SET text = 'consists in generating' WHERE id = ?").run(persons);
+    expect(db.prepare("SELECT sentence FROM quotes WHERE id = ?").pluck().get(persons)).toBeNull();
+    expect(publicChoice(db, persons)).toMatchObject({ shown: true, held: null });
   });
 
   it("filters the quote list by whether the public site shows a record, and by tag", () => {

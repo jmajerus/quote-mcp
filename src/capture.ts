@@ -672,6 +672,13 @@ async function postAnchor(db: DB, corpus: CorpusClient, id: number, anchor: Reco
       await corpus.anchor(id, current);
       const flags = (JSON.parse(db.prepare("SELECT flags FROM quotes WHERE id = ?").pluck().get(id) as string) as string[]).filter((f) => f !== ANCHOR_MISSING);
       db.prepare("UPDATE quotes SET flags = ? WHERE id = ?").run(JSON.stringify(flags), id);
+      // A stale anchor was verified again: keep the one corpus-mcp took, so the sentence check (and a later relabel) reads it.
+      if (current !== anchor) {
+        const origin = db.prepare(`SELECT rowid, raw FROM quote_origins WHERE quote_id = ? AND kind IN ('agent', 'corpus')
+          AND json_extract(raw, '$.anchor') IS NOT NULL ORDER BY imported_at DESC LIMIT 1`).get(id) as { rowid: number; raw: string } | undefined;
+        if (origin) db.prepare("UPDATE quote_origins SET raw = ? WHERE rowid = ?").run(JSON.stringify({ ...JSON.parse(origin.raw), anchor: current }), origin.rowid);
+        refreshSentences(db);
+      }
       return true;
     } catch (error) {
       if (!(error instanceof CorpusError)) throw error;

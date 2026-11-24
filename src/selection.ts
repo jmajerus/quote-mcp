@@ -101,9 +101,12 @@ export const HELD_SQL = `(CASE
   WHEN EXISTS (SELECT 1 FROM quote_tags p WHERE p.quote_id = q.id AND p.tag = 'private' COLLATE NOCASE) THEN 'tagged'
   WHEN ${PROMOTED} THEN NULL
   WHEN ${GENERATIVE} = 1 THEN 'agent'
-  WHEN q.kind = 'quote' AND q.sentence IS NULL THEN 'unchecked'
-  WHEN q.kind = 'quote' AND NOT (json_extract(q.sentence, '$.starts') AND json_extract(q.sentence, '$.ends')) AND ${GENERATIVE} IS NOT 0 THEN 'fragment'
+  WHEN q.kind != 'quote' OR ${GENERATIVE} IS 0 THEN NULL
+  WHEN q.sentence IS NULL THEN 'unchecked'
+  WHEN NOT (json_extract(q.sentence, '$.starts') AND json_extract(q.sentence, '$.ends')) THEN 'fragment'
   END)`;
+// Each case settles the record before the next is read: a promotion, an agent's stamp, or a person's stamp decides it
+// whatever the words are, so only a quote the sentence rule still decides is held back while its check is pending.
 
 /**
  * Works out whether each quote's words are a whole sentence, from the anchor's book text where there is one, and keeps
